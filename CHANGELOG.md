@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.35.0](https://github.com/WhispersOfJ/thebearcave/compare/v1.34.0...v1.35.0) (2026-09-06)
+
+
+### Features
+
+* add D11 safe-command registry and live matrix runner in tests/live ([#187](https://github.com/WhispersOfJ/thebearcave/issues/187)) ([b0658c8](https://github.com/WhispersOfJ/thebearcave/commit/b0658c847249af1884e1b85c2733ab987e1f2c1d))
+
 ## [1.34.0](https://github.com/WhispersOfJ/thebearcave/compare/v1.33.0...v1.34.0) (2026-09-05)
 
 
