@@ -934,3 +934,446 @@ entries:
   healthcheck: wget -qO- http://localhost:9090/health >/dev/null 2>&1 || exit 1
   docs: https://github.com/sissbruecker/linkding
   notes: bookmark manager; sqlite builtin; host 9090 free (authelia maps host 9091)
+- id: nzbget
+  name: NZBGet
+  category: media
+  retired: false
+  image: nzbgetcom/nzbget:latest
+  mem_limit: 256m
+  docs: https://github.com/nzbgetcom/nzbget
+  notes: project revived under nzbgetcom; alternative SABnzbd is already cataloged — pick one download
+    client per pipeline
+  ports:
+  - 6789:6789/tcp
+  volumes:
+  - ./config/nzbget:/config
+  - ./media/usenet:/downloads
+  env:
+  - key: PUID
+    default: '1000'
+  - key: PGID
+    default: '1000'
+  - key: TZ
+    default: ${TZ}
+  healthcheck: curl -sf http://localhost:6789 || exit 1
+- id: pinchflat
+  name: Pinchflat
+  category: media
+  retired: false
+  image: ghcr.io/kieraneglin/pinchflat:latest
+  mem_limit: 768m
+  docs: https://github.com/kieraneglin/pinchflat/wiki/Installation
+  notes: YouTube media manager (yt-dlp + LiveView UI); downloads land in media/youtube; run metube for
+    ad-hoc grabs
+  ports:
+  - 1777:1777/tcp
+  volumes:
+  - ./config/pinchflat:/config
+  - ./media/youtube:/downloads
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: threadfin
+  name: Threadfin
+  category: media
+  retired: false
+  image: fyb3roptik/threadfin:latest
+  mem_limit: 256m
+  docs: https://github.com/Threadfin/Threadfin
+  notes: M3U/EPG proxy presenting an HDHomeRun-like tuner to Plex DVR/Jellyfin; upstream also publishes
+    threadfin/threadfin — fyb3roptik is the common compose image
+  ports:
+  - 34400:34400/tcp
+  volumes:
+  - ./config/threadfin:/home/threadfin/conf
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: music-assistant
+  name: Music Assistant
+  category: media
+  retired: false
+  image: ghcr.io/music-assistant/server:latest
+  mem_limit: 1024m
+  docs: https://www.music-assistant.io/installation/
+  notes: music library manager + multi-room streaming; UI 8095, stream port 8097 must be reachable by
+    players; provider creds configured in-app
+  ports:
+  - 8095:8095/tcp
+  - 8097:8097/tcp
+  volumes:
+  - ./config/music-assistant:/data
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: shoko
+  name: Shoko
+  category: media
+  retired: false
+  image: ghcr.io/shokoanime/server:latest
+  mem_limit: 1024m
+  docs: https://docs.shokoanime.com/shoko-server/installing/docker/
+  notes: anime cataloging (pairs with an *arr or its own pipeline); web UI Shokofan installs separately
+  ports:
+  - 8111:8111/tcp
+  volumes:
+  - ./config/shoko:/app/config
+  - ./media:/data
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: dizquetv
+  name: dizquetv
+  category: media
+  retired: false
+  image: vexorian/dizquetv:latest
+  mem_limit: 512m
+  docs: https://github.com/vexorian/dizquetv
+  notes: builds numberless live channels for Plex DVR; overlaps with ersatztv — choose one channel builder;
+    host port shifted from 8000 (paperless)
+  ports:
+  - 8001:8000/tcp
+  volumes:
+  - ./config/dizquetv:/home/node/app/.dizquetv
+  - ./media:/data:ro
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: postgres
+  name: PostgreSQL
+  category: ops
+  retired: false
+  image: postgres:17-alpine
+  mem_limit: 512m
+  docs: https://hub.docker.com/_/postgres
+  notes: shared relational DB for catalog services that need one (tandoor, future additions); no host
+    port on purpose — reachable as postgres:5432 on bearcave
+  volumes:
+  - ./config/postgres:/var/lib/postgresql/data
+  env:
+  - key: POSTGRES_USER
+    default: cave
+  - key: POSTGRES_PASSWORD
+    secret: true
+    description: set at install
+  - key: POSTGRES_DB
+    default: cave
+  - key: TZ
+    default: ${TZ}
+  healthcheck: pg_isready -U $POSTGRES_USER
+- id: redis
+  name: Redis
+  category: ops
+  retired: false
+  image: redis:7-alpine
+  mem_limit: 256m
+  docs: https://hub.docker.com/_/redis
+  notes: shared cache/queue for catalog services (paperless, tandoor, future additions); no host port
+    on purpose — reachable as redis:6379 on bearcave
+  volumes:
+  - ./config/redis:/data
+  env:
+  - key: TZ
+    default: ${TZ}
+  healthcheck: redis-cli ping || exit 1
+- id: beszel-agent
+  name: Beszel Agent
+  category: ops
+  retired: false
+  image: henrygd/beszel:latest
+  mem_limit: 64m
+  docs: https://github.com/henrygd/beszel
+  notes: metrics agent for the beszel hub (companion install, not standalone); host networking + SSH-key
+    auth configured at install — needs notes justification per §A.2
+  host_network: true
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+  env:
+  - key: PORT
+    default: '45876'
+  - key: KEY
+    secret: true
+    description: hub-generated SSH public key
+- id: cronicle
+  name: Cronicle
+  category: ops
+  retired: false
+  image: jhuckaby/cronicle:latest
+  mem_limit: 512m
+  docs: https://github.com/jhuckaby/Cronicle
+  notes: job scheduler w/ web UI — a stopgap until Cave Deck internal scheduler reaches M3+; single-node
+    secret mode configured in-app
+  ports:
+  - 3012:3012/tcp
+  volumes:
+  - ./config/cronicle:/opt/cronicle/data
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: ntfy
+  name: ntfy
+  category: ops
+  retired: false
+  image: binwiederhier/ntfy:latest
+  mem_limit: 128m
+  docs: https://docs.ntfy.sh/install/#docker
+  notes: push notifications over HTTP; serve config authored at install (base-url, auth); Cave Deck digest
+    can fan out to it in M6
+  ports:
+  - 2586:80/tcp
+  volumes:
+  - ./config/ntfy:/etc/ntfy
+  - ./config/ntfy-cache:/var/cache/ntfy
+  env:
+  - key: TZ
+    default: ${TZ}
+  compose_fragment: "ntfy:\n  <<: *common\n  command: serve\n"
+- id: it-tools
+  name: IT Tools
+  category: ops
+  retired: false
+  image: corentin-th/it-tools:latest
+  mem_limit: 64m
+  docs: https://github.com/CorentinTh/it-tools
+  notes: developer toolbox (JWT, hashes, formatters) — handy for *arr key fiddling; host port shifted
+    from 80
+  ports:
+  - 8087:80/tcp
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: cyberchef
+  name: CyberChef
+  category: ops
+  retired: false
+  image: ghcr.io/gchq/cyberchef:latest
+  mem_limit: 128m
+  docs: https://github.com/gchq/CyberChef
+  notes: the cyber swiss army knife — decode/inspect usenet headers, magnets, base64; host port shifted
+    from 8080
+  ports:
+  - 8787:8080/tcp
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: nginx-proxy-manager
+  name: Nginx Proxy Manager
+  category: network
+  retired: false
+  image: jc21/nginx-proxy-manager:latest
+  mem_limit: 512m
+  docs: https://github.com/NginxProxyManager/nginx-proxy-manager
+  notes: GUI reverse proxy + LE certs; admin UI on host 8182 (container 81); only expose 80/443 if the
+    host truly fronts traffic
+  ports:
+  - 8182:81/tcp
+  volumes:
+  - ./config/npm/data:/data
+  - ./config/npm/letsencrypt:/etc/letsencrypt
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: tinyauth
+  name: Tinyauth
+  category: network
+  retired: false
+  image: ghcr.io/steveiliop56/tinyauth:latest
+  mem_limit: 64m
+  docs: https://tinyauth.app/docs/getting-started/
+  notes: simplest auth middleware (v4 line); sits in front of LAN apps behind NPM/Caddy; app-url must
+    match the proxied host
+  ports:
+  - 3001:3000/tcp
+  env:
+  - key: TINYAUTH_PASSWORD
+    secret: true
+    description: v4 single-user password
+  - key: TZ
+    default: ${TZ}
+- id: coredns
+  name: CoreDNS
+  category: network
+  retired: false
+  image: coredns/coredns:latest
+  mem_limit: 64m
+  docs: https://github.com/coredns/coredns
+  notes: authoritative LAN zone DNS (Corefile authored at install); host 5354/tcp+udp keeps clear of unbound
+    5353 and the host stub
+  ports:
+  - 5354:1053/tcp
+  - 5354:1053/udp
+  volumes:
+  - ./config/coredns:/etc/coredns
+  compose_fragment: "coredns:\n  <<: *common\n  command: -conf /etc/coredns/Corefile\n"
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: oauth2-proxy
+  name: OAuth2 Proxy
+  category: network
+  retired: false
+  image: quay.io/oauth2-proxy/oauth2-proxy:latest
+  mem_limit: 64m
+  docs: https://oauth2-proxy.github.io/oauth2-proxy/
+  notes: OIDC forward-auth for apps behind NPM/Caddy (Google/GitHub/any provider); cookie secret 16/24/32
+    bytes — generate at install
+  ports:
+  - 4180:4180/tcp
+  env:
+  - key: OAUTH2_PROXY_CLIENT_ID
+    description: from your OIDC provider
+  - key: OAUTH2_PROXY_CLIENT_SECRET
+    secret: true
+    description: from your OIDC provider
+  - key: OAUTH2_PROXY_COOKIE_SECRET
+    secret: true
+    description: openssl rand -base64 32
+- id: hello-demo
+  name: NGINX Hello
+  category: network
+  retired: false
+  image: nginxdemos/hello:latest
+  mem_limit: 32m
+  docs: https://github.com/traefik/whoami
+  notes: 'tiny diagnostic page (hostname/IP display) — proves proxy/ufw/network paths end-to-end; delete
+    after use. (traefik/whoami rejected by §A.4: retired org token in image path)'
+  ports:
+  - 8101:80/tcp
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: bunkerweb
+  name: BunkerWeb
+  category: network
+  retired: false
+  image: bunkerity/bunkerweb:latest
+  mem_limit: 512m
+  docs: https://docs.bunkerweb.io/latest/installation/docker/
+  notes: WAF-grade reverse proxy; host ports shifted (8088→8080, 8444→8443 — 8443 is Caddy's); scheduler
+    UI (bunkerweb-ui) is a follow-on install if wanted
+  ports:
+  - 8088:8080/tcp
+  - 8444:8443/tcp
+  volumes:
+  - ./config/bunkerweb/data:/data
+  - ./config/bunkerweb/etc/nginx:/etc/nginx
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: gokapi
+  name: Gokapi
+  category: home
+  retired: false
+  image: f0rc3/gokapi:latest
+  mem_limit: 128m
+  docs: https://github.com/Forceu/Gokapi
+  notes: lightweight file-drop with expiring links; host 8420 maps upstream 53842
+  ports:
+  - 8420:53842/tcp
+  volumes:
+  - ./config/gokapi:/app/data
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: joplin-server
+  name: Joplin Server
+  category: home
+  retired: false
+  image: joplin/server:latest
+  mem_limit: 512m
+  docs: https://github.com/laurent22/joplin/tree/dev/packages/server
+  notes: notes sync for Joplin clients; APP_BASE_URL must be the LAN URL clients use; sqlite storage
+  ports:
+  - 22300:22300/tcp
+  volumes:
+  - ./config/joplin:/config
+  env:
+  - key: APP_BASE_URL
+    description: http://HOST_IP:22300
+  - key: APP_PORT
+    default: '22300'
+  - key: TZ
+    default: ${TZ}
+  healthcheck: wget -qO- http://localhost:22300/api/ping >/dev/null 2>&1 || exit 1
+- id: freshrss
+  name: FreshRSS
+  category: home
+  retired: false
+  image: freshrss/freshrss:latest
+  mem_limit: 256m
+  docs: https://freshrss.github.io/FreshRSS/en/administration/installation.html
+  notes: RSS reader w/ API for mobile clients; host port shifted from 80
+  ports:
+  - 8280:80/tcp
+  volumes:
+  - ./config/freshrss:/var/www/FreshRSS/data
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: CRON_MIN
+    default: 3,33
+  healthcheck: curl -sf http://localhost/i/ >/dev/null 2>&1 || exit 1
+- id: wallos
+  name: Wallos
+  category: home
+  retired: false
+  image: bellamy/wallos:latest
+  mem_limit: 128m
+  docs: https://github.com/ellite/Wallos
+  notes: subscription tracker — pairs nicely with the media stack's recurring costs; cron + php-fpm in
+    one image
+  ports:
+  - 8283:80/tcp
+  volumes:
+  - ./config/wallos:/var/www/html/db
+  - ./config/wallos-logos:/var/www/html/images/uploads/logos
+  env:
+  - key: TZ
+    default: ${TZ}
+- id: tandoor
+  name: Tandoor Recipes
+  category: home
+  retired: false
+  image: vabene1111/recipes:latest
+  mem_limit: 512m
+  docs: https://docs.tandoor.dev/install/docker/
+  notes: recipe manager (Mealie is the lighter alternative already in the catalog); REQUIRES the postgres
+    entry — install offered together
+  ports:
+  - 9102:80/tcp
+  volumes:
+  - ./config/tandoor/staticfiles:/opt/recipes/staticfiles
+  - ./media/tandoor:/opt/recipes/mediafiles
+  env:
+  - key: SECRET_KEY
+    secret: true
+    description: django secret — generate at install
+  - key: DB_ENGINE
+    default: django.db.backends.postgresql
+  - key: POSTGRES_HOST
+    default: postgres
+  - key: POSTGRES_DB
+    default: cave
+  - key: POSTGRES_USER
+    default: cave
+  - key: POSTGRES_PASSWORD
+    secret: true
+    description: must match the postgres entry
+  dependencies:
+  - postgres
+- id: readeck
+  name: Readeck
+  category: home
+  retired: false
+  image: codeberg.org/readeck/readeck:latest
+  mem_limit: 128m
+  docs: https://readeck.org/en/docs/install/docker/
+  notes: read-it-later bookmark/archive manager (successor spirit of wallabag); single binary, sqlite;
+    config authored at first boot
+  ports:
+  - 8220:8000/tcp
+  volumes:
+  - ./config/readeck:/readeck
+  env:
+  - key: TZ
+    default: ${TZ}
