@@ -11,7 +11,9 @@ jobs:
   conventional:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
+      # No checkout: the job only lints the PR title from the event payload.
+      # A checkout here was failing intermittently on Dependabot rebases
+      # ("Repository not found"), blocking green PRs for no reason.
       - name: Enforce Conventional Commits in PR title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
