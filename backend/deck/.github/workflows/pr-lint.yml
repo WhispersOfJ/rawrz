@@ -13,9 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
       - name: Enforce Conventional Commits in PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          title="${{ github.event.pull_request.title }}"
-          if ! echo "$title" | grep -qE '^(feat|fix|docs|chore|ci|refactor|test|build|perf)(\([a-z0-9-]+\))?!?: .+'; then
-            echo "PR title must be a Conventional Commit: $title"
+          if ! echo "$PR_TITLE" | grep -qE '^(feat|fix|docs|chore|ci|refactor|test|build|perf)(\([a-z0-9-]+\))?!?: .+'; then
+            echo "PR title must be a Conventional Commit: $PR_TITLE"
             exit 1
           fi

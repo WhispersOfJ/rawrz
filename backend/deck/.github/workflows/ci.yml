@@ -73,6 +73,7 @@ jobs:
       - uses: actions/setup-python@751276eafca55f10f252026015f43c488f2322ba
         with:
           python-version: "3.14"
+      - run: pip install pyyaml
       - run: python3 scripts/check_api_contract.py backend/src frontend/src parity/parity.yaml
 
   actionlint:
