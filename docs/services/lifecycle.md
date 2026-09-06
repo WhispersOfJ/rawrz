@@ -42,13 +42,14 @@ was retired, why, and what it would take to bring it back.
 | `vaultwarden` | 2026-08-30 | 2026-08-30 slim-down: password manager, non-media | ❌ none (decision) | removed (no archive) |
 | `watchstate` | 2026-08-30 | 2026-08-30 slim-down: watch-state tracking, non-essential | ❌ none (decision) | removed (no archive) |
 | `cleanuparr` | 2026-08-29 | Torrent-only; no SABnzbd/Usenet client, so nothing to monitor in the Usenet-only stack | ✅ `cleanuparr-sabnzbd-watch.yml` | removed (no archive) |
+| `bazarr` | 2026-09-06 | Re-retired by decision: subtitle acquisition not worth an always-on container in the 8-service target; consumers (Plex, Sonarr/Radarr) unaffected | ❌ none (decision) | removed (config deleted) |
 | `uptime-kuma` | 2026-08-29 | Dropped from expansion scope by decision (image still CVE-blocked at the time) | ❌ none (decision) | removed (no archive) |
 | `n8n` | 2026-08-29 | Workflow automation removed by decision — Discord notifications are handled by alertmanager/CrowdSec hooks; no workflow glue needed | ❌ none (decision) | removed (no archive) |
 | `control-panel` (Django) | 2026-08-27 | Django backend superseded — fish functions call services directly, landing page probes via nginx | ❌ none (archived) | `archive/control-panel/` |
 
 ## Re-adopted services
 
-### bazarr (2026-09-03)
+### bazarr (2026-09-03 → re-retired 2026-09-06)
 
 Bazarr was removed in the 2026-08-30 slim-down after crash-looping OOM at a 128m
 cap, with subtitles deemed non-essential. It returned on 2026-09-03 as a fresh,
@@ -58,13 +59,34 @@ healthchecked via the unauthenticated `/ping` endpoint, mounted **read-only** ov
 the FUSE mount and media trees (`:rslave`) so it can never write into mount
 internals, and deliberately *without* a `depends_on` on `nzbdav_rclone` — it only
 reads media paths to write subtitle files beside them, so mount-owner restarts
-(landmine #2) and NzbDAV recreations (landmine #4) do not touch it. The OOM-class
-failure that caused its retirement is guarded by the cap plus the monthly
-digest's DB/footprint gates.
+(landmine #2) and NzbDAV recreations (landmine #4) do not touch it.
 
-Removed from the "Retired services" table above and from `RETIRED_SERVICES` in
-`scripts/audit_residue.py` (whose registry↔lifecycle cross-check enforced both
-sides of this move at CI time).
+**Re-retired 2026-09-06 by owner decision.** The 2026-09-03 implementation worked
+as designed (subtitle search/download verified end-to-end against OpenSubtitles.com),
+but an always-on subtitle container did not earn its place in the 8-service target
+composition. Removal was exhaustive per the landmine-#7 checklist: compose service,
+`config/bazarr/`, health-check leg, backup manifest, DB-growth/digest gates,
+validator directory list, `audit_residue.py` registry, docs, and the Trivy
+baselines. Historical documents (`CHANGELOG.md`, `HISTORY.md`, `TODO.md`, the
+2026-08-30 incident narrative above) keep their original mentions — they record
+what happened, not the current state.
+
+If subtitles are ever wanted again, the 2026-09-03 record below and the API
+notes in git history (`docs/API.md` @ pre-2026-09-06) document the working
+configuration (form-encoded `settings-<section>-<field>` mutation contract,
+`ip=sonarr`/`radarr` container-DNS addressing, empty `base_url`,
+`mustNotContain` required in language-profile payloads).
+
+The 2026-09-03 adoption record is preserved verbatim below for that purpose.
+
+### bazarr (2026-09-03 adoption record — historical)
+
+Returned as a fresh, tracked implementation: `ghcr.io/hotio/bazarr:release-1.6.0`,
+768m cap, healthchecked via `/ping`, read-only over the FUSE mount and media
+trees (`:rslave`), no `depends_on` on `nzbdav_rclone`. The OOM-class failure
+that caused the original retirement is guarded by the cap plus the monthly
+digest's DB/footprint gates. Removed from the "Retired services" table and
+`RETIRED_SERVICES` at the time (reversed 2026-09-06).
 
 ## Services with an active re-adoption watcher
 

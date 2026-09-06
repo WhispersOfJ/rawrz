@@ -1,8 +1,8 @@
 # ============================================================================
 # The Bear Cave — Slim Media Stack
 # ============================================================================
-# 9 always-on services (2026-09-03: Bazarr re-adopted per docs/services/lifecycle.md):
-# prowlarr, radarr, sonarr, bazarr, nzbdav, nzbdav_rclone, seerr, plex, unpackerr.
+# 8 always-on services (2026-09-06: Bazarr re-retired per docs/services/lifecycle.md):
+# prowlarr, radarr, sonarr, nzbdav, nzbdav_rclone, seerr, plex, unpackerr.
 # ImageMaid and Recyclarr are available separately through the manual `maintenance` profile.
 # Direct host ports (no Traefik). Full retirement record:
 # docs/services/lifecycle.md
@@ -293,45 +293,6 @@ services:
         --rc-addr=:5572
         --rc-user=rclone
         --rc-pass=${NZBDAV_RCLONE_RC_PASS}
-
-  # ==========================================================================
-  # Subtitles — Bazarr (re-adopted 2026-09-03, fresh implementation)
-  # ==========================================================================
-  # Companion to Sonarr/Radarr: searches subtitle providers and delivers to the
-  # media folders. Connection to both *arr apps is configured once in Bazarr's
-  # web UI (Settings → Sonarr/Radarr, http://sonarr:8989 / http://radarr:7878 +
-  # API keys) — Bazarr has no env-var settings surface. Mounts only READ paths:
-  # it writes subtitles next to the media via the *arr apps' paths, never into
-  # the mount internals, so it does not depend on the FUSE mount and is safe to
-  # restart independently (landmines #2/#4 do not apply to it).
-  bazarr:
-    <<: *common
-    image: ghcr.io/hotio/bazarr:release-1.6.0
-    container_name: bazarr
-    mem_limit: 768m
-    cpus: "1.0"
-    networks: [bearcave]
-    ports:
-      - "6767:6767"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6767/ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    depends_on:
-      sonarr:
-        condition: service_healthy
-        restart: true
-      radarr:
-        condition: service_healthy
-        restart: true
-    volumes:
-      - *ca-mount
-      - ./config/bazarr:/config
-      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
-      - ./media/shows:/data/shows
-      - ./media/movies:/data/movies
 
   # ==========================================================================
   # Requests — Seerr

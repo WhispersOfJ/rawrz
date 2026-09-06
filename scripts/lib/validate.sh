@@ -119,7 +119,6 @@ required_runtime_directories() {
         "config/prowlarr" \
         "config/radarr" \
         "config/sonarr" \
-        "config/bazarr" \
         "config/nzbdav" \
         "config/nzbdav-rclone" \
         "config/nzbdav-rclone/cache" \

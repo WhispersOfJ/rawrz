@@ -1,21 +1,21 @@
 # The Bear Cave
 
-**A lean, Usenet-only media stack — 9 always-on containers, one `docker compose up -d`.**
+**A lean, Usenet-only media stack — 8 always-on containers, one `docker compose up -d`.**
 
 Prowlarr indexing → Radarr/Sonarr acquisition → NzbDAV (InfiniDysk) Usenet downloads →
-rclone FUSE streaming → Plex serving, with Seerr handling requests and Bazarr fetching
-subtitles. Every download is streamed on demand — no media sits on local disk.
+rclone FUSE streaming → Plex serving, with Seerr handling requests. Every download is
+streamed on demand — no media sits on local disk.
 
 > **Operational reference:** [AGENTS.md](AGENTS.md) is the authoritative, always-current
 > reference for how the stack works. This README is the human-facing overview; when they
 > disagree, AGENTS.md wins.
 
+> **2026-09-06 change:** Bazarr was re-retired — the stack is back to 8 always-on
+> services. See [docs/services/lifecycle.md](docs/services/lifecycle.md).
+>
 > **2026-09-04 change:** Recyclarr moved off the always-on list — it is now a manual,
 > profile-gated sync (run `docker compose --profile maintenance run --rm recyclarr sync`).
 > Config and secrets are unchanged.
->
-> **2026-09-03 re-adoption:** Bazarr returned as an always-on service (fresh
-> implementation, 768m cap) — see [docs/services/lifecycle.md](docs/services/lifecycle.md).
 >
 > **2026-08-30 slim-down:** the stack was deliberately pared down from 29 services to 8
 > (observability, Traefik front, long-tail acquisition, and security sidecars retired).
@@ -26,7 +26,7 @@ subtitles. Every download is streamed on demand — no media sits on local disk.
 
 | Metric | Value |
 |--------|-------|
-| Always-on containers | **9** (`docker compose ps`) |
+| Always-on containers | **8** (`docker compose ps`) |
 | Acquisition apps | 2 — Radarr (movies), Sonarr (TV) |
 | Download client | NzbDAV (InfiniDysk) — SABnzbd-compatible |
 | Media libraries | Movies, Shows |
@@ -54,14 +54,13 @@ subtitles. Every download is streamed on demand — no media sits on local disk.
 
 No reverse proxy: all services are reached directly on their host ports over LAN.
 
-## Services (9 always-on)
+## Services (8 always-on)
 
 | Service | Port | Purpose | Network |
 |---------|------|---------|---------|
 | **Prowlarr** | 9696 | Indexer management | bearcave |
 | **Radarr** | 7878 | Movie acquisition | bearcave |
 | **Sonarr** | 8989 | TV acquisition | bearcave |
-| **Bazarr** | 6767 | Subtitle acquisition for Sonarr/Radarr | bearcave |
 | **NzbDAV** | 3000 | Usenet download client + WebDAV (InfiniDysk) | bearcave |
 | **nzbdav_rclone** | — | FUSE mount, streams on demand | bearcave |
 | **Unpackerr** | — | Auto-extracts downloads for Radarr/Sonarr | bearcave |
@@ -81,9 +80,6 @@ Recyclarr (TRaSH profile/custom-format sync) is available on demand via the
   `/mnt/remote/nzbdav`; **Plex** reads that mount directly (`:rslave`), so playback
   streams on demand with no local copies.
 - **Requests** — **Seerr** handles requests into Radarr/Sonarr and Plex watchlists.
-- **Subtitles** — **Bazarr** reads the same read-only media trees as Plex and drops
-  subtitle files next to the media; it never writes into mount internals and does not
-  depend on the FUSE mount being healthy to run.
 - **TRaSH config** — **Recyclarr** syncs the TRaSH-Guides quality profiles, custom
   formats, scores, and quality definitions into Radarr and Sonarr. It is a manual
   maintenance-profile service (not always-on): run
@@ -104,7 +100,6 @@ Rebalanced during the slim-down (total ≈11.2 GiB, down from ~19 GiB); quotas a
 | nzbdav_rclone | 3g |
 | radarr | 1.5g (1.5 CPU) |
 | sonarr | 1g (1.5 CPU) |
-| bazarr | 768m (1 CPU) |
 | prowlarr | 512m |
 | seerr | 512m |
 | unpackerr | 64m |

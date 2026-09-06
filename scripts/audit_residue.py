@@ -75,7 +75,8 @@ RETIRED_SERVICES: dict[str, bool] = {
     "audiobookshelf": False, "komga": False, "adguard": False,
     "crowdsec": False, "vaultwarden": False, "watchstate": False,
     "cleanuparr": True, "uptime-kuma": False, "n8n": False, "control-panel": False,
-}  # bazarr re-adopted 2026-09-03 (removed from this registry + lifecycle table)
+    "bazarr": False,
+}  # Bazarr re-retired 2026-09-06 (returned to this registry + lifecycle table)
 
 # Retired *project* paths (the merged-source project roots). Reference to one
 # of these anywhere operational is residue — nothing runs from them anymore.

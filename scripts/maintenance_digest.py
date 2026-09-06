@@ -21,9 +21,6 @@ Checks (one line each in the digest):
     check_radarr_db_size.py --db --blob-table EpisodeFiles, so the MediaInfo
     row measures Sonarr's real EpisodeFiles blobs (the same gate
     stack-sonarr-prune remediates).
-  * bazarr db    - the same gate against bazarr.db (the 2026-09-03
-    re-adoption gave Bazarr a 768m cap; this catches the same bloat class
-    before it OOMs). No blob-table leg: Bazarr stores no MediaInfo blobs.
   * nzbdav queue - delegated to scripts/check_nzbdav_queue.py (recreate
     safety: queue must be empty). API unreachable == soft WARN.
   * sonarr/radarr import queue - delegated to scripts/check_arr_import_queue.py:
@@ -284,8 +281,7 @@ def check_db_gates(repo_root: Path) -> list[Finding]:
     findings = []
     for label, rel, blob_table in (
             ("radarr db", "config/radarr/radarr.db", None),
-            ("sonarr db", "config/sonarr/sonarr.db", "EpisodeFiles"),
-            ("bazarr db", "config/bazarr/db/bazarr.db", None)):
+            ("sonarr db", "config/sonarr/sonarr.db", "EpisodeFiles")):
         db_args = ["--db", str(repo_root / rel)]
         if blob_table:
             db_args += ["--blob-table", blob_table]

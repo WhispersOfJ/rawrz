@@ -1,7 +1,7 @@
 # Stack Maintenance Checklist
 
-The active deployment intentionally contains nine services (Bazarr re-adopted
-2026-09-03). Retired services are
+The active deployment intentionally contains eight services (Bazarr re-retired
+2026-09-06). Retired services are
 not activated from this document; see [services/lifecycle.md](../services/lifecycle.md)
 for historical context and re-adoption policy.
 

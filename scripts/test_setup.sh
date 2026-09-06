@@ -45,7 +45,7 @@ sed -i \
 )
 
 for dir in \
-    config/ca config/prowlarr config/radarr config/sonarr config/bazarr \
+    config/ca config/prowlarr config/radarr config/sonarr \
     config/nzbdav config/nzbdav-rclone/cache config/seerr config/imagemaid \
     config/plex/'Plex Media Server' config/plex-transcode media/movies media/shows usenet; do
     test -d "$TMP/$dir" || { echo "FAIL: missing directory $dir" >&2; exit 1; }

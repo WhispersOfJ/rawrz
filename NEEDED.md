@@ -11,7 +11,7 @@ repos (`core`/`extra`) and the AUR on 2026-09-04. Almost everything is in the
 official repos; only the AUR helper itself (`yay`/`paru`) comes from the AUR.
 
 The stack itself is containerized — the host does **not** need Plex, Radarr,
-Sonarr, Bazarr, Seerr, NzbDAV, Unpackerr, Prowlarr, or rclone-as-a-service
+Sonarr, Seerr, NzbDAV, Unpackerr, Prowlarr, or rclone-as-a-service
 installed. Host packages exist for three reasons: the Docker runtime, the
 repo's host-side CLI/scripts (`stack-*`, python gates, cron/timers), and
 diagnosis.
@@ -174,7 +174,7 @@ the Python standard library. So:
    `secrets/`.
 5. **Host firewall** — the stack publishes directly on host ports with no
    reverse proxy. Allow inbound TCP `3000` (NzbDAV), `5055` (Seerr),
-   `6767` (Bazarr), `7878` (Radarr), `8989` (Sonarr), `9696` (Prowlarr),
+   `7878` (Radarr), `8989` (Sonarr), `9696` (Prowlarr),
    `32400` (Plex); Plex on host network also uses its companion discovery/DLNA
    ports if those features are enabled.
 6. **Directories** — the repo layout with `config/` (per-service state,

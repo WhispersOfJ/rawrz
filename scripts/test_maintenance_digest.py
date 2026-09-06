@@ -206,8 +206,6 @@ class TestDelegatedChecks(unittest.TestCase):
             seen.append(args)
             if "sonarr.db" in args[1]:
                 return (2, "radarr DB not found ... skipping")
-            if "bazarr.db" in args[1]:
-                return (1, "CHECK FAILED: 1 bazarr.db size problem(s)")
             return (0, "OK: radarr.db page size and footprint within healthy limits.")
         orig = md.run_script
         md.run_script = fake
@@ -218,19 +216,15 @@ class TestDelegatedChecks(unittest.TestCase):
         by = {f.check: f for f in fs}
         self.assertEqual(by["radarr db"].level, "ok")
         self.assertEqual(by["sonarr db"].level, "warn")
-        self.assertEqual(by["bazarr db"].level, "fail")
         self.assertTrue(all(a and a[0] == "--db" for a in seen),
                         "every db gate must pass an explicit --db")
         radarr_args = next(a for a in seen if "radarr.db" in a[1])
         sonarr_args = next(a for a in seen if "sonarr.db" in a[1])
-        bazarr_args = next(a for a in seen if "bazarr.db" in a[1])
         self.assertNotIn("--blob-table", radarr_args,
                          "radarr keeps the MovieFiles default")
         self.assertEqual(sonarr_args[sonarr_args.index("--db") + 2:],
                          ["--blob-table", "EpisodeFiles"],
                          "sonarr leg must pass --blob-table EpisodeFiles")
-        self.assertNotIn("--blob-table", bazarr_args,
-                         "bazarr stores no MediaInfo blobs - no blob leg")
 
     def test_queue_classification(self):
         def fake(script, args, repo_root, timeout=120):

@@ -58,7 +58,6 @@ DEFAULT_HISTORY = ROOT / ".cache" / "db-growth" / "history.jsonl"
 DEFAULT_DBS = (
     ("radarr", "config/radarr/radarr.db"),
     ("sonarr", "config/sonarr/sonarr.db"),
-    ("bazarr", "config/bazarr/db/bazarr.db"),
 )
 
 # A drop larger than this fraction between consecutive samples is treated as

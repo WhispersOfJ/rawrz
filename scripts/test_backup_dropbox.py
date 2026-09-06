@@ -43,7 +43,6 @@ def _make_fake_checkout(root: Path) -> None:
         # kept per-app SETTINGS (IN)
         "config/radarr/config.xml": "<Config/>",
         "config/sonarr/config.xml": "<Config/>",
-        "config/bazarr/config.ini": "[general]",
         "config/seerr/settings.json": "{}",
         # generated metadata inside kept config dirs (OUT by default)
         "config/radarr/radarr.db": "x" * 100,
@@ -52,13 +51,10 @@ def _make_fake_checkout(root: Path) -> None:
         "config/radarr/logs/radarr.trace.txt": "t",
         "config/radarr/Backups/manual/radarr.db": "big",
         "config/sonarr/sonarr.db": "s",
-        "config/bazarr/db/bazarr.db": "b",
         # regenerable cache/artwork/crash trees (OUT always)
         "config/radarr/MediaCover/movies/123/fanart.jpg": "art",
         "config/sonarr/MediaCover/456/poster.jpg": "art",
         "config/radarr/Sentry/1/crash.dmp": "crash",
-        "config/bazarr/cache/fonts/f.ttf": "font",
-        "config/bazarr/.cache/cache.bin": "c",
         "config/seerr/cache/img.png": "img",
         # huge trees (OUT)
         "config/plex/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db": "huge",
@@ -138,7 +134,7 @@ class TarPipelineTests(unittest.TestCase):
         self.assertIn("./bear-i3-config.zip", members)
         # Kept settings ride along.
         self.assertIn("./config/radarr/config.xml", members)
-        self.assertIn("./config/bazarr/config.ini", members)
+        self.assertIn("./config/sonarr/config.xml", members)
 
         # Excluded: media / huge trees / secrets / runtime / metadata state.
         for member in (
@@ -164,12 +160,9 @@ class TarPipelineTests(unittest.TestCase):
             "./config/radarr/logs/radarr.trace.txt",
             "./config/radarr/Backups/manual/radarr.db",
             "./config/sonarr/sonarr.db",
-            "./config/bazarr/db/bazarr.db",
             "./config/radarr/MediaCover/movies/123/fanart.jpg",
             "./config/sonarr/MediaCover/456/poster.jpg",
             "./config/radarr/Sentry/1/crash.dmp",
-            "./config/bazarr/cache/fonts/f.ttf",
-            "./config/bazarr/.cache/cache.bin",
             "./config/seerr/cache/img.png",
         ):
             self.assertNotIn(member, members, f"should be excluded: {member}")
@@ -181,7 +174,6 @@ class TarPipelineTests(unittest.TestCase):
             members = _archive_members(root, include_dbs=True)
 
         self.assertIn("./config/radarr/radarr.db", members)
-        self.assertIn("./config/bazarr/db/bazarr.db", members)
         self.assertIn("./config/radarr/Backups/manual/radarr.db", members)
         # Still excluded under --include-dbs: secrets, media, huge trees,
         # AND the regenerable artwork/cache category (that flag ships
@@ -191,8 +183,7 @@ class TarPipelineTests(unittest.TestCase):
                        "./media/movies/Movie.mkv",
                        "./config/plex/Plex Media Server/Plug-in Support/"
                        "Databases/com.plexapp.plugins.library.db",
-                       "./config/radarr/MediaCover/movies/123/fanart.jpg",
-                       "./config/bazarr/cache/fonts/f.ttf"):
+                       "./config/radarr/MediaCover/movies/123/fanart.jpg"):
             self.assertNotIn(member, members)
 
 

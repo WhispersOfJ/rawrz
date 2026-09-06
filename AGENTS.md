@@ -7,8 +7,8 @@ work style and non-negotiable rules — this file covers the system itself.
 
 ## What This Repo Is
 
-A slim, robust media-acquisition-and-serving stack. **9 always-on Compose services**
-(Prowlarr, Radarr, Sonarr, Bazarr, nzbdav, nzbdav_rclone, Seerr, Plex, Unpackerr), plus
+A slim, robust media-acquisition-and-serving stack. **8 always-on Compose services**
+(Prowlarr, Radarr, Sonarr, nzbdav, nzbdav_rclone, Seerr, Plex, Unpackerr), plus
 manual ImageMaid and Recyclarr maintenance profiles, published directly on host ports
 — no reverse proxy — with CI/CD via GitHub Actions. Hosted on Linux.
 
@@ -19,9 +19,9 @@ manual ImageMaid and Recyclarr maintenance profiles, published directly on host 
 > in [docs/services/lifecycle.md](docs/services/lifecycle.md). Legacy files from the
 > merged source repos (`media-stack`, `metacacharr`) are preserved in `archive/`.
 >
-> **2026-09-03 re-adoption:** Bazarr returned as a fresh always-on service (768m
-> cap, 4.4× the cap it OOM'd under), removing it from the retired registry. See
-> lifecycle.md's re-adoption record.
+> **2026-09-06 re-retirement:** Bazarr was removed again (8-service target;
+> subtitle acquisition did not justify an always-on container). It is back in the
+> retired registry. See lifecycle.md's retirement record.
 >
 > **2026-09-04 demotion:** Recyclarr moved from the always-on set to the manual
 > `maintenance` profile — its daily 04:00 sync no longer runs automatically; invoke
@@ -36,8 +36,8 @@ manual ImageMaid and Recyclarr maintenance profiles, published directly on host 
 Prowlarr (indexers) ──▶ Radarr + Sonarr ──▶ nzbdav (Usenet) ──▶ FUSE mount ──▶ Plex
        :9696              :7878 / :8989      :3000        (nzbdav_rclone)   (host network)
                               │            │
-                          Seerr :5055    Bazarr :6767 (subtitles, read-only
-                              │            over the media trees)
+                          Seerr :5055
+                              │
                         Unpackerr (post-download extraction)
 ```
 
@@ -47,7 +47,6 @@ Prowlarr (indexers) ──▶ Radarr + Sonarr ──▶ nzbdav (Usenet) ──�
 |----------|----------|
 | **Indexing** | Prowlarr |
 | **\*arr apps** | Radarr (movies), Sonarr (TV) |
-| **Subtitles** | Bazarr (companion to both *arr apps) |
 | **Usenet** | InfiniDysk/nzbdav + nzbdav_rclone sidecar |
 | **Requests** | Seerr |
 | **Media server** | Plex (host network, VAAPI transcoding) |
@@ -68,19 +67,18 @@ Prowlarr indexes → Radarr/Sonarr queue → nzbdav downloads → rclone FUSE mo
 
 ---
 
-## Services (9 always-on services)
+## Services (8 always-on services)
 
 | # | Service | Purpose | Port | Network |
 |---|---------|---------|------|---------|
 | 1 | `prowlarr` | Indexer manager | 9696 | bearcave |
 | 2 | `radarr` | Movie management | 7878 | bearcave |
 | 3 | `sonarr` | TV show management | 8989 | bearcave |
-| 4 | `bazarr` | Subtitle management (Sonarr/Radarr companion) | 6767 | bearcave |
-| 5 | `nzbdav` | Usenet download client + WebDAV | 3000 | bearcave |
-| 6 | `nzbdav_rclone` | FUSE mount sidecar (streams on demand) | — | bearcave |
-| 7 | `seerr` | Request manager | 5055 | bearcave |
-| 8 | `plex` | Media server | 32400 | host |
-| 9 | `unpackerr` | Auto-extracts downloads | — | bearcave |
+| 4 | `nzbdav` | Usenet download client + WebDAV | 3000 | bearcave |
+| 5 | `nzbdav_rclone` | FUSE mount sidecar (streams on demand) | — | bearcave |
+| 6 | `seerr` | Request manager | 5055 | bearcave |
+| 7 | `plex` | Media server | 32400 | host |
+| 8 | `unpackerr` | Auto-extracts downloads | — | bearcave |
 
 ### Memory caps (slim-stack rebalance)
 
@@ -88,14 +86,13 @@ Prowlarr indexes → Radarr/Sonarr queue → nzbdav downloads → rclone FUSE mo
 |---------|-----------|------|
 | `radarr` | 1536m | 1GB DB with MediaInfo blobs; was OOMing at 1g; 1.5 CPU for imports |
 | `sonarr` | 1024m | ~365MB actual usage; 1.5 CPU to avoid scan/import throttling |
-| `bazarr` | 768m | 174MiB steady-state observed; 1 CPU for provider searches/mass moves; 4.4× the 128m cap it OOM'd under in the pre-slim stack |
 | `nzbdav` | 2560m | download + WebDAV; 2 CPU for concurrent provider/WebDAV work |
 | `nzbdav_rclone` | 4096m | FUSE/WebDAV cache; 2 CPU for concurrent media reads. 4096 (was 3072) because the vfs metadata cache peaks near the old cap during 100k+ item library analysis; host has headroom. |
 | `prowlarr` | 512m | |
 | `seerr` | 512m | |
 | `plex` | 2048m | host network, VAAPI; 4 CPU for library analysis |
 | `unpackerr` | 64m | |
-| **Total caps** | **≈ 12.9g** | CPU quotas leave headroom for concurrent scans/downloads; memory remains below the 22 GiB host total |
+| **Total caps** | **≈ 12.1g** | CPU quotas leave headroom for concurrent scans/downloads; memory remains below the 22 GiB host total |
 
 ### Network Topology
 
@@ -114,12 +111,12 @@ functions, tests). Full reasons and re-adoption policy are in
 
 traefik, loki, promtail, grafana, prometheus, alertmanager, node-exporter, cadvisor,
 nzbdav-exporter, arr-dashboard, landing-page, metacache, lidarr, readarr,
-audiobookshelf, komga, adguard, crowdsec, vaultwarden, watchstate. (Bazarr was on
-this list until its 2026-09-03 re-adoption.)
+audiobookshelf, komga, adguard, crowdsec, vaultwarden, watchstate, bazarr
+(re-retired 2026-09-06).
 
 > Note: the selected plan was the extreme scenario while retaining Seerr and Unpackerr
 > because request handling and automatic extraction remain useful in the final
-> 8-service composition. (The stack later re-adopted Bazarr; see lifecycle.md.)
+> 8-service composition.
 
 ---
 
@@ -128,7 +125,6 @@ this list until its 2026-09-03 re-adoption.)
 ```
 3000  nzbdav (WebDAV)
 5055  Seerr (requests)
-6767  Bazarr (subtitles)
 7878  Radarr
 8989  Sonarr
 9696  Prowlarr
@@ -289,7 +285,7 @@ The main checkout remains reference-only and must stay free of task edits.
 
 `/home/bear/TRUTH` (outside this repo, do not commit it) holds shallow git
 clones of the **actual upstream application source** for every container in the
-stack — each of the 9 always-on services plus both maintenance-profile services
+stack — each of the 8 always-on services plus both maintenance-profile services
 (ImageMaid, Recyclarr) — pinned to the exact version each image runs today.
 
 When a question is about *how something in this stack behaves in code* — an API
@@ -308,7 +304,7 @@ Rules of the road:
    handle a *arr pattern), grep the sibling trees too.
 2. **App source, not packaging.** The `ghcr.io/hotio/*` and similar images are
    packaging only; their source labels point at Dockerfile repos. `~/TRUTH`
-   holds the application code (Radarr, Sonarr, Prowlarr, Bazarr, …) — the tree
+   holds the application code (Radarr, Sonarr, Prowlarr, …) — the tree
    you actually want to grep. Do not chase the hotio repo for app behaviour.
 3. **Version skew is the first suspect when a search comes up empty.** Clones
    are pinned to the *running* versions; a symbol that exists upstream on
@@ -336,7 +332,6 @@ Service → source map (full table incl. refs and commit SHAs:
 | `prowlarr` | `~/TRUTH/prowlarr` | Prowlarr app source @ v2.5.2.5491 |
 | `radarr` | `~/TRUTH/radarr` | Radarr app source @ v6.3.0.10514 |
 | `sonarr` | `~/TRUTH/sonarr` | Sonarr app source @ v4.0.19.2979 |
-| `bazarr` | `~/TRUTH/bazarr` | Bazarr source @ v1.6.0 |
 | `nzbdav` | `~/TRUTH/infinidysk` | InfiniDysk source, `main` (rolling `dev` image) |
 | `nzbdav_rclone` | `~/TRUTH/rclone` | rclone source @ v1.75.0 |
 | `seerr` | `~/TRUTH/seerr` | Seerr source @ v3.4.1 |

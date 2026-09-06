@@ -54,12 +54,11 @@ backup_configs() {
     local config_backup="$BACKUP_DIR/$BACKUP_NAME/configs"
     mkdir -p "$config_backup"
 
-    # Backup service configs (9-service stack)
+    # Backup service configs (8-service stack)
     local services=(
         "prowlarr"
         "radarr"
         "sonarr"
-        "bazarr"
         "nzbdav"
         "nzbdav-rclone"
         "seerr"

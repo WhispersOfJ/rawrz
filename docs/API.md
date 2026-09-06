@@ -28,7 +28,6 @@ those docs to the APIs behind them.
 | Prowlarr | `http://HOST_IP:9696` · `/api/v1` | `PROWLARR_API_KEY` | \*arr (v1) | InfiniDysk indexer sync |
 | Radarr | `http://HOST_IP:7878` · `/api/v3` | `RADARR_API_KEY` | \*arr (v3) | `drain_sonarr_queue.py --app radarr`, `arrival_notifier.py`, `activity_feed.py`, Unpackerr, Recyclarr |
 | Sonarr | `http://HOST_IP:8989` · `/api/v3` | `SONARR_API_KEY` | \*arr (v3) | `search_missing_scoped*.py`, `drain_sonarr_queue.py`, `arrival_notifier.py`, `activity_feed.py`, Unpackerr, Recyclarr |
-| Bazarr | `http://HOST_IP:6767` · `/api` | key in `config/bazarr/` | Bazarr (Flask/wtforms) | healthcheck only |
 | InfiniDysk (nzbdav) | `http://HOST_IP:3000` · `/api` | `FRONTEND_BACKEND_API_KEY` | SABnzbd-compatible + WebDAV | Radarr/Sonarr (download client), checks |
 | nzbdav_rclone | internal `http://nzbdav_rclone:5572` · `/` | `NZBDAV_RCLONE_RC_PASS` | rclone RC | InfiniDysk (NZBDAV_CONFIG__RCLONE__HOST) |
 | Plex | `http://HOST_IP:32400` | `PLEX_TOKEN` | Plex Media Server | `stack-plex-*` bash functions, `arrival_notifier.py` |
@@ -226,30 +225,6 @@ library.
 - Canonical docs: <https://docs.seerr.dev/> · API:
   <https://docs.seerr.dev/api/seerr-api/>
 
-## Bazarr — `:6767` (`/api`)
-
-- See `docs/services/bazarr.md`; image `ghcr.io/hotio/bazarr:release-1.6.0`
-  (re-adopted 2026-09-03).
-- Healthcheck: `GET /ping` (unauthenticated, plain 200). This is the only
-  unauthenticated endpoint; everything else 401s without the key.
-- Auth for `/api/...`: `X-Api-Key` header with the API key generated on first
-  run (stored in `config/bazarr/config/config.yaml`, `auth.apikey`). Unlike
-  the \*arr apps the key is **not** templated from `.env` — Bazarr has no
-  env-var settings surface; Sonarr/Radarr connections are configured once in
-  its web UI (or via the settings API below).
-- **API namespace + settings mutation are non-obvious** (verified against the
-  live 1.6.0 container): the JSON API lives under `/api/system/...` etc. —
-  `/api/v1/...` returns the SPA HTML catch-all with a misleading 200. The
-  `POST /api/system/settings` mutation takes **form-encoded keys shaped
-  `settings-<section>-<field>`** (e.g. `settings-sonarr-apikey`); posting a
-  JSON body of the settings object returns 204 but persists nothing.
-- The repo calls no Bazarr endpoints today (no scripts, no functions). It reads
-  the same media trees as the \*arr apps and writes subtitle files beside the
-  media; checkers interact with its SQLite only if a DB gate is ever added
-  (`config/bazarr/db/bazarr.db`).
-- Canonical docs: <https://wiki.bazarr.media/> · API reference ships in-app at
-  `/api/docs` (apidoc UI) · upstream: <https://github.com/morpheus65535/bazarr>
-
 ## Unpackerr
 
 - See `docs/services/unpackerr.md`; image `golift/unpackerr:0.15.2`.
@@ -292,7 +267,6 @@ library.
 | Radarr SQLite | `config/radarr/radarr.db` (+ `logs.db`) | `check_radarr_db_size.py`, `prune_radarr_db.py`, `check_radarr_profiles.py`, `check_sonarr_refs.py`, `db_growth_trend.py` |
 | Prowlarr SQLite | `config/prowlarr/prowlarr.db` | `check_prowlarr_refs.py` |
 | InfiniDysk SQLite | `config/nzbdav/db.sqlite` (`infinidysk-db-v1`) | nzbdav itself; see `docs/services/nzbdav.md` |
-| Bazarr SQLite | `config/bazarr/db/bazarr.db` | `db_growth_trend.py` (trend sample; no blob leg — Bazarr stores no MediaInfo) |
 | FUSE mount | `nzbdav_rclone` at `/mnt/remote/nzbdav` | Radarr/Sonarr/Plex/Unpackerr consumers |
 | Docker | socket/CLI | `check_config_drift.py`, `reclaim_docker_disk.py`, `preflight.sh` |
 | Host scheduling | user systemd units/timers, crontab | `audit_residue.py`, `maintenance_digest.py` |

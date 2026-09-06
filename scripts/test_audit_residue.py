@@ -61,8 +61,8 @@ def main() -> int:
 
     # --- Token matching ----------------------------------------------
     expect("retired name flags", mod.TOKEN_RE.search("start lidarr now") is not None, True)
-    # bazarr left the registry on 2026-09-03 (re-adopted); it must never flag.
-    expect("re-adopted name never flags", mod.TOKEN_RE.search("start bazarr now"), None)
+    # bazarr re-joined the registry on 2026-09-06 (re-retired); it must flag again.
+    expect("re-retired name flags", mod.TOKEN_RE.search("start bazarr now") is not None, True)
     expect("active name never flags", mod.TOKEN_RE.search("radarr import") is not None, False)
     expect("no partial-word match",
            mod.TOKEN_RE.search("the prometheusish era") is not None, False)
@@ -95,7 +95,7 @@ def main() -> int:
 
     # --- Docs filenames ------------------------------------------------
     expect("retired-named page flags", mod.doc_name_is_retired("lidarr.md"), True)
-    expect("re-adopted service page does not flag", mod.doc_name_is_retired("bazarr.md"), False)
+    expect("re-retired service page flags", mod.doc_name_is_retired("bazarr.md"), True)
     expect("active service page does not flag", mod.doc_name_is_retired("radarr.md"), False)
 
     # --- Crontab -------------------------------------------------------

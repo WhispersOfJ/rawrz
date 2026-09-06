@@ -3,11 +3,11 @@ Hey, I'm WhispersOfJ
 Self-hosted media infrastructure, developer tooling, and AI-assisted automation.
 
 🎬 thebearcave
-A slim, robust self-hosted media stack — 9 always-on Docker Compose services, one `docker compose up -d`.
-Usenet-only acquisition via NzbDAV (no torrents, no debrid), streamed through an rclone FUSE mount into a Plex server with VAAPI hardware transcoding. Slimmed from 29 services down to a deliberately minimal core for stability and headroom; Bazarr re-joined in September 2026.
+A slim, robust self-hosted media stack — 8 always-on Docker Compose services, one `docker compose up -d`.
+Usenet-only acquisition via NzbDAV (no torrents, no debrid), streamed through an rclone FUSE mount into a Plex server with VAAPI hardware transcoding. Slimmed from 29 services down to a deliberately minimal core for stability and headroom.
 
 Prowlarr → Radarr / Sonarr → NzbDAV (Usenet + WebDAV) → rclone FUSE mount → Plex
-with Seerr for requests, Bazarr for subtitles, and Unpackerr for automatic extraction.
+with Seerr for requests and Unpackerr for automatic extraction.
 
 → Repository · → Live architecture docs
 

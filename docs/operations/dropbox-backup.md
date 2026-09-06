@@ -33,7 +33,7 @@ files on disk (e.g. `dropbox-uploader/`, `bear-i3-config.zip`).
 | Code hygiene | — | `__pycache__/`, `*.pyc` |
 
 Kept per-app settings therefore include `config/{radarr,sonarr,prowlarr,
-seerr,bazarr}/*.{xml,ini,json}` — the small files that encode how the stack
+seerr}/*.{xml,ini,json}` — the small files that encode how the stack
 is configured — while the sqlite databases, WAL/SHM files, internal
 `Backups/` directories of DB copies, and the poster-artwork trees
 (observed 2026-09-04: `config/radarr` 30 GB of which `MediaCover` alone is
