@@ -1,0 +1,728 @@
+# ============================================================================
+# tests/live/safe_command_registry.yaml — the D11 safe-command registry
+# ============================================================================
+# Single source of truth for what may touch the live stack outside a milestone
+# demo (plan §4.2). Two sections:
+#
+#   safe:        commands the matrix EXECUTES, once per shell (bash/zsh/fish),
+#                through the port loaders — argv exactly as recorded here.
+#   excluded:    mutating / destructive commands deliberately NOT executed;
+#                each row records why, so the boundary is auditable.
+#
+# Row fields (safe):
+#   name        cave-* command (stack-* aliases resolve identically; the
+#               parity harness in the submodule proves that equivalence)
+#   family      registry family (spec/functions.yaml)
+#   safety      safety class as recorded in spec/functions.yaml
+#   argv        exact argument vector the matrix runs (use [] for none)
+#   surfaces    live things it touches — arr/plex/nzbdav/seerr/docker/host/btrfs/hyprland
+#   out         expected output contract (checked as a substring / rc gate)
+#   since       milestone where the row became executable
+#
+# Invariant: every `safe[].name` and `excluded[].name` must be a
+# spec/functions.yaml row in the pinned submodule; run_safe_matrix.sh enforces
+# this and fails on drift. New M3 commands land as `status: pending` safe rows
+# (visibility without execution) and flip to executable in the implementing PR.
+
+safe:
+  # ── core ──────────────────────────────────────────────────────────────────
+  - name: cave-status
+    family: core
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "Container Status heading + one line per container"
+    expect: "Container Status"
+    since: M2
+  - name: cave-version
+    family: core
+    safety: read-only
+    argv: []
+    surfaces: [docker, host]
+    out: "Stack Versions heading; repo line matches pinned submodule"
+    expect: "Stack Versions"
+    since: M2
+  - name: cave-top
+    family: core
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "docker stats --no-stream table (one sample, no follow)"
+    since: M2
+
+  # ── arr ───────────────────────────────────────────────────────────────────
+  - name: cave-arr-backlog
+    family: arr
+    safety: read-only
+    argv: ["radarr"]
+    surfaces: [arr]
+    out: "Radarr backlog report (or explicit empty-state line); rc 0"
+    known_issue: "live finding 2026-09-06: radarr /api/v3/command returns a bare JSON array while the renderer assumes the records-wrapper (data.get('records') → AttributeError, stderr suppressed → rc 1); fix = both-shapes handling in all three ports (compare cave-command-queue-summary)"
+    since: M2
+  - name: cave-arr-recently-added
+    family: arr
+    safety: read-only
+    argv: ["radarr", "5"]
+    surfaces: [arr]
+    out: "5 most recently added movies with dates"
+    since: M2
+  - name: cave-arr-missing-aired
+    family: arr
+    safety: read-only
+    argv: ["sonarr", "5"]
+    surfaces: [arr]
+    out: "aired-but-missing episode report (or explicit empty-state line)"
+    since: M2
+  - name: cave-cutoff-unmet
+    family: arr
+    safety: read-only
+    argv: ["sonarr", "5"]
+    surfaces: [arr]
+    out: "quality-cutoff-unmet report (or explicit empty-state line)"
+    since: M2
+  - name: cave-arr-blocklist
+    family: arr
+    safety: read-only
+    argv: ["radarr", "5"]
+    surfaces: [arr]
+    out: "blocklist listing (or explicit empty-state line)"
+    since: M2
+  - name: cave-arr-logs
+    family: arr
+    safety: read-only
+    argv: ["sonarr", "20"]
+    surfaces: [arr]
+    out: "recent Sonarr log lines"
+    since: M2
+  - name: cave-arr-queue-errors
+    family: queue
+    safety: read-only
+    argv: ["radarr", "10"]
+    surfaces: [arr]
+    out: "warning/error queue items (or explicit empty-state line); rc 0"
+    since: M2
+  - name: cave-prowlarr-indexers
+    family: arr
+    safety: read-only
+    argv: []
+    surfaces: [arr]
+    out: "indexer health/test-state listing"
+    since: M2
+  - name: cave-backlog-status
+    family: arr
+    safety: read-only
+    argv: []
+    surfaces: [arr]
+    out: "aggregate backlog status across both arr apps"
+    since: M2
+  - name: cave-import-lists
+    family: arr
+    safety: read-only
+    timeout: heavy
+    argv: ["radarr"]
+    surfaces: [arr]
+    out: "import-list report; GET surfaces only"
+    since: M2
+  - name: cave-command-queue-summary
+    family: arr
+    safety: read-only
+    argv: []
+    surfaces: [arr]
+    out: "queued-command counts per app"
+    since: M2
+  - name: cave-radarr-health
+    family: arr
+    safety: read-only
+    argv: []
+    surfaces: [arr]
+    out: "Radarr /api/v3/health issues (or explicit all-clear line)"
+    since: M2
+
+  # ── queue / nzbdav ────────────────────────────────────────────────────────
+  - name: cave-queue-status
+    family: queue
+    safety: read-only
+    argv: []
+    surfaces: [arr]
+    out: "queue counts for radarr + sonarr; rc 0"
+    since: M2
+  - name: cave-queue-autofix
+    family: queue
+    safety: mutating-safe
+    argv: []   # NO --yes: guarded-stdin path aborts as a no-op on closed stdin
+    surfaces: [arr]
+    out: "confirmation prompt on closed stdin → 'Cancelled.'; no mutation"
+    rc_ok: [1] # returns 1 by design when the operator (here: closed stdin) declines
+    guard: closed-stdin-no-op
+    since: M2
+  - name: cave-nzbdav-queue
+    family: nzbdav
+    safety: read-only
+    argv: []
+    surfaces: [nzbdav]
+    out: "authenticated nzbdav queue through the frontend; rc 0"
+    since: M2
+  - name: cave-nzbdav-stats
+    family: nzbdav
+    safety: read-only
+    argv: []
+    surfaces: [nzbdav]
+    out: "nzbdav stats summary; rc 0"
+    known_issue: "live finding 2026-09-06: GET stats → HTTP 400 'Invalid mode' from the InfiniDysk backend — mode-name defect in the ports; tracked, not a harness failure"
+    since: M2
+  - name: cave-mount-health
+    family: nzbdav
+    safety: read-only
+    argv: []
+    surfaces: [nzbdav, host]
+    out: "FUSE mount health line + entry count (ls inside the mount only)"
+    since: M2
+
+  # ── plex ──────────────────────────────────────────────────────────────────
+  - name: cave-plex-sessions
+    family: plex
+    safety: read-only
+    argv: []
+    surfaces: [plex]
+    out: "active sessions (or explicit none line); rc 0"
+    since: M2
+  - name: cave-plex-libraries
+    family: plex
+    safety: read-only
+    argv: []
+    surfaces: [plex]
+    out: "library list keyed by section id; rc 0"
+    since: M2
+  - name: cave-plex-recently-added
+    family: plex
+    safety: read-only
+    argv: []
+    surfaces: [plex]
+    out: "recently-added items with dates; rc 0"
+    since: M2
+  - name: cave-plex-updates
+    family: plex
+    safety: read-only
+    argv: []
+    surfaces: [plex]
+    out: "update availability line; rc 0"
+    since: M2
+  - name: cave-plex-markers
+    family: plex
+    safety: read-only
+    timeout: heavy
+    argv: []
+    surfaces: [plex, host]
+    out: "intro/credits marker DB summary from repo-side SQLite reads"
+    since: M2
+  - name: cave-plex-duplicates
+    family: plex
+    safety: read-only
+    timeout: heavy
+    argv: []
+    surfaces: [plex]
+    out: "duplicate-media report (or explicit none line)"
+    since: M2
+
+  # ── seerr / misc host-side ────────────────────────────────────────────────
+  - name: cave-seerr-requests
+    family: misc
+    safety: read-only
+    argv: []
+    surfaces: [seerr]
+    out: "Seerr request count + open requests with media-state labels"
+    since: M2
+
+  # ── disk / docker / maintenance ───────────────────────────────────────────
+  - name: cave-docker-disk-usage
+    family: disk
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "docker system df table"
+    since: M2
+  - name: cave-image-check
+    family: misc
+    safety: read-only
+    timeout: heavy
+    argv: []
+    surfaces: [docker]
+    out: "running image per container vs compose pin"
+    since: M2
+  - name: cave-config-drift
+    family: maintenance
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "drift report (findings are informational, not harness failures)"
+    rc_ok: [0, 1]
+    since: M2
+  - name: cave-audit-residue
+    family: maintenance
+    safety: read-only
+    argv: ["--repo-only"]
+    surfaces: [host]
+    out: "repo-only residue scan (findings are informational, not harness failures)"
+    rc_ok: [0, 1]
+    since: M2
+  - name: cave-perms-check
+    family: misc
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "config/secrets permission report"
+    since: M2
+  - name: cave-oom-check
+    family: misc
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "OOMKilled inspection across containers"
+    since: M2
+  - name: cave-resource-check
+    family: misc
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "mem/cpu caps vs host budget report"
+    since: M2
+  - name: cave-log-levels
+    family: misc
+    safety: read-only
+    argv: []
+    surfaces: [docker]
+    out: "per-app logging levels read via docker exec cat (read-only exec)"
+    since: M2
+
+  # ── watchable / arrivals (Plex + Seerr GETs; cache writes land under ~/.cache) ──
+  - name: cave-requests
+    family: watchable
+    safety: read-only
+    argv: ["5"]
+    surfaces: [seerr]
+    out: "request count line + open requests with media-state labels"
+    since: M2
+  - name: cave-unwatched
+    family: watchable
+    safety: read-only
+    argv: ["5"]
+    surfaces: [plex]
+    out: "unwatched items, newest first"
+    since: M2
+  - name: cave-recent
+    family: watchable
+    safety: read-only
+    argv: ["5"]
+    surfaces: [plex]
+    out: "recently added items"
+    since: M2
+  - name: cave-watchable
+    family: watchable
+    safety: read-only
+    timeout: heavy
+    argv: []
+    surfaces: [plex, seerr]
+    out: "one screen: requests/unwatched/recent — sections degrade per source"
+    since: M2
+  - name: cave-activity-feed
+    family: arrivals
+    safety: read-only
+    argv: ["5"]
+    surfaces: [host]
+    out: "re-renders ~/.cache feed.json/xml (repo-side cache only) and prints latest 5"
+    known_issue: "live finding 2026-09-06: scripts/activity_feed.py sends a 400-inducing request to radarr/sonarr (unreachable verdict) while direct API calls succeed — script defect; tracked, not a harness failure"
+    since: M2
+
+  # ── host diagnostics (pure host reads; no stack surfaces) ─────────────────
+  - name: cave-sys-disk-free
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "df summary with warn/crit thresholds"
+    since: M2
+  - name: cave-sys-mem-pressure
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "kernel PSI stats"
+    since: M2
+  - name: cave-sys-journal-errors
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "recent error-priority journal lines"
+    since: M2
+  - name: cave-sys-journal-size
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "journal disk usage"
+    since: M2
+  - name: cave-sys-uptime-report
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "uptime + load summary"
+    since: M2
+  - name: cave-sys-service-failed
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "failed systemd units (or explicit none)"
+    since: M2
+  - name: cave-sys-timer-status
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "stack-related timers (grep -i stack over systemctl list-timers)"
+    rc_ok: [0, 1]   # rc 1 = grep found no stack timers; on this host the stack uses cron
+    since: M2
+  - name: cave-sys-zombie-check
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "zombie process count (or explicit none)"
+    since: M2
+  - name: cave-sys-kernel-check
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "running vs installed kernel comparison; rc 1 = mismatch (reboot pending)"
+    rc_ok: [0, 1]
+    since: M2
+  - name: cave-sys-reboot-check
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "reboot-required status; rc 1 = reboot pending (signal, not failure)"
+    rc_ok: [0, 1]
+    since: M2
+  - name: cave-sys-pkg-updates
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "pending package update count (check-only, no install)"
+    since: M2
+  - name: cave-sys-pkg-orphans
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "orphan package list (no --remove flag)"
+    since: M2
+  - name: cave-sys-pkg-history
+    family: sys
+    safety: read-only
+    argv: ["5"]
+    surfaces: [host]
+    out: "recent pacman transactions"
+    since: M2
+  - name: cave-sys-aur-audit
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "AUR helper audit summary"
+    since: M2
+  - name: cave-sys-git-status-all
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "dirty-worktree scan across managed repos"
+    since: M2
+  - name: cave-sys-firewall-status
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "listening ports + nftables ruleset head (read-only list)"
+    since: M2
+  - name: cave-sys-ssh-doctor
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "ssh config/permission checks"
+    since: M2
+  - name: cave-sys-cron-list
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "crontab listing"
+    since: M2
+  - name: cave-sys-disk-health
+    family: sys
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "SMART summary per disk"
+    since: M2
+
+  # ── btrfs (M3 — verified against this host's btrfs-only fs) ───────────────
+  - name: cave-btrfs-usage
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "btrfs filesystem usage/df summary"
+    status: pending   # flips to executable in the btrfs-family PR (Demo 3 gate)
+    since: M3
+  - name: cave-btrfs-subvolumes
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "subvolume list (@, @home, @cache, @log, @tmp, @srv, @root)"
+    status: pending
+    since: M3
+  - name: cave-btrfs-device-stats
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "device stats (-z) error counters"
+    status: pending
+    since: M3
+  - name: cave-btrfs-scrub-status
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "scrub status details (idle or running)"
+    status: pending
+    since: M3
+  - name: cave-btrfs-balance-status
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "balance status (none or in-progress)"
+    status: pending
+    since: M3
+  - name: cave-btrfs-qgroup
+    family: btrfs
+    safety: read-only
+    argv: []
+    surfaces: [host]
+    out: "qgroup show (graceful when quota disabled)"
+    status: pending
+    since: M3
+  - name: cave-btrfs-snapper
+    family: btrfs
+    safety: read-only
+    argv: ["list"]
+    surfaces: [host]
+    out: "snapper listing across root+home configs; home timeline 5/7/4/3"
+    status: pending
+    since: M3
+
+  # ── backup (D24 — no btrfs send/recv; --dry-run is the §4.2-named safe mode) ─
+  - name: cave-backup
+    family: backup
+    safety: mutating-safe
+    argv: ["--dry-run"]
+    surfaces: [host]
+    out: "echo-before-exec dry-run summary of the backup_dropbox.py plan"
+    status: pending
+    since: M3
+
+  # ── DE (M3 — gated on an interactive Hyprland session) ────────────────────
+  - name: cave-theme
+    family: de
+    safety: mutating-safe
+    argv: ["list"]
+    surfaces: [hyprland]
+    out: "six-palette theme listing (list/current are GET surfaces; set/cycle excluded)"
+    status: pending
+    since: M3
+
+excluded:
+  # ── arr mutations ─────────────────────────────────────────────────────────
+  - name: cave-arr-toggle-search
+    reason: "POSTs search commands to the arr APIs — monitored items kick off downloads"
+  - name: cave-arr-import
+    reason: "triggers a download import (POST /api/v3/command DownloadedMoviesScan)"
+  - name: cave-arr-import-all
+    reason: "same import surface across all items"
+  - name: cave-arr
+    reason: "rss-sync / search-missing / unstick all POST arr commands"
+  - name: cave-radarr-prune
+    reason: "destructive-confirm: stops Radarr, prunes DB blobs/history, vacuums"
+  - name: cave-sonarr-prune
+    reason: "destructive-confirm: same class as cave-radarr-prune for Sonarr"
+
+  # ── nzbdav lifecycle (landmines #4/#13) ───────────────────────────────────
+  - name: cave-nzbdav-delete-failures
+    reason: "destructive-confirm: deletes failed downloads from nzbdav"
+
+  # ── plex mutations ────────────────────────────────────────────────────────
+  - name: cave-plex
+    reason: "refresh-libraries|empty-trash|analyze|scan are all library mutations"
+  - name: cave-plex-butler
+    reason: "triggers Butler maintenance tasks"
+  - name: cave-plex-butler-all
+    reason: "full Butler sweep"
+  - name: cave-plex-empty-trash
+    reason: "empties Plex trash — destroys recoverable items"
+  - name: cave-plex-analyze
+    reason: "queue library analysis (CPU-heavy, mutates media state)"
+  - name: cave-plex-refresh-libraries
+    reason: "library metadata refresh (POST)"
+  - name: cave-plex-refresh-epg
+    reason: "EPG refresh (POST)"
+  - name: cave-plex-refresh-local-media
+    reason: "local media refresh (POST)"
+  - name: cave-plex-process-assets
+    reason: "asset processing pass"
+  - name: cave-plex-backup-database
+    reason: "writes a DB backup archive"
+  - name: cave-plex-automatic-updates
+    reason: "toggles auto-update publisher setting"
+  - name: cave-plex-garbage-collect-media
+    reason: "destructive-confirm: removes orphaned media metadata"
+  - name: cave-plex-garbage-collect-blobs
+    reason: "destructive-confirm: removes orphaned artwork blobs"
+  - name: cave-plex-clean-cache-files
+    reason: "deletes Plex cache files"
+  - name: cave-plex-clean-log-files
+    reason: "deletes Plex log files"
+  - name: cave-plex-image-clean
+    reason: "destructive-confirm: PhotoTranscoder cleanup — only while Plex is idle, demo-only"
+  - name: cave-plex-deep-media-analysis
+    reason: "heavy analysis queue"
+  - name: cave-plex-upgrade-media-analysis
+    reason: "heavy analysis queue"
+  - name: cave-plex-music-analysis
+    reason: "heavy analysis queue"
+  - name: cave-plex-loudness-analysis
+    reason: "heavy analysis queue"
+  - name: cave-plex-generate-media-index
+    reason: "media index generation"
+  - name: cave-plex-generate-voice-activity
+    reason: "marker generation"
+  - name: cave-plex-generate-intro-markers
+    reason: "marker generation"
+  - name: cave-plex-generate-credits-markers
+    reason: "marker generation"
+  - name: cave-plex-generate-ad-markers
+    reason: "marker generation"
+  - name: cave-plex-generate-chapter-thumbs
+    reason: "chapter thumbnail generation"
+  - name: cave-sonarr-fix-episode-monitoring
+    reason: "flips episode monitoring state (PUT)"
+
+  # ── disk / maintenance ────────────────────────────────────────────────────
+  - name: cave-disk-reclaim
+    reason: "destructive-confirm: docker prune family; even --dry-run runs the nightly-cron path shape"
+  - name: cave-disk-config-sizes
+    reason: "read-only in spirit but runs du over live config trees — excluded from the timed matrix for runtime, available at demos"
+    demo-only: true
+  - name: cave-nzbdav-dedup-check
+    reason: "read-only scan but heavy I/O over the FUSE mount — demo-only"
+    demo-only: true
+
+  # ── lists / loop mutations ────────────────────────────────────────────────
+  - name: cave-mdblist-track
+    reason: "creates tracked list state"
+  - name: cave-mdblist-untrack
+    reason: "removes tracked list state"
+  - name: cave-mdblist-import
+    reason: "imports list items into the arrs"
+  - name: cave-letterboxd-track
+    reason: "creates tracked list state"
+  - name: cave-letterboxd-untrack
+    reason: "removes tracked list state"
+  - name: cave-letterboxd-import
+    reason: "imports list items into the arrs"
+  - name: cave-loop-exclude
+    reason: "writes exclusion state"
+  - name: cave-loop-unmonitor
+    reason: "unmonitors items in the arrs"
+  - name: cave-tmdb-missing
+    reason: "external-API heavy scan — demo-only (GET-only surface)"
+    demo-only: true
+  - name: cave-rating-imdb
+    reason: "external OMDb API — demo-only (GET-only surface)"
+    demo-only: true
+  - name: cave-rating-mdblist
+    reason: "external mdblist API (search is a POST to a third party) — demo-only"
+    demo-only: true
+  - name: cave-loop-candidates
+    reason: "heavy arr-side scan — demo-only (GET-only surface)"
+    demo-only: true
+
+  # ── arrivals / misc ───────────────────────────────────────────────────────
+  - name: cave-arrival-notify
+    reason: "sends Discord pings and advances the cursor state file"
+  - name: cave-notify-test
+    reason: "sends a test notification through swaync/Discord"
+  - name: cave-claude-full-backup
+    reason: "writes backup archives"
+  - name: cave-worktree
+    reason: "creates a git worktree + branch — repo mutation"
+
+  # ── core mutations ────────────────────────────────────────────────────────
+  - name: cave-container
+    reason: "restart|stop|start control containers; there is no read-only arg mode"
+  - name: cave-restart-all
+    reason: "restarts the whole stack"
+  - name: cave-maintenance-digest
+    reason: "read-only report but runs user timers' surface checks end-to-end — demo-only"
+    demo-only: true
+
+  # ── sys mutations ─────────────────────────────────────────────────────────
+  - name: cave-sys-pkg-update
+    reason: "installs package updates (--yes bypasses confirm)"
+  - name: cave-sys-pkg-clean-cache
+    reason: "destructive-confirm: deletes package cache"
+  # ── btrfs (M3) ────────────────────────────────────────────────────────────
+  - name: cave-btrfs-snapshot
+    reason: "create|delete mutate the snapshot trees; list mode ships as a pending row until the family lands"
+  - name: cave-btrfs-subvol
+    reason: "creates subvolumes"
+  - name: cave-btrfs-scrub
+    reason: "destructive-confirm: starts a scrub (hours of IO); even start is demo-only with --yes + confirm"
+  - name: cave-btrfs-balance
+    reason: "destructive-confirm: starts a balance; same demo-only treatment"
+
+  # ── DE (M3) ───────────────────────────────────────────────────────────────
+  - name: cave-lock
+    reason: "locks the session — never automated"
+  - name: cave-idle-toggle
+    reason: "flips hypridle presentation mode"
+  - name: cave-theme
+    excluded_args: ["set", "cycle", "auto-from-image"]
+    reason: "set/cycle rewrites theme state + rebuilds waybar style; the bare listing is the safe row above"
+  - name: cave-nightlight
+    reason: "toggles gammastep state"
+  - name: cave-record
+    reason: "starts/stops wf-recorder; status is a GET surface (pending row with the family)"
+  - name: cave-cliphist
+    reason: "interacts with clipboard history UI"
+  - name: cave-audio
+    reason: "pactl volume/mute mutations"
+  - name: cave-media
+    reason: "playerctl transport control"
+  - name: cave-power
+    reason: "lock|logout|suspend|reboot|shutdown — absolutely never automated"
+  - name: cave-bar
+    reason: "restarts/reloads waybar; cave-bar-check guard is demo-surface"
+  - name: cave-stack-tui
+    reason: "toggles TUI layer visibility/state"
+  - name: cave-notify
+    reason: "swaync control (dnd toggle, panel toggle)"
+  - name: cave-sync
+    reason: "rewrites live ~/.config trees from the repo (waybar|hypr|all)"
