@@ -162,14 +162,95 @@ async fn env_apply() -> Response {
     todo("prompted-apply cascade lands in M2 (queue guard wired then)").into_response()
 }
 
-/// Catalog & deployments.
+/// Catalog & deployments (spec §6.3 / Appendix D). Serves the curated catalog
+/// from the compiled-in `catalog/catalog.yaml`; install/uninstall flows are
+/// jobs (PR-based, per §6.3) and land with M4's live compose probes.
 #[doc = "features: [\"catalog\"]"]
 pub fn router_catalog() -> Router {
-    Router::new().route("/catalog", get(catalog))
+    Router::new()
+        .route("/catalog", get(catalog))
+        .route("/catalog/conflicts", post(catalog_conflicts))
+        .route("/catalog/{id}", get(catalog_entry))
+        .route("/catalog/{id}/install", post(catalog_install))
+        .route("/catalog/{id}/uninstall", post(catalog_uninstall))
+        .route("/deployments", get(deployments))
+        .route("/deployments/{id}/logs", get(deployment_logs))
 }
 
 async fn catalog() -> Response {
-    todo("catalog listing lands in M4").into_response()
+    crate::catalog::ensure_loaded();
+    match crate::catalog::get() {
+        Some(doc) => (StatusCode::OK, Json(doc)).into_response(),
+        None => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "catalog_invalid",
+            "catalog failed validation — refusing to serve",
+        )
+        .into_response(),
+    }
+}
+
+async fn catalog_entry(Path(id): Path<String>) -> Response {
+    crate::catalog::ensure_loaded();
+    match crate::catalog::entry(&id) {
+        Some(e) => (StatusCode::OK, Json(e)).into_response(),
+        None => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_entry",
+            format!("no catalog entry '{id}'"),
+        )
+        .into_response(),
+    }
+}
+
+async fn catalog_conflicts(Json(draft): Json<crate::catalog::DraftInstall>) -> Response {
+    crate::catalog::ensure_loaded();
+    let conflicts = crate::catalog::check_conflicts(&draft);
+    // 200 with a report either way: `conflicts: []` means the draft is clean.
+    (StatusCode::OK, Json(json!({ "conflicts": conflicts }))).into_response()
+}
+
+async fn catalog_install(Path(id): Path<String>) -> Response {
+    crate::catalog::ensure_loaded();
+    if crate::catalog::entry(&id).is_none() {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_entry",
+            format!("no catalog entry '{id}'"),
+        )
+        .into_response();
+    }
+    match jobs::spawn(format!("catalog.install.{id}"), id) {
+        Ok(j) => (StatusCode::ACCEPTED, Json(json!({ "jobId": j.id }))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn catalog_uninstall(Path(id): Path<String>) -> Response {
+    crate::catalog::ensure_loaded();
+    if crate::catalog::entry(&id).is_none() {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_entry",
+            format!("no catalog entry '{id}'"),
+        )
+        .into_response();
+    }
+    match jobs::spawn(format!("catalog.uninstall.{id}"), id) {
+        Ok(j) => (StatusCode::ACCEPTED, Json(json!({ "jobId": j.id }))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn deployments() -> Response {
+    todo("deployment history lands in M4 (SQLite-backed)").into_response()
+}
+
+async fn deployment_logs(Path(id): Path<String>) -> Response {
+    todo(&format!(
+        "deployment step logs land in M4 (deployment '{id}' unknown until then)"
+    ))
+    .into_response()
 }
 
 /// Host tools (shim) — one router, all host.* IDs declared once.

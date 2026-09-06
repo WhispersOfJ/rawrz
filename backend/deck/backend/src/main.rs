@@ -14,6 +14,10 @@ async fn main() {
         )
         .init();
 
+    // Fail-closed catalog load: if the embedded catalog is invalid the slot
+    // stays poisoned and catalog routes report `catalog_invalid`.
+    cave_deck::catalog::ensure_loaded();
+
     let app = cave_deck::routes::router().await;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 7780));

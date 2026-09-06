@@ -20,6 +20,42 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const getVersion = () => api<{ cave_deck: string; stack: string }>("/version");
+export const getCatalog = () =>
+  api<CatalogDocument>("/catalog");
+
+export interface CatalogEnvVar {
+  key: string;
+  default: string | null;
+  secret?: boolean;
+}
+
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  category: string;
+  retired: boolean;
+  image: string;
+  ports: string[];
+  volumes: string[];
+  env: CatalogEnvVar[];
+  pid_mode?: string;
+  host_network?: boolean;
+  devices: string[];
+  capabilities: string[];
+  dependencies: string[];
+  compose_fragment?: string;
+  mem_limit: string;
+  healthcheck?: string;
+  docs: string;
+  notes: string;
+}
+
+export interface CatalogDocument {
+  version: string;
+  updated: string;
+  installState: string;
+  entries: CatalogEntry[];
+}
 export const getDashboard = () =>
   api<{
     containers: unknown[];
