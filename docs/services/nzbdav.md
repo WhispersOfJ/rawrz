@@ -27,10 +27,12 @@ Important values:
 - `FRONTEND_BACKEND_API_KEY`: shared SABnzbd-compatible API key
 - `NZBDAV_WEBDAV_USER/PASS`: WebDAV credentials used by rclone
 - `NZBDAV_RCLONE_RC_PASS`: rclone remote-control password
-- `NZBDAV_USENET_*`: provider credentials — `NZBDAV_USENET_*` (primary),
-  `NZBDAV_USENET_BACKUP_*` (backup), and `NZBDAV_USENET_EWEKA_*` (third
-  slot, news.eweka.nl over SSL). All are injected into InfiniDysk's
-  `NZBDAV_CONFIG__USENET__PROVIDERS` JSON in Compose.
+- `NZBDAV_USENET_*`: provider credentials — `NZBDAV_USENET_*` (primary) and
+  `NZBDAV_USENET_BACKUP_*` (backup). Both are injected into InfiniDysk's
+  `NZBDAV_CONFIG__USENET__PROVIDERS` JSON in Compose. A third slot (Eweka,
+  `NZBDAV_USENET_EWEKA_*`) was retired 2026-09-06 after the provider rejected
+  its credentials server-side; the re-adoption path is documented next to the
+  commented-out block in `.env.template`.
 - `NZBDAV_PROFILE_TOKEN`: profile/watchtower token
 
 ## Library directory (orphan-cleanup protection)

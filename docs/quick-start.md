@@ -6,7 +6,7 @@ Get The Bear Cave running from zero to streaming with the eight-service stack.
 
 - Linux host with Docker Engine 24+ and Compose v2 (`docker compose`)
 - `/dev/fuse` and a `/dev/dri/renderD*` node available for rclone and Plex VAAPI
-- Credentials for the primary, backup, and Eweka Usenet provider slots
+- Credentials for the primary and backup Usenet provider slots
 - Optional Intel/AMD GPU exposed as `/dev/dri` for Plex hardware transcoding
 
 Docker Desktop for macOS/Windows is not supported: FUSE and Plex host networking

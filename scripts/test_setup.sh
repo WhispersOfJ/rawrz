@@ -65,7 +65,7 @@ fi
 # The validator must reject any missing Compose credential, rather than
 # allowing Compose to substitute an empty value.
 cp "$TMP/.env" "$TMP/missing.env"
-sed -i 's/^NZBDAV_USENET_EWEKA_PASS=.*/# NZBDAV_USENET_EWEKA_PASS=missing/' "$TMP/missing.env"
+sed -i 's/^NZBDAV_USENET_HOST=.*/# NZBDAV_USENET_HOST=missing/' "$TMP/missing.env"
 if (
     cd "$TMP"
     ENV_FILE="$TMP/missing.env" bash -c '
