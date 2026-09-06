@@ -1,0 +1,30 @@
+# Rust
+backend/target/
+backend/**/*.rs.bk
+
+# Node
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Runtime state (never committed)
+config/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.*
+!.env.template
+
+# Python
+catalog/__pycache__/
+__pycache__/
+*.pyc
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

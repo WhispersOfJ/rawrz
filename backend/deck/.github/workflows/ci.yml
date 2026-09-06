@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}  # brand-new-repo race-condition remedy (AGENTS.md CI/CD notes)
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/index
+            backend/target
+          key: cargo-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: cargo-
+      - run: cargo fmt --all -- --check
+        working-directory: backend
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: backend
+      - run: cargo test
+        working-directory: backend
+
+  frontend:
+    name: frontend (typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - uses: actions/setup-node@94196ee1d154  # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - run: npm test -- --run
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  catalog:
+    name: catalog (schema, ports, retired-registry)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install pyyaml
+      - run: python3 catalog/validate.py
+
+  api-contract:
+    name: api-contract (feature-ID coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: python3 scripts/check_api_contract.py backend/src frontend/src parity/parity.yaml
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - name: Download actionlint
+        run: |
+          curl -sSL -o /tmp/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+      - run: /tmp/actionlint -color

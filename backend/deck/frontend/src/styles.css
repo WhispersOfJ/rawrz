@@ -1,0 +1,75 @@
+/* Cave Deck — tokens are set at runtime by src/theme/theme.ts (spec §5.5). */
+
+:root {
+  --cd-bg: #101418;
+  --cd-surface: #181e25;
+  --cd-text: #e6eaee;
+  --cd-muted: #8b96a0;
+  --cd-accent: #e8a33d;
+  --cd-border: #242c35;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--cd-bg);
+  color: var(--cd-text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.cd-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+}
+
+@media (max-width: 768px) {
+  .cd-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cd-sidebar {
+  background: var(--cd-surface);
+  border-right: 1px solid var(--cd-border);
+  padding: 1rem 0.5rem;
+}
+
+.cd-sidebar a {
+  display: block;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  color: var(--cd-text);
+  text-decoration: none;
+  min-height: 44px; /* touch-target budget (spec §3.3) */
+  line-height: 2.2rem;
+}
+
+.cd-sidebar a:hover,
+.cd-sidebar a.active {
+  background: var(--cd-border);
+}
+
+.cd-main {
+  padding: 1.25rem;
+  min-width: 0;
+}
+
+.cd-banner {
+  border: 1px solid var(--cd-accent);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  color: var(--cd-accent);
+  background: color-mix(in srgb, var(--cd-accent) 8%, transparent);
+}
+
+.cd-card {
+  background: var(--cd-surface);
+  border: 1px solid var(--cd-border);
+  border-radius: 10px;
+  padding: 1rem;
+}

@@ -1,0 +1,936 @@
+version: 1
+updated: '2026-09-06'
+entries:
+- id: navidrome
+  name: Navidrome
+  category: media
+  retired: false
+  image: ghcr.io/navidrome/navidrome:latest
+  ports:
+  - 4533:4533/tcp
+  volumes:
+  - ./config/navidrome:/data
+  - ./media/music:/music:ro
+  env: []
+  mem_limit: 512m
+  healthcheck: wget -qO- http://localhost:4533/ping >/dev/null 2>&1 || exit 1
+  docs: https://www.navidrome.org/docs/installation/#docker
+  notes: Subsonic-compatible music server; create ./media/music first
+- id: tautulli
+  name: Tautulli
+  category: media
+  retired: false
+  image: ghcr.io/tautulli/tautulli:latest
+  ports:
+  - 8181:8181/tcp
+  volumes:
+  - ./config/tautulli:/config
+  env:
+  - key: PLEXURL
+    description: set to http://plex:32400 after first run
+  mem_limit: 512m
+  docs: https://github.com/Tautulli/Tautulli/wiki/Installation
+  notes: Plex stats & monitoring; point at PLEX_TOKEN-backed URL in setup
+- id: kometa
+  name: Kometa
+  category: media
+  retired: false
+  image: kometateam/kometa:latest
+  ports: []
+  volumes:
+  - ./config/kometa:/config
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 1g
+  docs: https://kometa.wiki/en/latest/kometa/install/docker/
+  notes: Plex collections/metadata (formerly plex-meta-manager); config.yml required before start; runs
+    on schedule via its own config
+- id: calibre-web
+  name: Calibre-Web
+  category: media
+  retired: false
+  image: lscr.io/linuxserver/calibre-web:latest
+  ports:
+  - 8083:8083/tcp
+  volumes:
+  - ./config/calibre-web:/config
+  - ./media/books:/books
+  env:
+  - key: PUID
+    default: ${PUID}
+  - key: PGID
+    default: ${PGID}
+  - key: TZ
+    default: ${TZ}
+  - key: DOCKER_MODS
+    default: linuxserver/mods:universal-calibre
+    description: optional ebook-conversion binary
+  mem_limit: 512m
+  docs: https://docs.linuxserver.io/images/docker-calibre-web/
+  notes: Requires an existing metadata.db in ./media/books (create with calibre once)
+- id: kavita
+  name: Kavita
+  category: media
+  retired: false
+  image: ghcr.io/jvmilazz0/kavita:latest
+  ports:
+  - 5000:5000/tcp
+  volumes:
+  - ./config/kavita:/kavita/config
+  - ./media/reading:/data:ro
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  docs: https://wiki.kavitareader.com/en/install/docker
+  notes: Comics/manga/ebooks; /data expects subfolders per library type
+- id: mylar3
+  name: Mylar3
+  category: media
+  retired: false
+  image: lscr.io/linuxserver/mylar3:latest
+  ports:
+  - 8090:8090/tcp
+  volumes:
+  - ./config/mylar3:/config
+  - ./media/reading/comics:/comics
+  env:
+  - key: PUID
+    default: ${PUID}
+  - key: PGID
+    default: ${PGID}
+  mem_limit: 512m
+  docs: https://docs.linuxserver.io/images/docker-mylar3/
+  notes: Comic book *arr-style acquisition; downloads land in /comics
+- id: jellyfin
+  name: Jellyfin
+  category: media
+  retired: false
+  image: jellyfin/jellyfin:latest
+  ports:
+  - 8096:8096/tcp
+  volumes:
+  - ./config/jellyfin:/config
+  - ./config/jellyfin-cache:/cache
+  - ./media/movies:/media/movies:ro
+  - ./media/shows:/media/shows:ro
+  devices:
+  - /dev/dri:/dev/dri
+  mem_limit: 2g
+  docs: https://jellyfin.org/docs/general/installation/container/
+  notes: Alternative media server; /dev/dri enables VAAPI transcode like Plex; reads the same media trees
+- id: sabnzbd
+  name: SABnzbd
+  category: media
+  retired: false
+  image: lscr.io/linuxserver/sabnzbd:latest
+  ports:
+  - 8085:8080/tcp
+  volumes:
+  - ./config/sabnzbd:/config
+  - usenet:/usenet
+  env:
+  - key: PUID
+    default: ${PUID}
+  - key: PGID
+    default: ${PGID}
+  mem_limit: 1g
+  docs: https://docs.linuxserver.io/images/docker-sabnzbd/
+  notes: Standalone Usenet client for a SECOND server/stack; never point the live *arr apps at it (nzbdav
+    is the stack's client)
+- id: jellyseerr
+  name: Jellyseerr
+  category: media
+  retired: false
+  image: fallenbagel/jellyseerr:latest
+  ports:
+  - 5056:5055/tcp
+  volumes:
+  - ./config/jellyseerr:/app/config
+  env: []
+  mem_limit: 512m
+  docs: https://github.com/Fallenbagel/jellyseerr#readme
+  notes: Requests UI for Jellyfin ecosystems; host port shifted 5055→5056 (Seerr owns 5055 here)
+- id: flaresolverr
+  name: FlareSolverr
+  category: media
+  retired: false
+  image: ghcr.io/flaresolverr/flaresolverr:latest
+  ports:
+  - 8191:8191/tcp
+  volumes: []
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 1g
+  docs: https://github.com/FlareSolverr/FlareSolverr#installation
+  notes: Cloudflare-bypass proxy for *arr indexers; add as Prowlarr indexer settings → FlareSolverr when
+    an indexer demands it
+- id: dozzle
+  name: Dozzle
+  category: ops
+  retired: false
+  image: ghcr.io/amir20/dozzle:latest
+  ports:
+  - 9999:8080/tcp
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+  env: []
+  mem_limit: 128m
+  healthcheck: wget -qO- http://localhost:8080/health >/dev/null 2>&1 || exit 1
+  docs: https://dozzle.dev/guide/getting-started
+  notes: Live container logs; read-only socket mount. Complements Cave Deck (which owns mutations)
+- id: glances
+  name: Glances
+  category: ops
+  retired: false
+  image: nicolargo/glances:latest-full
+  ports:
+  - 61208:61208/tcp
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+  - /:/rootfs:ro
+  env:
+  - key: GLANCES_OPT
+    default: -w
+  pid_mode: host
+  mem_limit: 256m
+  docs: https://nicolargo.github.io/glances/
+  notes: Full-system view; pid:host + rootfs:ro required for process/host stats
+- id: netdata
+  name: Netdata
+  category: ops
+  retired: false
+  image: netdata/netdata:latest
+  ports:
+  - 19999:19999/tcp
+  volumes:
+  - ./config/netdata:/etc/netdata
+  - netdata-cache:/var/cache/netdata
+  - /:/host/root:ro,rslave
+  - /proc:/host/proc:ro
+  - /sys:/host/sys:ro
+  capabilities:
+  - SYS_PTRACE
+  - SYS_ADMIN
+  mem_limit: 1g
+  docs: https://learn.netdata.cloud/docs/netdata-for-infrastructure/installation/docker
+  notes: 1-second metrics; caps required for full telemetry — trim SYS_ADMIN by dropping cgroups collector
+    if unwanted
+- id: scrutiny
+  name: Scrutiny
+  category: ops
+  retired: false
+  image: ghcr.io/analogj/scrutiny:latest-omnibus
+  ports:
+  - 8888:8080/tcp
+  volumes:
+  - ./config/scrutiny:/opt/scrutiny/config
+  - ./config/scrutiny-db:/opt/scrutiny/db
+  - /run/udev:/run/udev:ro
+  capabilities:
+  - SYS_ADMIN
+  - SYS_RAWIO
+  devices:
+  - /dev/nvme0n1:/dev/nvme0n1
+  mem_limit: 256m
+  docs: https://github.com/AnalogJ/scrutiny#docker
+  notes: SMART dashboard; devices list must enumerate every physical disk (setup form asks); omni bus
+    image includes its own TSDB
+- id: portainer
+  name: Portainer CE
+  category: ops
+  retired: false
+  image: portainer/portainer-ce:latest
+  ports:
+  - 9443:9443/tcp
+  volumes:
+  - ./config/portainer:/data
+  - /var/run/docker.sock:/var/run/docker.sock
+  mem_limit: 256m
+  docs: https://docs.portainer.io/start/install/server/docker
+  notes: General Docker UI. Cave Deck remains the stack-specific surface; Portainer is the escape hatch
+    — write access to the socket is intentional here
+- id: gatus
+  name: Gatus
+  category: ops
+  retired: false
+  image: twinproduction/gatus:latest
+  ports:
+  - 8089:8080/tcp
+  volumes:
+  - ./config/gatus:/config
+  env:
+  - key: GATUS_CONFIG_PATH
+    default: /config/gatus.yaml
+  mem_limit: 256m
+  healthcheck: wget -qO- http://localhost:8080/health >/dev/null 2>&1 || exit 1
+  docs: https://gatus.io/docs/installation
+  notes: Uptime/health checks with alerting to the same Discord webhook; gatus.yaml authored at install
+- id: dockge
+  name: Dockge
+  category: ops
+  retired: false
+  image: louislam/dockge:1
+  ports:
+  - 5001:5001/tcp
+  volumes:
+  - ./config/dockge:/app/data
+  - /var/run/docker.sock:/var/run/docker.sock
+  - /home/bear/Cave:/home/bear/Cave
+  mem_limit: 256m
+  docs: https://github.com/louislam/dockge#readme
+  notes: Compose stack manager. Repo path mount lets it see thebearcave compose; Cave Deck PR flow remains
+    the tracked path — treat Dockge as read-mostly
+- id: diun
+  name: Diun
+  category: ops
+  retired: false
+  image: crazymax/diun:4
+  ports: []
+  volumes:
+  - ./config/diun:/data
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+  env:
+  - key: DIUN_WATCH_WORKERS
+    default: '5'
+  - key: DIUN_PROVIDERS_DOCKER
+    default: 'true'
+  - key: DIUN_NOTIF_DISCORD_WEBHOOKURL
+    secret: true
+    description: reuse stack Discord webhook
+  mem_limit: 128m
+  docs: https://crazymax.dev/diun/
+  notes: Notifies (Discord) when any running image has a newer tag — pin-aware companion, never auto-pulls
+- id: wg-easy
+  name: WireGuard Easy
+  category: network
+  retired: false
+  image: ghcr.io/wg-easy/wg-easy:15
+  ports:
+  - 51821:51821/tcp
+  - 51820:51820/udp
+  volumes:
+  - ./config/wg-easy:/etc/wireguard
+  - /lib/modules:/lib/modules:ro
+  env:
+  - key: WG_HOST
+    description: public IP or DDNS hostname
+  - key: PASSWORD_HASH
+    secret: true
+    description: '`docker run ghcr.io/wg-easy/wg-easy -p "password"` to generate'
+  capabilities:
+  - NET_ADMIN
+  devices:
+  - /dev/net/tun:/dev/net/tun
+  mem_limit: 256m
+  docs: https://wg-easy.github.io/wg-easy/v15.3/getting-started/
+  notes: v15 syntax; /lib/modules ro-mount + /dev/net/tun required for the wireguard kernel module; host
+    port 51820/udp must be opened in ufw/router for remote peers; cap NET_ADMIN is inherent to WireGuard
+- id: pihole
+  name: Pi-hole
+  category: network
+  retired: false
+  image: pihole/pihole:latest
+  ports:
+  - 8082:80/tcp
+  - 53:53/tcp
+  - 53:53/udp
+  volumes:
+  - ./config/pihole:/etc/pihole
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: FTLCONF_webserver_api_password
+    secret: true
+    description: v6 web UI password (NOT legacy WEBPASSWORD)
+  capabilities:
+  - NET_ADMIN
+  mem_limit: 512m
+  healthcheck: pihole-FTL --verify-dns
+  docs: https://docs.pi-hole.net/docker/configuration/
+  notes: 'v6 env naming: FTLCONF_* lower-camel suffixes; host ports 53 tcp+udp require systemd-resolved''s
+    stub listener disabled first (installer form warns)'
+- id: authelia
+  name: Authelia
+  category: network
+  retired: false
+  image: authelia/authelia:latest
+  ports:
+  - 9091:9090/tcp
+  volumes:
+  - ./config/authelia:/config
+  env: []
+  mem_limit: 256m
+  healthcheck: wget -qO- http://localhost:9090/api/health >/dev/null 2>&1 || exit 1
+  docs: https://www.authelia.com/installation/docker/
+  notes: Forward-auth/2FA for web apps; needs configuration.yml + users.yml seeded at install (setup form
+    generates them)
+- id: caddy
+  name: Caddy
+  category: network
+  retired: false
+  image: caddy:2-alpine
+  ports:
+  - 8081:80/tcp
+  - 8443:443/tcp
+  volumes:
+  - ./config/caddy:/data
+  - ./config/caddy-config:/config
+  env: []
+  mem_limit: 256m
+  docs: https://caddyserver.com/docs/running#docker-compose
+  notes: Reverse proxy w/ auto-TLS (needs routable DNS for LE); LAN-only stack may prefer internal CA
+    — Caddyfile authored at install; host 80/443 shifted to 8081/8443 to avoid conflicts
+- id: paperless-ngx
+  name: Paperless-ngx
+  category: home
+  retired: false
+  image: ghcr.io/paperless-ngx/paperless-ngx:latest
+  ports:
+  - 8000:8000/tcp
+  volumes:
+  - ./config/paperless:/usr/src/paperless/data
+  - ./config/paperless-media:/usr/src/paperless/media
+  - ./media/documents/consume:/usr/src/paperless/consume
+  - ./media/documents/export:/usr/src/paperless/export
+  env:
+  - key: PAPERLESS_REDIS
+    default: redis://paperless-redis:6379
+  - key: PAPERLESS_TIME_ZONE
+    default: ${TZ}
+  - key: PAPERLESS_SECRET_KEY
+    secret: true
+  - key: PAPERLESS_OCR_LANGUAGE
+    default: eng
+  dependencies:
+  - paperless-redis
+  mem_limit: 1g
+  healthcheck: curl -sf http://localhost:8000/ >/dev/null || exit 1
+  docs: https://docs.paperless-ngx.com/setup/#docker
+  notes: Document archive; requires its redis sidecar (below). OCR consumes CPU on import — 1 CPU suggested
+- id: paperless-redis
+  name: Paperless Redis
+  category: home
+  retired: false
+  image: redis:7-alpine
+  ports: []
+  volumes:
+  - ./config/paperless-redis:/data
+  env: []
+  mem_limit: 256m
+  docs: https://docs.paperless-ngx.com/configuration/#redis
+  notes: Internal sidecar for paperless-ngx; no published port; installed together, not listed standalone
+    in the GUI grid
+- id: homarr
+  name: Homarr
+  category: home
+  retired: false
+  image: ghcr.io/homarr-labs/homarr:latest
+  ports:
+  - 7575:7575/tcp
+  volumes:
+  - ./config/homarr:/app/data
+  env: []
+  mem_limit: 512m
+  docs: https://homarr.dev/docs/getting-started/installation/docker
+  notes: Dashboard linking all stack UIs; v1 image org is homarr-labs (older guides show ekzhang/homarr
+    — wrong)
+- id: photoprism
+  name: PhotoPrism
+  category: home
+  retired: false
+  image: photoprism/photoprism:latest
+  ports:
+  - 2342:2342/tcp
+  volumes:
+  - ./config/photoprism:/photoprism/storage
+  - ./media/photos:/photoprism/originals
+  env:
+  - key: PHOTOPRISM_ADMIN_PASSWORD
+    secret: true
+  - key: PHOTOPRISM_SITE_URL
+    default: http://192.168.4.105:2342/
+  devices:
+  - /dev/dri:/dev/dri
+  mem_limit: 2g
+  healthcheck: wget -qO- http://localhost:2342/api/v1/status >/dev/null 2>&1 || exit 1
+  docs: https://docs.photoprism.app/getting-started/docker-compose/
+  notes: Photo library w/ AI indexing; SQLite storage is fine for <100k photos, MariaDB (catalog extension)
+    beyond; /dev/dri for TF/VAAPI accel
+- id: whisparr
+  name: Whisparr
+  category: media
+  retired: false
+  image: ghcr.io/hotio/whisparr:release-3
+  ports:
+  - 6969:6969/tcp
+  volumes:
+  - ./config/whisparr:/config
+  - ./media:/data
+  env:
+  - key: PUID
+    default: '1000'
+  - key: PGID
+    default: '1000'
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  healthcheck: curl -sf http://localhost:6969/ping || exit 1
+  docs: https://hotio.dev/containers/whisparr/
+  notes: '*arr-family (adult); no official image — hotio build; v3 tag line'
+- id: maintainerr
+  name: Maintainerr
+  category: media
+  retired: false
+  image: ghcr.io/maintainerr/maintainerr:latest
+  ports:
+  - 6291:6291/tcp
+  volumes:
+  - ./config/maintainerr:/opt/data
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  healthcheck: curl -sf http://localhost:6291/ || exit 1
+  docs: https://docs.maintainerr.info/installation/
+  notes: Plex/Jellyfin library maintenance; org moved from jorenn92 (deprecated) — catalog pins the new
+    maintainerr org; data at /opt/data
+- id: requestrr
+  name: Requestrr
+  category: media
+  retired: false
+  image: thomst08/requestrr:latest
+  ports:
+  - 4545:4545/tcp
+  volumes:
+  - ./config/requestrr:/config
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  docs: https://github.com/thomst08/requestrr
+  notes: Discord→Seerr/Sonarr/Radarr chatbot; LSIO image deprecated — entry pins the maintained fork;
+    config path /config per fork README
+- id: tdarr
+  name: Tdarr
+  category: media
+  retired: false
+  image: ghcr.io/haveagitgat/tdarr:latest
+  ports:
+  - 8265:8265/tcp
+  - 8266:8266/tcp
+  volumes:
+  - ./config/tdarr/server:/app/server
+  - ./config/tdarr/configs:/app/configs
+  - ./config/tdarr/logs:/app/logs
+  - ./media:/media
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: serverIP
+    default: 0.0.0.0
+  - key: serverPort
+    default: '8266'
+  - key: webUIPort
+    default: '8265'
+  devices:
+  - /dev/dri:/dev/dri
+  mem_limit: 2048m
+  docs: https://docs.tdarr.io/docs/installation/docker/run-compose/
+  notes: 'transcode/remux automation; /dev/dri for VAAPI (device justification: hardware transcode); node
+    port no longer published per upstream docs; CPU-heavy — keep mem cap 2g+'
+- id: ersatztv
+  name: ErsatzTV
+  category: media
+  retired: false
+  image: ghcr.io/ersatztv/ersatztv:latest
+  ports:
+  - 8409:8409/tcp
+  volumes:
+  - ./config/ersatztv:/root/.local/share/ersatztv
+  - ./media:/media:ro
+  env:
+  - key: TZ
+    default: ${TZ}
+  devices:
+  - /dev/dri:/dev/dri
+  mem_limit: 1024m
+  docs: https://ersatztv.org/docs/installation/docker/
+  notes: custom live-TV channels for Plex; data dir varies by image variant — verify at install; vaapi/nvidia
+    variant images exist; /dev/dri for on-the-fly transcode
+- id: nzbhydra2
+  name: NZBHydra 2
+  category: media
+  retired: false
+  image: theotherp/nzbhydra2:latest
+  ports:
+  - 5076:5076/tcp
+  volumes:
+  - ./config/nzbhydra2:/config
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  docs: https://github.com/theotherp/nzbhydra2
+  notes: indexer meta-search; complements Prowlarr (either can feed the arrs)
+- id: ombi
+  name: Ombi
+  category: media
+  retired: false
+  image: ombi/ombi:latest
+  ports:
+  - 3579:3579/tcp
+  volumes:
+  - ./config/ombi:/config
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  docs: https://github.com/Ombi-app/Ombi/wiki
+  notes: upstream largely dormant — the stack's Seerr (an Overseerr fork) is preferred; entry exists for
+    completeness
+- id: slskd
+  name: slskd
+  category: media
+  retired: false
+  image: ghcr.io/slskd/slskd:latest
+  ports:
+  - 5030:5030/tcp
+  volumes:
+  - ./config/slskd:/app
+  - ./media/music:/downloads
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: SLSKD_PASSWORD
+    secret: true
+    description: web UI admin password
+  mem_limit: 512m
+  docs: https://github.com/slskd/slskd
+  notes: Soulseek client — music acquisition complement to Navidrome/Beets; optional listen-port range
+    50000-50300 improves download performance (map + ufw)
+- id: metube
+  name: MeTube
+  category: media
+  retired: false
+  image: alexta69/metube:latest
+  ports:
+  - 8881:8081/tcp
+  volumes:
+  - ./media/youtube:/downloads
+  - ./config/metube:/config
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  docs: https://github.com/alexta69/metube
+  notes: yt-dlp web UI; host port shifted from upstream 8081 (catalog collision); downloads land in media/youtube
+- id: unmanic
+  name: Unmanic
+  category: media
+  retired: false
+  image: josh5/unmanic:latest
+  ports:
+  - 8889:8888/tcp
+  volumes:
+  - ./config/unmanic:/config
+  - ./media:/library
+  env:
+  - key: TZ
+    default: ${TZ}
+  devices:
+  - /dev/dri:/dev/dri
+  mem_limit: 1024m
+  docs: https://docs.unmanic.io/
+  notes: 'library re-encode/remux automation — CAREFUL: give it a narrow library path, it mutates files;
+    host port shifted from 8888 (scrutiny has it)'
+- id: beets
+  name: Beets
+  category: media
+  retired: false
+  image: lscr.io/linuxserver/beets:latest
+  ports:
+  - 8337:8337/tcp
+  volumes:
+  - ./config/beets:/config
+  - ./media/music:/music
+  env:
+  - key: PUID
+    default: '1000'
+  - key: PGID
+    default: '1000'
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  docs: https://docs.linuxserver.io/images/docker-beets/
+  notes: music library tagger — pairs with slskd (acquire) and navidrome (serve)
+- id: socket-proxy
+  name: Docker Socket Proxy
+  category: ops
+  retired: false
+  image: lscr.io/linuxserver/socket-proxy:latest
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+  env:
+  - key: CONTAINERS
+    default: '1'
+  - key: IMAGES
+    default: '1'
+  - key: EVENTS
+    default: '1'
+  - key: NETWORKS
+    default: '1'
+  - key: INFO
+    default: '1'
+  - key: POST
+    default: '0'
+  - key: EXEC
+    default: '0'
+  - key: VOLUMES
+    default: '0'
+  mem_limit: 64m
+  healthcheck: curl -sf http://localhost:2375/_ping || exit 1
+  docs: https://docs.linuxserver.io/images/docker-socket-proxy/
+  notes: 'least-privilege Docker API gateway (drop-in for tecnativa/docker-socket-proxy); consumers reach
+    it at tcp://socket-proxy:2375 on bearcave; no published host port by design; enable only the API groups
+    consumers need; NOTE: read-only socket mounts do not actually restrict the API — a proxy is the real
+    mitigation'
+- id: kopia
+  name: Kopia
+  category: ops
+  retired: false
+  image: ghcr.io/kopia/kopia:latest
+  ports:
+  - 51515:51515/tcp
+  volumes:
+  - ./config/kopia:/app/config
+  - ./config:/config:ro
+  - ./media:/media:ro
+  env:
+  - key: KOPIA_PASSWORD
+    secret: true
+    description: repository password
+  mem_limit: 256m
+  docs: https://github.com/kopia/kopia
+  notes: encrypted snapshots of config/ + media/ metadata; server mode args go in a compose_fragment (CLI-driven,
+    not env-driven); pairs with the stack's Dropbox backup
+- id: changedetection
+  name: Changedetection.io
+  category: ops
+  retired: false
+  image: dgtlmoon/changedetection.io:latest
+  ports:
+  - 5002:5000/tcp
+  volumes:
+  - ./config/changedetection:/datastore
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  docs: https://github.com/dgtlmoon/changedetection.io
+  notes: website-change monitoring; host port shifted from 5000 (kavita has it); set PLAYWRIGHT_DRIVER_URL
+    to the seeded flaresolverr for JS-heavy sites
+  dependencies:
+  - flaresolverr
+- id: speedtest-tracker
+  name: Speedtest Tracker
+  category: ops
+  retired: false
+  image: alexjustesen/speedtest-tracker:latest
+  ports:
+  - 8765:80/tcp
+  volumes:
+  - ./config/speedtest:/config
+  env:
+  - key: PUID
+    default: '1000'
+  - key: PGID
+    default: '1000'
+  - key: TZ
+    default: ${TZ}
+  - key: SPEEDTEST_SCHEDULE
+    default: 30 * * * *
+  - key: APP_KEY
+    secret: true
+    description: Laravel app key — generate at install
+  mem_limit: 256m
+  docs: https://github.com/alexjustesen/speedtest-tracker
+  notes: sqlite builtin (MariaDB optional); APP_KEY must be set before first boot and kept stable
+- id: beszel
+  name: Beszel
+  category: ops
+  retired: false
+  image: henrygd/beszel:latest
+  ports:
+  - 8091:8090/tcp
+  volumes:
+  - ./config/beszel:/beszel_data
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  docs: https://github.com/henrygd/beszel
+  notes: lightweight server monitoring hub (sqlite builtin); the beszel-agent companion runs outside compose
+    on monitored hosts — deploy per upstream docs
+- id: technitium
+  name: Technitium DNS Server
+  category: network
+  retired: false
+  image: technitium/dns-server:latest
+  ports:
+  - 5380:5380/tcp
+  volumes:
+  - ./config/technitium:/etc/dns
+  env:
+  - key: DNS_SERVER_DOMAIN
+    default: cave.lan
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  healthcheck: curl -sf http://localhost:5380/api/user/session || exit 1
+  docs: https://hub.docker.com/r/technitium/dns-server
+  notes: authoritative+recursive DNS w/ web console on 5380; map host 53/tcp+udp manually only if the
+    host resolver (systemd-resolved stub) does not claim it; upstream recommends host networking when
+    serving DNS — convert via compose_fragment at install
+- id: tailscale
+  name: Tailscale
+  category: network
+  retired: false
+  image: ghcr.io/tailscale/tailscale:latest
+  volumes:
+  - ./config/tailscale:/var/lib/tailscale
+  - /dev/net/tun:/dev/net/tun
+  env:
+  - key: TS_AUTHKEY
+    secret: true
+    description: auth key from tailnet admin (or login-server URL for headscale)
+  - key: TS_HOSTNAME
+    default: cave
+  - key: TS_EXTRA_ARGS
+    default: --advertise-exit-node
+  capabilities:
+  - NET_ADMIN
+  mem_limit: 128m
+  docs: https://tailscale.com/kb/1174/deploy-clients
+  notes: subnet-router/exit-node into the LAN; /dev/net/tun + NET_ADMIN are inherent to WireGuard; pair
+    with headscale via TS_EXTRA_ARGS --login-server for self-hosted control
+- id: unbound
+  name: Unbound
+  category: network
+  retired: false
+  image: klutchell/unbound:latest
+  ports:
+  - 5353:53/tcp
+  - 5353:53/udp
+  volumes:
+  - ./config/unbound:/opt/unbound/etc/unbound
+  env:
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 128m
+  healthcheck: drill @localhost localhost 2>/dev/null || dig @localhost localhost || exit 1
+  docs: https://github.com/klutchell/unbound
+  notes: recursive validating DNS resolver; host 5353 avoids the host resolver stub; point pihole/technitium
+    upstream at unbound:5353 over the bearcave network
+- id: headscale
+  name: Headscale
+  category: network
+  retired: false
+  image: ghcr.io/headscale/headscale:latest
+  ports:
+  - 8086:8080/tcp
+  volumes:
+  - ./config/headscale:/etc/headscale
+  mem_limit: 128m
+  compose_fragment: "headscale:\n  <<: *common\n  command: serve\n"
+  docs: https://github.com/juanfont/headscale
+  notes: self-hosted Tailscale control plane; config.yaml is authored at install (server_url must be reachable
+    by clients); ships compose_fragment for the command override — the only seed entry that needs one
+- id: nextcloud
+  name: Nextcloud
+  category: home
+  retired: false
+  image: nextcloud:apache
+  ports:
+  - 8880:80/tcp
+  volumes:
+  - ./config/nextcloud:/var/www/html
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: NEXTCLOUD_ADMIN_USER
+    default: bear
+  - key: NEXTCLOUD_ADMIN_PASSWORD
+    secret: true
+    description: admin password — set once at first boot
+  mem_limit: 1024m
+  healthcheck: curl -sf http://localhost/status.php || exit 1
+  docs: https://github.com/nextcloud/docker
+  notes: all-in-one image w/ sqlite default — fine for small installs; move to MariaDB (catalog extension)
+    beyond; host port shifted from 80
+- id: gitea
+  name: Gitea
+  category: home
+  retired: false
+  image: gitea/gitea:latest
+  ports:
+  - 3080:3000/tcp
+  - 3022:22/tcp
+  volumes:
+  - ./config/gitea:/data
+  env:
+  - key: USER_UID
+    default: '1000'
+  - key: USER_GID
+    default: '1000'
+  - key: GITEA__database__DB_TYPE
+    default: sqlite3
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 512m
+  healthcheck: curl -sf http://localhost:3000/api/healthz || exit 1
+  docs: https://docs.gitea.com/installation/install-with-docker
+  notes: self-hosted git; host 3080 avoids nzbdav's 3000; ssh on 3022 — disable SSH server feature if
+    unused
+- id: mealie
+  name: Mealie
+  category: home
+  retired: false
+  image: ghcr.io/mealie-recipes/mealie:latest
+  ports:
+  - 9925:9000/tcp
+  volumes:
+  - ./config/mealie:/app/data
+  env:
+  - key: TZ
+    default: ${TZ}
+  - key: MEALIE_DEFAULT_GROUP
+    default: Home
+  mem_limit: 512m
+  healthcheck: wget -qO- http://localhost:9000/ >/dev/null 2>&1 || exit 1
+  docs: https://docs.mealie.io/documentation/getting-started/installation/installation-checklist/
+  notes: recipe manager; container port 9000, host 9925 per upstream docs convention; sqlite storage is
+    the default
+- id: linkding
+  name: Linkding
+  category: home
+  retired: false
+  image: sissbruecker/linkding:latest
+  ports:
+  - 9090:9090/tcp
+  volumes:
+  - ./config/linkding:/etc/linkding
+  env:
+  - key: LD_SUPERUSER_NAME
+    default: bear
+  - key: LD_SUPERUSER_PASSWORD
+    secret: true
+    description: initial admin password
+  - key: TZ
+    default: ${TZ}
+  mem_limit: 256m
+  healthcheck: wget -qO- http://localhost:9090/health >/dev/null 2>&1 || exit 1
+  docs: https://github.com/sissbruecker/linkding
+  notes: bookmark manager; sqlite builtin; host 9090 free (authelia maps host 9091)

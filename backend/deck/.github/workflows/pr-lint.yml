@@ -1,0 +1,21 @@
+name: pr-lint
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e  # v6
+      - name: Enforce Conventional Commits in PR title
+        run: |
+          title="${{ github.event.pull_request.title }}"
+          if ! echo "$title" | grep -qE '^(feat|fix|docs|chore|ci|refactor|test|build|perf)(\([a-z0-9-]+\))?!?: .+'; then
+            echo "PR title must be a Conventional Commit: $title"
+            exit 1
+          fi

@@ -1,0 +1,28 @@
+# Synced copy of RETIRED_SERVICES from thebearcave/scripts/audit_residue.py
+# (spec Appendix A §A.4). Nightly CI fetches the upstream list and fails if
+# this lock drifted. One name per line.
+traefik
+loki
+promtail
+grafana
+prometheus
+alertmanager
+node-exporter
+cadvisor
+nzbdav-exporter
+arr-dashboard
+landing-page
+metacache
+lidarr
+readarr
+audiobookshelf
+komga
+adguard
+crowdsec
+vaultwarden
+watchstate
+cleanuparr
+uptime-kuma
+n8n
+control-panel
+bazarr
