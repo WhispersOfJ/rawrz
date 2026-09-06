@@ -14,13 +14,13 @@ jobs:
     name: backend (fmt, clippy, test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e  # v6
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
       - name: Install Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca
         with:
           path: |
             ~/.cargo/registry
@@ -39,8 +39,8 @@ jobs:
     name: frontend (typecheck, test, build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e  # v6
-      - uses: actions/setup-node@94196ee1d154  # v6
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
+      - uses: actions/setup-node@94196ee1d15439c1b6651cd87ef14e88ec435966  # v6
         with:
           node-version: 24
           cache: npm
@@ -58,8 +58,8 @@ jobs:
     name: catalog (schema, ports, retired-registry)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e  # v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
+      - uses: actions/setup-python@751276eafca55f10f252026015f43c488f2322ba
         with:
           python-version: "3.14"
       - run: pip install pyyaml
@@ -69,8 +69,8 @@ jobs:
     name: api-contract (feature-ID coverage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e  # v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
+      - uses: actions/setup-python@751276eafca55f10f252026015f43c488f2322ba
         with:
           python-version: "3.14"
       - run: python3 scripts/check_api_contract.py backend/src frontend/src parity/parity.yaml
@@ -79,7 +79,7 @@ jobs:
     name: actionlint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@f548e57e544e  # v6
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v6
       - name: Download actionlint
         run: |
           curl -sSL -o /tmp/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
