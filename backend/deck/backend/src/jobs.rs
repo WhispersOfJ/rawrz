@@ -6,6 +6,7 @@
 
 use crate::error::ApiError;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,11 +29,12 @@ pub enum JobState {
 }
 
 static REGISTRY: Mutex<Vec<Job>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Spawn a job. M0: registers it queued; real executors arrive per milestone.
 pub fn spawn(kind: String, target: String) -> Result<Job, ApiError> {
     let job = Job {
-        id: format!("job-{}", REGISTRY.lock().expect("job registry").len() + 1),
+        id: format!("job-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed)),
         kind,
         target,
         state: JobState::Queued,
@@ -46,17 +48,38 @@ pub async fn list() -> Vec<Job> {
     REGISTRY.lock().expect("job registry").clone()
 }
 
+/// Transition an existing job's state (used by M2's env-apply executor and
+/// the job engine milestone). No-op when the id is unknown.
+pub fn transition(id: &str, state: JobState) {
+    let mut registry = REGISTRY.lock().expect("job registry");
+    if let Some(job) = registry.iter_mut().find(|job| job.id == id) {
+        job.state = state;
+        tracing::info!(id = %job.id, kind = %job.kind, ?state, "job state transition");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn spawn_registers_and_lists() {
-        let before = list().await.len();
         let j = spawn("container.restart".into(), "sonarr".into()).expect("spawn");
         assert!(j.id.starts_with("job-"));
         assert_eq!(j.state, JobState::Queued);
-        let after = list().await;
-        assert_eq!(after.len(), before + 1);
+        let jobs = list().await;
+        let job = jobs.iter().find(|job| job.id == j.id).unwrap();
+        assert_eq!(job.kind, "container.restart");
+        assert_eq!(job.target, "sonarr");
+    }
+
+    #[tokio::test]
+    async fn transition_updates_state() {
+        let j = spawn("env.apply".into(), "env".into()).expect("spawn");
+        assert_eq!(j.state, JobState::Queued);
+        transition(&j.id, JobState::Done);
+        let jobs = list().await;
+        let job = jobs.iter().find(|job| job.id == j.id).unwrap();
+        assert_eq!(job.state, JobState::Done);
     }
 }

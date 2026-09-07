@@ -35,6 +35,8 @@ pub struct Runtime {
     pub docker: Option<Docker>,
     pub http: Client,
     pub config: Config,
+    /// `.env` engine state (paths + staged draft).
+    pub env: crate::env::EnvState,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,7 @@ pub async fn runtime() -> Runtime {
         docker,
         http,
         config: Config::from_env(),
+        env: crate::env::EnvState::from_env(),
     }
 }
 

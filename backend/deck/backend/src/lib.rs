@@ -2,6 +2,7 @@
 //! drive the router directly.
 
 pub mod catalog;
+pub mod env;
 pub mod error;
 pub mod guards;
 pub mod jobs;

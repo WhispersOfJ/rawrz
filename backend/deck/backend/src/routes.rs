@@ -5,7 +5,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -219,13 +219,206 @@ async fn indexers(State(runtime): State<Arc<Runtime>>) -> Response {
         .into_response()
 }
 
-/// `.env` engine.
+/// `.env` engine (spec §6.5). View is grouped + masked; edits stage a draft;
+/// apply is the guarded cascade (landmine #4 when the blast radius touches
+/// nzbdav) behind the EXC confirm token.
 #[doc = "features: [\"env\"]"]
 pub fn router_env() -> Router<Arc<Runtime>> {
-    Router::new().route("/env/apply", post(env_apply))
+    Router::new()
+        .route("/env", get(env_view))
+        .route("/env/draft", put(env_draft))
+        .route("/env/diff", get(env_diff))
+        .route("/env/consumers/{var}", get(env_consumers))
+        .route("/env/apply", post(env_apply))
+        .route("/env/template-docs", get(env_template_docs))
 }
-async fn env_apply() -> Response {
-    todo("prompted-apply cascade lands in M2 (queue guard wired then)").into_response()
+
+async fn env_view(State(runtime): State<Arc<Runtime>>) -> Response {
+    match runtime.env.view() {
+        Ok(view) => (StatusCode::OK, Json(view)).into_response(),
+        Err(message) => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "env_unreadable", message)
+            .into_response(),
+    }
+}
+
+/// Draft body: `{"values": {"KEY": "value"}, "remove": ["KEY"]}`. Validated
+/// against the per-type rules before staging; `issues` echoes both severities
+/// back, `blocking` is true when any error would block an apply.
+#[derive(Debug, Deserialize)]
+struct EnvDraftBody {
+    #[serde(default)]
+    values: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    remove: Vec<String>,
+}
+
+async fn env_draft(
+    State(runtime): State<Arc<Runtime>>,
+    Json(body): Json<EnvDraftBody>,
+) -> Response {
+    let mut issues = Vec::new();
+    for (key, value) in &body.values {
+        issues.extend(crate::env::validate_key(key, value));
+    }
+    for key in &body.remove {
+        issues.push(crate::env::Issue {
+            key: key.clone(),
+            code: "pending_remove",
+            message: "key scheduled for removal".to_string(),
+            severity: "info",
+        });
+    }
+    let blocking = issues.iter().any(|issue| issue.severity == "error");
+
+    // Only stage a draft that passes validation (spec: validated inputs per
+    // var type; a blocked draft keeps the previous draft intact).
+    if !blocking {
+        runtime
+            .env
+            .set_draft(crate::env::Draft {
+                values: body.values,
+                remove: body.remove,
+            })
+            .await;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "staged": !blocking,
+            "issues": issues,
+            "blocking": blocking,
+        })),
+    )
+        .into_response()
+}
+
+async fn env_diff(State(runtime): State<Arc<Runtime>>) -> Response {
+    match runtime.env.diff().await {
+        Ok(changes) => (StatusCode::OK, Json(json!({ "changes": changes }))).into_response(),
+        Err(message) => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "env_unreadable", message)
+            .into_response(),
+    }
+}
+
+/// Blast radius for one var (`?var=` in Appendix D is path-encoded here).
+async fn env_consumers(State(_runtime): State<Arc<Runtime>>, Path(var): Path<String>) -> Response {
+    let consumers = crate::env::consumers_of(&var);
+    (
+        StatusCode::OK,
+        Json(json!({ "var": var, "consumers": consumers })),
+    )
+        .into_response()
+}
+
+/// EXC confirm body: `{"confirm": "env"}`.
+#[derive(Debug, Deserialize)]
+struct ConfirmBody {
+    confirm: Option<String>,
+}
+
+/// Apply the staged draft. Landmine #4: if the blast radius of any change
+/// touches `nzbdav`, the queue guard runs first and a non-empty queue blocks
+/// the apply with the live queue attached. Mutations are jobs: `202 {jobId}`.
+async fn env_apply(State(runtime): State<Arc<Runtime>>, Json(body): Json<ConfirmBody>) -> Response {
+    if body.confirm.as_deref() != Some("env") {
+        return ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "confirm_required",
+            "this applies changes to .env — pass {\"confirm\": \"env\"} to proceed",
+        )
+        .into_response();
+    }
+
+    // Compute the change set first so the guard can see the blast radius.
+    let changes = match runtime.env.diff().await {
+        Ok(changes) => changes,
+        Err(message) => {
+            return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "env_unreadable", message)
+                .into_response()
+        }
+    };
+    if changes.is_empty() {
+        return ApiError::new(
+            StatusCode::CONFLICT,
+            "no_changes",
+            "draft matches the current .env — nothing to apply",
+        )
+        .into_response();
+    }
+
+    let touches_nzbdav = changes
+        .iter()
+        .any(|change| change.consumers.iter().any(|consumer| consumer == "nzbdav"));
+    if touches_nzbdav {
+        match guards::nzbdav_queue_guard(&runtime).await {
+            Ok(guard) if guard.empty => {}
+            Ok(guard) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": {
+                            "code": "queue_not_empty",
+                            "message": format!(
+                                "nzbdav queue has {} item(s) — recreating now would wipe the queue (landmine #4)",
+                                guard.count
+                            ),
+                            "detail": { "queue": guard },
+                        }
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => return error.into_response(),
+        }
+    }
+
+    let job = match jobs::spawn("env.apply".into(), "env".into()) {
+        Ok(job) => job,
+        Err(error) => return error.into_response(),
+    };
+    let backup = match runtime.env.apply_draft().await {
+        Ok((backup, changes)) => {
+            jobs::transition(&job.id, jobs::JobState::Done);
+            (backup, changes)
+        }
+        Err(message) => {
+            jobs::transition(&job.id, jobs::JobState::Failed);
+            return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "apply_failed", message)
+                .into_response();
+        }
+    };
+    let consumers = backup
+        .1
+        .iter()
+        .flat_map(|change| change.consumers.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "jobId": job.id,
+            "backup": backup.0.display().to_string(),
+            "changes": backup.1,
+            "consumers": consumers,
+            "note": "atomic .env write done; dependency-ordered recreates land with the container-lifecycle executor",
+        })),
+    )
+        .into_response()
+}
+
+/// Per-var inline docs parsed from the `.env` file's own comment lines (the
+/// file is a copy of `.env.template`, so the comments carry the template's
+/// guidance). Secret values never appear.
+async fn env_template_docs(State(runtime): State<Arc<Runtime>>) -> Response {
+    let docs = match runtime.env.load() {
+        Ok(doc) => doc
+            .vars()
+            .filter_map(|var| var.doc.clone().map(|doc| (var.key.clone(), doc)))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        Err(_) => std::collections::BTreeMap::new(),
+    };
+    (StatusCode::OK, Json(json!({ "docs": docs }))).into_response()
 }
 
 /// Catalog & deployments.
@@ -353,8 +546,9 @@ async fn jobs_cancel() -> Response {
     todo("job cancellation lands in M1").into_response()
 }
 
-pub async fn router() -> Router {
-    let runtime = Arc::new(probes::runtime().await);
+/// Build the full API tree around a caller-supplied runtime. Production uses
+/// [`router`]; tests inject a hermetic runtime (temp `.env`, mock backends).
+pub fn router_with(runtime: Arc<Runtime>) -> Router {
     let api = Router::new()
         .merge(router_dash())
         .merge(router_containers())
@@ -374,6 +568,10 @@ pub async fn router() -> Router {
         .route("/ws", get(ws::handler))
         .with_state(runtime);
     Router::new().nest("/api/v1", api)
+}
+
+pub async fn router() -> Router {
+    router_with(Arc::new(probes::runtime().await))
 }
 
 async fn healthz() -> impl IntoResponse {
