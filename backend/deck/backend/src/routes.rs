@@ -810,11 +810,11 @@ async fn env_apply(State(runtime): State<Arc<Runtime>>, Json(body): Json<Confirm
     };
     let backup = match runtime.env.apply_draft().await {
         Ok((backup, changes)) => {
-            jobs::transition(&job.id, jobs::JobState::Done);
+            jobs::set_state(&job.id, jobs::JobState::Done);
             (backup, changes)
         }
         Err(message) => {
-            jobs::transition(&job.id, jobs::JobState::Failed);
+            jobs::set_state(&job.id, jobs::JobState::Failed);
             return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "apply_failed", message)
                 .into_response();
         }
