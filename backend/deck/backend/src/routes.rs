@@ -196,9 +196,28 @@ async fn plex_empty_trash() -> Response {
 }
 
 /// Credentials & API sources.
+///
+/// M2: grouped masked view (`GET /credentials`), reveal-on-click with audit
+/// (`POST /credentials/{key}/reveal`), blast radius, and the usenet provider
+/// slots (`GET/POST/DELETE /usenet/providers`) backed by the flat
+/// `NZBDAV_USENET_*` var families. Provider mutations stage the env draft and
+/// complete through the guarded `POST /env/apply` flow (§6.4/§6.5).
 #[doc = "features: [\"cred.indexers\"]"]
 pub fn router_credentials() -> Router<Arc<Runtime>> {
-    Router::new().route("/indexers", get(indexers))
+    Router::new()
+        .route("/indexers", get(indexers))
+        .route("/credentials", get(credentials_view))
+        .route("/credentials/{key}/reveal", post(credential_reveal))
+        .route(
+            "/credentials/{key}/blast-radius",
+            get(credential_blast_radius),
+        )
+        .route("/usenet/providers", get(usenet_providers))
+        .route(
+            "/usenet/providers/{nickname}",
+            post(usenet_provider_upsert).delete(usenet_provider_delete),
+        )
+        .route("/usenet/providers/test", post(usenet_provider_test))
 }
 async fn indexers(State(runtime): State<Arc<Runtime>>) -> Response {
     let url = format!(
@@ -217,6 +236,377 @@ async fn indexers(State(runtime): State<Arc<Runtime>>) -> Response {
         ),
     )
         .into_response()
+}
+
+/// Grouped + masked view of the secret-bearing vars (every value masked by
+/// default; `reveal` is the only plaintext path, spec §6.4).
+async fn credentials_view(State(runtime): State<Arc<Runtime>>) -> Response {
+    match runtime.env.load() {
+        Ok(doc) => {
+            let groups = doc
+                .sections
+                .iter()
+                .map(|section| {
+                    let vars = section
+                        .vars
+                        .iter()
+                        .filter(|var| crate::env::is_secret_key(&var.key))
+                        .map(|var| crate::env::VarView {
+                            key: var.key.clone(),
+                            doc: var.doc.clone(),
+                            secret: true,
+                            stale: crate::env::is_stale_value(&var.key, &var.value),
+                            set: !var.value.trim().is_empty(),
+                            masked: if var.value.trim().is_empty() {
+                                String::new()
+                            } else {
+                                format!("•••• ({} chars)", var.value.trim().len())
+                            },
+                        })
+                        .collect::<Vec<_>>();
+                    json!({ "name": section.name, "vars": vars })
+                })
+                .collect::<Vec<_>>();
+            (StatusCode::OK, Json(json!({ "groups": groups }))).into_response()
+        }
+        Err(error) => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "env_unreadable",
+            format!("{error}"),
+        )
+        .into_response(),
+    }
+}
+
+/// Reveal one key's plaintext once. Audit-logged; the UI auto re-masks after
+/// 15s. Only keys present in the current `.env` are revealable.
+async fn credential_reveal(
+    State(runtime): State<Arc<Runtime>>,
+    Path(key): Path<String>,
+) -> Response {
+    let doc = match runtime.env.load() {
+        Ok(doc) => doc,
+        Err(error) => {
+            return ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "env_unreadable",
+                format!("{error}"),
+            )
+            .into_response()
+        }
+    };
+    let Some(var) = doc.get(&key) else {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_key",
+            format!("'{key}' is not a var in the current .env"),
+        )
+        .into_response();
+    };
+    crate::audit::record("cred.reveal", key);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "key": var.key,
+            "value": var.value,
+            "audited": true,
+        })),
+    )
+        .into_response()
+}
+
+/// var→consumer map for one key (blast radius).
+async fn credential_blast_radius(Path(key): Path<String>) -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({ "var": key, "consumers": crate::env::consumers_of(&key) })),
+    )
+        .into_response()
+}
+
+/// List the provider slots (wired + dormant) parsed from the flat
+/// `NZBDAV_USENET_*` var families.
+async fn usenet_providers(State(runtime): State<Arc<Runtime>>) -> Response {
+    match runtime.env.load() {
+        Ok(doc) => (
+            StatusCode::OK,
+            Json(json!({ "providers": crate::env::provider_slots(&doc) })),
+        )
+            .into_response(),
+        Err(error) => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "env_unreadable",
+            format!("{error}"),
+        )
+        .into_response(),
+    }
+}
+
+/// Upsert body for one slot: at least one of host/port/user/pass.
+#[derive(Debug, Deserialize)]
+struct ProviderUpsertBody {
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    pass: Option<String>,
+}
+
+/// Stage a provider-slot edit into the env draft. The caller then applies via
+/// `POST /env/apply` (EXC confirm), which runs the landmine-#4 queue guard
+/// because every provider var's blast radius includes nzbdav.
+async fn usenet_provider_upsert(
+    State(runtime): State<Arc<Runtime>>,
+    Path(nickname): Path<String>,
+    Json(body): Json<ProviderUpsertBody>,
+) -> Response {
+    let Some(keys) = crate::env::provider_keys(&nickname) else {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_provider",
+            format!("unknown provider slot '{nickname}'"),
+        )
+        .into_response();
+    };
+
+    let doc = match runtime.env.load() {
+        Ok(doc) => doc,
+        Err(error) => {
+            return ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "env_unreadable",
+                format!("{error}"),
+            )
+            .into_response()
+        }
+    };
+    let current = |key: &str| doc.value(key).unwrap_or("").to_string();
+
+    let host = body.host.unwrap_or_else(|| current(&keys[0]));
+    let port = body
+        .port
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| current(&keys[1]));
+    let user = body.user.unwrap_or_else(|| current(&keys[2]));
+    let pass = body.pass.unwrap_or_else(|| current(&keys[3]));
+
+    let mut issues = Vec::new();
+    if host.trim().is_empty() {
+        issues.push(crate::env::Issue {
+            key: keys[0].clone(),
+            code: "invalid_host",
+            message: "usenet host must not be empty".to_string(),
+            severity: "error",
+        });
+    }
+    if port.trim().is_empty() {
+        issues.push(crate::env::Issue {
+            key: keys[1].clone(),
+            code: "invalid_port",
+            message: "usenet port must be set".to_string(),
+            severity: "error",
+        });
+    }
+    if user.trim().is_empty() {
+        issues.push(crate::env::Issue {
+            key: keys[2].clone(),
+            code: "invalid_user",
+            message: "usenet user must not be empty".to_string(),
+            severity: "error",
+        });
+    }
+    if pass.len() < 8 {
+        issues.push(crate::env::Issue {
+            key: keys[3].clone(),
+            code: "weak_secret",
+            message: "usenet pass shorter than 8 characters".to_string(),
+            severity: "warning",
+        });
+    }
+    let blocking = issues.iter().any(|issue| issue.severity == "error");
+    if blocking {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "staged": false,
+                "blocking": true,
+                "issues": issues,
+                "consumers": crate::env::consumers_of(&keys[0]),
+            })),
+        )
+            .into_response();
+    }
+
+    // Stage the family into the shared env draft; apply completes via /env/apply.
+    let mut draft = runtime.env.draft_snapshot().await;
+    draft
+        .values
+        .insert(keys[0].clone(), host.trim().to_string());
+    draft
+        .values
+        .insert(keys[1].clone(), port.trim().to_string());
+    draft
+        .values
+        .insert(keys[2].clone(), user.trim().to_string());
+    draft.values.insert(keys[3].clone(), pass);
+    runtime.env.set_draft(draft).await;
+
+    let changes = match runtime.env.diff().await {
+        Ok(changes) => changes
+            .into_iter()
+            .filter(|change| keys.contains(&change.key))
+            .collect::<Vec<_>>(),
+        Err(message) => {
+            return ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "env_unreadable", message)
+                .into_response()
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "staged": true,
+            "blocking": false,
+            "issues": issues,
+            "changes": changes,
+            "consumers": crate::env::consumers_of(&keys[0]),
+            "note": "staged into the .env draft — apply with POST /env/apply {\"confirm\":\"env\"} (queue guard runs)",
+        })),
+    )
+        .into_response()
+}
+
+/// Remove a slot's var family from the draft. Compose-wired slots (primary,
+/// backup) are refused — deleting their vars breaks compose interpolation
+/// (their JSON objects reference the vars unconditionally).
+async fn usenet_provider_delete(
+    State(runtime): State<Arc<Runtime>>,
+    Path(nickname): Path<String>,
+) -> Response {
+    if crate::env::provider_wired(&nickname) {
+        return ApiError::new(
+            StatusCode::CONFLICT,
+            "provider_wired",
+            format!(
+                "'{nickname}' is wired into docker-compose.yml — removing its vars would break compose. Disable it there first (see the Eweka retirement note)."
+            ),
+        )
+        .into_response();
+    }
+    let Some(keys) = crate::env::provider_keys(&nickname) else {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_provider",
+            format!("unknown provider slot '{nickname}'"),
+        )
+        .into_response();
+    };
+    let mut draft = runtime.env.draft_snapshot().await;
+    draft.remove.extend(keys.iter().cloned());
+    runtime.env.set_draft(draft).await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "staged": true,
+            "removed": keys,
+            "consumers": vec!["nzbdav", "cave-deck"],
+            "note": "staged into the .env draft — apply with POST /env/apply {\"confirm\":\"env\"}",
+        })),
+    )
+        .into_response()
+}
+
+/// Live provider test — proxies to InfiniDysk's own probe
+/// (`POST /api/test-usenet-connection`, the same DNS→TCP→TLS→AUTHINFO check
+/// used during onboarding) so the result is authoritative for the running
+/// binary. Form-encoded like the upstream endpoint expects.
+#[derive(Debug, Deserialize)]
+struct ProviderTestBody {
+    host: String,
+    #[serde(default)]
+    port: Option<u16>,
+    user: String,
+    #[serde(default)]
+    pass: String,
+    #[serde(default = "default_ssl")]
+    use_ssl: bool,
+}
+
+fn default_ssl() -> bool {
+    true
+}
+
+async fn usenet_provider_test(
+    State(runtime): State<Arc<Runtime>>,
+    Json(body): Json<ProviderTestBody>,
+) -> Response {
+    if body.host.trim().is_empty() || body.user.trim().is_empty() {
+        return ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_provider",
+            "host and user are required for a provider test".to_string(),
+        )
+        .into_response();
+    }
+    let url = format!(
+        "{}/api/test-usenet-connection",
+        runtime.config.nzbdav_url.trim_end_matches('/')
+    );
+    let form = [
+        ("host", body.host),
+        ("user", body.user),
+        ("pass", body.pass),
+        (
+            "port",
+            body.port.map_or_else(|| "".into(), |p| p.to_string()),
+        ),
+        ("use-ssl", body.use_ssl.to_string()),
+    ];
+    let response = runtime
+        .http
+        .post(&url)
+        .header("X-Api-Key", &runtime.config.nzbdav_key)
+        .form(&form)
+        .send()
+        .await;
+    match response {
+        Ok(res) => {
+            let status = res.status().as_u16();
+            match res.json::<serde_json::Value>().await {
+                Ok(data) => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "reachable": status < 500,
+                        "status": status,
+                        "connected": data
+                            .get("connected")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        "payload": data,
+                    })),
+                )
+                    .into_response(),
+                Err(error) => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "reachable": status < 500,
+                        "status": status,
+                        "connected": false,
+                        "error": format!("nzbdav returned HTTP {status}: {error}"),
+                    })),
+                )
+                    .into_response(),
+            }
+        }
+        Err(error) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_test_unreachable",
+            format!("could not reach nzbdav to test the provider: {error}"),
+        )
+        .into_response(),
+    }
 }
 
 /// `.env` engine (spec §6.5). View is grouped + masked; edits stage a draft;

@@ -641,6 +641,115 @@ pub fn apply(
 }
 
 // ---------------------------------------------------------------------------
+// Usenet provider slots (flat NZBDAV_USENET_* var families)
+// ---------------------------------------------------------------------------
+
+/// One configured Usenet provider slot: the flat var family `NZBDAV_USENET_` +
+/// `<PREFIX>` + `_{HOST,PORT,USER,PASS}` that docker-compose.yml interpolates
+/// into the `NZBDAV_CONFIG__USENET__PROVIDERS` JSON.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSlot {
+    /// `primary`, `backup`, or the dormant slot name (e.g. `eweka`).
+    pub nickname: String,
+    /// True when compose wires this slot today (delete-guarded). Grounded in
+    /// docker-compose.yml's provider JSON — primary + backup are always wired;
+    /// extra slots are dormant until re-added to compose.
+    pub wired: bool,
+    /// Enabled = vars exist, are non-placeholder, and host/port parse.
+    pub enabled: bool,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub user: Option<String>,
+    /// Never a raw secret — presence/length signal only.
+    pub pass_masked: String,
+    pub pass_set: bool,
+    /// Consumers of this slot's vars (blast radius).
+    pub consumers: Vec<String>,
+}
+
+/// Known provider slots. `prefix` is the infix between `NZBDAV_USENET_` and
+/// `_{HOST,PORT,USER,PASS}` (`""` for primary). `wired` mirrors the compose
+/// JSON today: primary + backup are always interpolated; anything else is
+/// dormant until its object is re-added to docker-compose.yml.
+const PROVIDER_SLOTS: &[(&str, &str, bool)] = &[
+    ("primary", "", true),
+    ("backup", "BACKUP", true),
+    ("eweka", "EWEKA", false),
+];
+
+fn provider_var(slot_prefix: &str, suffix: &str) -> String {
+    if slot_prefix.is_empty() {
+        format!("NZBDAV_USENET_{suffix}")
+    } else {
+        format!("NZBDAV_USENET_{slot_prefix}_{suffix}")
+    }
+}
+
+/// Parse provider slots out of the current `.env`. Every slot in the registry
+/// is listed (wired or dormant) so the panel shows the full provider picture;
+/// missing vars read as disabled.
+pub fn provider_slots(doc: &EnvDoc) -> Vec<ProviderSlot> {
+    PROVIDER_SLOTS
+        .iter()
+        .map(|(nickname, prefix, wired)| {
+            let host = doc.value(&provider_var(prefix, "HOST")).map(str::trim);
+            let port = doc
+                .value(&provider_var(prefix, "PORT"))
+                .and_then(|v| v.trim().parse::<u16>().ok());
+            let user = doc.value(&provider_var(prefix, "USER")).map(str::trim);
+            let pass = doc.value(&provider_var(prefix, "PASS")).map(str::trim);
+            let vars_present = host.map(|v| !v.is_empty()).unwrap_or(false)
+                && user.map(|v| !v.is_empty()).unwrap_or(false)
+                && pass.map(|v| !v.is_empty()).unwrap_or(false);
+            let enabled = *wired
+                && vars_present
+                && host.is_some_and(|v| !is_stale_value("", v))
+                && port.is_some();
+            let consumers = vec!["nzbdav".to_string(), "cave-deck".to_string()];
+            ProviderSlot {
+                nickname: (*nickname).to_string(),
+                wired: *wired,
+                enabled,
+                host: host.map(str::to_string),
+                port,
+                user: user.map(str::to_string),
+                pass_masked: pass.map_or_else(String::new, |v| {
+                    if v.is_empty() {
+                        String::new()
+                    } else {
+                        format!("•••• ({} chars)", v.len())
+                    }
+                }),
+                pass_set: pass.is_some_and(|v| !v.is_empty()),
+                consumers,
+            }
+        })
+        .collect()
+}
+
+/// True when a slot name is compose-wired (delete-guard: removing these vars
+/// would break the compose interpolation, so DELETE refuses them).
+pub fn provider_wired(nickname: &str) -> bool {
+    PROVIDER_SLOTS
+        .iter()
+        .any(|(name, _, wired)| *wired && name == &nickname)
+}
+
+/// Keys belonging to a slot's flat var family, for draft remove/rewrite.
+pub fn provider_keys(nickname: &str) -> Option<[String; 4]> {
+    let (_, prefix, _) = PROVIDER_SLOTS
+        .iter()
+        .find(|(name, _, _)| name == &nickname)?;
+    Some([
+        provider_var(prefix, "HOST"),
+        provider_var(prefix, "PORT"),
+        provider_var(prefix, "USER"),
+        provider_var(prefix, "PASS"),
+    ])
+}
+
+// ---------------------------------------------------------------------------
 // Consumer registry (blast radius)
 // ---------------------------------------------------------------------------
 
@@ -702,6 +811,23 @@ PLEX_TOKEN=changeme
 
 # ---- *arr API Keys ----
 RADARR_API_KEY=deadbeefdeadbeefdeadbeefdeadbeef
+"#;
+
+    const SAMPLE_PROVIDERS: &str = r#"# ---- Usenet Providers ----
+NZBDAV_USENET_HOST=usenet.example.com
+NZBDAV_USENET_PORT=563
+NZBDAV_USENET_USER=alice
+NZBDAV_USENET_PASS=supersecretpass
+
+NZBDAV_USENET_BACKUP_HOST=backup.example.com
+NZBDAV_USENET_BACKUP_PORT=563
+NZBDAV_USENET_BACKUP_USER=bob
+NZBDAV_USENET_BACKUP_PASS=anothersecretpass
+
+NZBDAV_USENET_EWEKA_HOST=changeme
+NZBDAV_USENET_EWEKA_PORT=563
+NZBDAV_USENET_EWEKA_USER=changeme
+NZBDAV_USENET_EWEKA_PASS=changeme
 "#;
 
     #[test]
@@ -839,6 +965,57 @@ RADARR_API_KEY=deadbeefdeadbeefdeadbeefdeadbeef
         assert_eq!(rewritten.sections[0].name, "Identity / Runtime");
         let backups = fs::read_dir(&backup).unwrap().count();
         assert_eq!(backups, 1);
+    }
+
+    #[test]
+    fn provider_slots_parse_flat_families() {
+        let doc = EnvDoc::parse(SAMPLE_PROVIDERS, PathBuf::from("test.env"));
+        let slots = provider_slots(&doc);
+        assert_eq!(slots.len(), 3);
+
+        let primary = slots.iter().find(|s| s.nickname == "primary").unwrap();
+        assert!(primary.wired);
+        assert!(primary.enabled);
+        assert_eq!(primary.host.as_deref(), Some("usenet.example.com"));
+        assert_eq!(primary.port, Some(563));
+        assert_eq!(primary.user.as_deref(), Some("alice"));
+        assert!(primary.pass_set);
+        assert!(primary.pass_masked.contains("••••"));
+        assert!(!primary.pass_masked.contains("supersecretpass"));
+
+        let backup = slots.iter().find(|s| s.nickname == "backup").unwrap();
+        assert!(backup.wired);
+        assert!(backup.enabled);
+        assert_eq!(backup.host.as_deref(), Some("backup.example.com"));
+
+        // Dormant slot: vars present but stale/placeholder → disabled.
+        let eweka = slots.iter().find(|s| s.nickname == "eweka").unwrap();
+        assert!(!eweka.wired);
+        assert!(!eweka.enabled);
+        assert_eq!(eweka.host.as_deref(), Some("changeme"));
+        assert!(eweka.pass_set); // 'changeme' counts as set but not enabled
+    }
+
+    #[test]
+    fn provider_wired_guards_compose_slots() {
+        assert!(provider_wired("primary"));
+        assert!(provider_wired("backup"));
+        assert!(!provider_wired("eweka"));
+        assert!(!provider_wired("nope"));
+        assert_eq!(
+            provider_keys("primary").unwrap(),
+            [
+                "NZBDAV_USENET_HOST".to_string(),
+                "NZBDAV_USENET_PORT".to_string(),
+                "NZBDAV_USENET_USER".to_string(),
+                "NZBDAV_USENET_PASS".to_string(),
+            ]
+        );
+        assert_eq!(
+            provider_keys("backup").unwrap()[0],
+            "NZBDAV_USENET_BACKUP_HOST".to_string()
+        );
+        assert_eq!(provider_keys("nope"), None);
     }
 
     #[test]

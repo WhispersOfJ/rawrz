@@ -19,6 +19,17 @@ PGID=1000
 # ---- NzbDAV ----
 NZBDAV_WEBDAV_PASS=changeme
 
+# ---- Usenet Providers ----
+NZBDAV_USENET_HOST=usenet.example.com
+NZBDAV_USENET_PORT=563
+NZBDAV_USENET_USER=alice
+NZBDAV_USENET_PASS=supersecretpass
+
+NZBDAV_USENET_BACKUP_HOST=backup.example.com
+NZBDAV_USENET_BACKUP_PORT=563
+NZBDAV_USENET_BACKUP_USER=bob
+NZBDAV_USENET_BACKUP_PASS=anothersecretpass
+
 # ---- Plex ----
 PLEX_URL=http://192.168.1.100:32400
 PLEX_TOKEN=changeme
@@ -368,6 +379,231 @@ async fn env_apply_touching_nzbdav_requires_verifiable_queue() {
     // Nothing was applied — the file is untouched.
     let env_text = std::fs::read_to_string(tmp.path().join(".env")).unwrap();
     assert!(env_text.contains("NZBDAV_WEBDAV_PASS=changeme"));
+}
+
+// ---------------------------------------------------------------------------
+// Credentials + providers (M2 credentials panel — reveal + provider CRUD)
+// ---------------------------------------------------------------------------
+
+/// GET /credentials groups only secret keys and masks their values.
+#[tokio::test]
+async fn credentials_view_masks_secrets_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(&app, "GET", "/api/v1/credentials", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let groups = body["groups"].as_array().unwrap();
+    let arr = groups
+        .iter()
+        .find(|g| g["name"] == "*arr API Keys")
+        .map(|g| g["vars"].as_array().unwrap().clone())
+        .unwrap();
+    let radarr = arr.iter().find(|v| v["key"] == "RADARR_API_KEY").unwrap();
+    assert_eq!(radarr["secret"], true);
+    assert!(radarr["masked"].as_str().unwrap().contains("••••"));
+    assert!(!radarr["masked"].as_str().unwrap().contains("deadbeef"));
+    // Non-secret keys are not in the credentials view.
+    let all_keys = groups
+        .iter()
+        .flat_map(|g| g["vars"].as_array().unwrap().iter())
+        .map(|v| v["key"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(!all_keys.contains(&"PUID"));
+    assert!(!all_keys.contains(&"PLEX_URL"));
+}
+
+/// Reveal returns plaintext once and is audit-logged.
+#[tokio::test]
+async fn credential_reveal_returns_plaintext_and_audits() {
+    cave_deck::audit::clear();
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/credentials/RADARR_API_KEY/reveal",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["value"], "deadbeefdeadbeefdeadbeefdeadbeef");
+    assert_eq!(body["audited"], true);
+    let events = cave_deck::audit::recent(10);
+    assert!(events
+        .iter()
+        .any(|e| e.kind == "cred.reveal" && e.target == "RADARR_API_KEY"));
+}
+
+/// Revealing an unknown key is a 404, not an empty string.
+#[tokio::test]
+async fn credential_reveal_unknown_key_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) =
+        json_request(&app, "POST", "/api/v1/credentials/NOPE_KEY/reveal", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "unknown_key");
+}
+
+/// Blast radius for a secret key.
+#[tokio::test]
+async fn credential_blast_radius_maps_consumers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/credentials/SONARR_API_KEY/blast-radius",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let consumers = body["consumers"].as_array().unwrap();
+    assert!(consumers.contains(&serde_json::json!("nzbdav")));
+    assert!(consumers.contains(&serde_json::json!("unpackerr")));
+}
+
+/// GET /usenet/providers lists the flat-var slots with masking.
+#[tokio::test]
+async fn usenet_providers_lists_slots_masked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(&app, "GET", "/api/v1/usenet/providers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let providers = body["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), 3);
+    let primary = providers
+        .iter()
+        .find(|p| p["nickname"] == "primary")
+        .unwrap();
+    assert_eq!(primary["enabled"], true);
+    assert_eq!(primary["wired"], true);
+    assert_eq!(primary["host"], "usenet.example.com");
+    assert!(primary["passMasked"].as_str().unwrap().contains("••••"));
+    assert!(!primary["passMasked"]
+        .as_str()
+        .unwrap()
+        .contains("supersecretpass"));
+    let eweka = providers.iter().find(|p| p["nickname"] == "eweka").unwrap();
+    assert_eq!(eweka["wired"], false);
+    assert_eq!(eweka["enabled"], false);
+}
+
+/// Upsert stages the slot's vars into the env draft (apply still via
+/// /env/apply).
+#[tokio::test]
+async fn usenet_provider_upsert_stages_draft() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/usenet/providers/backup",
+        Some(
+            r#"{"host":"new-backup.example.com","port":563,"user":"carol","pass":"brandnewpass1"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["staged"], true);
+    let changes = body["changes"].as_array().unwrap();
+    assert!(changes
+        .iter()
+        .any(|c| c["key"] == "NZBDAV_USENET_BACKUP_HOST"));
+    assert!(changes
+        .iter()
+        .any(|c| c["key"] == "NZBDAV_USENET_BACKUP_PASS"));
+    let consumers = body["consumers"].as_array().unwrap();
+    assert!(consumers.contains(&serde_json::json!("nzbdav")));
+}
+
+/// Upsert refuses empty host/user (blocking, draft untouched).
+#[tokio::test]
+async fn usenet_provider_upsert_blocks_invalid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/usenet/providers/backup",
+        Some(r#"{"host":"","user":""}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["staged"], false);
+    assert_eq!(body["blocking"], true);
+    let issues = body["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|i| i["code"] == "invalid_host"));
+    assert!(issues.iter().any(|i| i["code"] == "invalid_user"));
+}
+
+/// DELETE refuses compose-wired slots (primary/backup).
+#[tokio::test]
+async fn usenet_provider_delete_refuses_wired_slots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) =
+        json_request(&app, "DELETE", "/api/v1/usenet/providers/primary", None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "provider_wired");
+}
+
+/// DELETE on a dormant slot stages removal for apply.
+#[tokio::test]
+async fn usenet_provider_delete_stages_dormant_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(&app, "DELETE", "/api/v1/usenet/providers/eweka", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["staged"], true);
+    let removed = body["removed"].as_array().unwrap();
+    assert!(removed.contains(&serde_json::json!("NZBDAV_USENET_EWEKA_HOST")));
+}
+
+/// DELETE of an unknown slot is a 404.
+#[tokio::test]
+async fn usenet_provider_delete_unknown_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, _body) = json_request(&app, "DELETE", "/api/v1/usenet/providers/nope", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Provider test proxies to InfiniDysk's own probe endpoint.
+#[tokio::test]
+async fn usenet_provider_test_proxies_to_nzbdav() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, server) = nzbdav_mock(r#"{"status":true,"connected":true}"#);
+    let app = app_with_runtime(runtime_with_nzbdav(&tmp, &url)).await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/usenet/providers/test",
+        Some(
+            r#"{"host":"news.example.com","port":563,"user":"alice","pass":"supersecretpass","useSsl":true}"#,
+        ),
+    )
+    .await;
+    server.join().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["status"], 200);
+}
+
+/// Provider test without host/user is refused client-side.
+#[tokio::test]
+async fn usenet_provider_test_requires_host_and_user() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/usenet/providers/test",
+        Some(r#"{"host":"","user":""}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "invalid_provider");
 }
 
 /// Landmine #4: an apply touching nzbdav is ALLOWED when the queue is live and

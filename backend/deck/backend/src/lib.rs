@@ -1,6 +1,7 @@
 //! Library target so integration tests (and the future embedded frontend) can
 //! drive the router directly.
 
+pub mod audit;
 pub mod catalog;
 pub mod env;
 pub mod error;
