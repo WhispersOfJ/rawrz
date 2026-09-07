@@ -83,6 +83,34 @@ fn runtime(tmp: &tempfile::TempDir) -> Arc<Runtime> {
 
 /// Tiny canned nzbdav queue mock: responds to `GET /api?mode=queue` with the
 /// given slots payload. Returns `(base_url, join_handle)`.
+/// Scripted HTTP mock: serves one response per incoming connection, in order.
+/// Each entry is `(status_line, body)`. Useful for multi-step flows (e.g.
+/// rotation's GET config/host → PUT → verify).
+fn scripted_mock(steps: &[(&str, &str)]) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let steps = steps
+        .iter()
+        .map(|(s, b)| (s.to_string(), b.to_string()))
+        .collect::<Vec<_>>();
+    let handle = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for (status, body) in &steps {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
 fn nzbdav_mock(slots_json: &str) -> (String, std::thread::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -604,6 +632,277 @@ async fn usenet_provider_test_requires_host_and_user() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"]["code"], "invalid_provider");
+}
+
+// ---------------------------------------------------------------------------
+// Key rotation + Plex token (M2 rotation slice)
+// ---------------------------------------------------------------------------
+
+/// Rotating an unknown key is a 404 (only the four app keys are rotatable).
+#[tokio::test]
+async fn credential_rotate_unknown_key_404() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app_with_runtime(runtime(&tmp)).await;
+    let (status, body) = json_request(&app, "POST", "/api/v1/credentials/PLEX_TOKEN", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_rotatable");
+}
+
+/// *arr rotation: GET config/host → PUT back with new apiKey → verify with it;
+/// then the new key is staged into the env draft.
+#[tokio::test]
+async fn credential_rotate_arr_pushes_and_stages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (radarr_url, server) = scripted_mock(&[
+        // GET /api/v3/config/host (old-key auth) → full resource to echo.
+        (
+            "200 OK",
+            r#"{"id":1,"port":7878,"apiKey":"oldradarrkey","branch":"master","username":"admin","password":"hash","passwordConfirmation":""}"#,
+        ),
+        // PUT /api/v3/config/host → accepted.
+        ("202 Accepted", "1"),
+        // Verify GET /api/v3/system/status with the new key.
+        ("200 OK", r#"{"version":"6.0.0"}"#),
+    ]);
+
+    let env_path = tmp.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "RADARR_API_KEY=oldradarrkey\nSEERR_API_KEY=oldseerrkey\nPLEX_TOKEN=oldplextoken\n",
+    )
+    .unwrap();
+    let runtime = Arc::new(cave_deck::probes::Runtime {
+        docker: None,
+        http: reqwest::Client::new(),
+        config: cave_deck::probes::Config {
+            radarr_url: radarr_url.clone(),
+            radarr_key: "oldradarrkey".into(),
+            sonarr_url: "http://sonarr:8989".into(),
+            sonarr_key: String::new(),
+            prowlarr_url: "http://prowlarr:9696".into(),
+            prowlarr_key: String::new(),
+            seerr_url: "http://seerr:5055".into(),
+            seerr_key: "oldseerrkey".into(),
+            plex_url: "http://plex:32400".into(),
+            plex_token: "oldplextoken".into(),
+            nzbdav_url: "http://nzbdav:3000".into(),
+            nzbdav_key: String::new(),
+            rclone_url: "http://nzbdav_rclone:5572".into(),
+            rclone_user: "rclone".into(),
+            rclone_pass: String::new(),
+            mountpoint: "/mnt/remote/nzbdav".into(),
+        },
+        env: cave_deck::env::EnvState::new(env_path, tmp.path().join("backups")),
+    });
+    let app = app_with_runtime(runtime.clone()).await;
+
+    let (status, body) =
+        json_request(&app, "POST", "/api/v1/credentials/RADARR_API_KEY", None).await;
+    server.join().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rotated"], true);
+    assert_eq!(body["staged"], true);
+    assert_eq!(body["key"], "RADARR_API_KEY");
+    let consumers = body["consumers"].as_array().unwrap();
+    assert!(consumers.contains(&serde_json::json!("nzbdav")));
+    assert!(body["push_error"].is_null());
+
+    // The draft holds a 32-hex new key (never the old one).
+    let draft = runtime.env.draft_snapshot().await;
+    let staged = draft.values.get("RADARR_API_KEY").unwrap();
+    assert_eq!(staged.len(), 32);
+    assert!(staged.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_ne!(staged, "oldradarrkey");
+}
+
+/// *arr rotation with an unreachable app still stages the draft and reports
+/// the push error (the UI can then decide), never a silent partial success.
+#[tokio::test]
+async fn credential_rotate_arr_unreachable_reports_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env_path = tmp.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "RADARR_API_KEY=oldradarrkey\nSEERR_API_KEY=oldseerrkey\nPLEX_TOKEN=oldplextoken\n",
+    )
+    .unwrap();
+    let runtime = Arc::new(cave_deck::probes::Runtime {
+        docker: None,
+        http: reqwest::Client::new(),
+        config: cave_deck::probes::Config {
+            radarr_url: "http://127.0.0.1:9".into(), // closed port
+            radarr_key: "oldradarrkey".into(),
+            sonarr_url: "http://sonarr:8989".into(),
+            sonarr_key: String::new(),
+            prowlarr_url: "http://prowlarr:9696".into(),
+            prowlarr_key: String::new(),
+            seerr_url: "http://seerr:5055".into(),
+            seerr_key: "oldseerrkey".into(),
+            plex_url: "http://plex:32400".into(),
+            plex_token: "oldplextoken".into(),
+            nzbdav_url: "http://nzbdav:3000".into(),
+            nzbdav_key: String::new(),
+            rclone_url: "http://nzbdav_rclone:5572".into(),
+            rclone_user: "rclone".into(),
+            rclone_pass: String::new(),
+            mountpoint: "/mnt/remote/nzbdav".into(),
+        },
+        env: cave_deck::env::EnvState::new(env_path, tmp.path().join("backups")),
+    });
+    let app = app_with_runtime(runtime.clone()).await;
+
+    let (status, body) =
+        json_request(&app, "POST", "/api/v1/credentials/RADARR_API_KEY", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rotated"], false);
+    assert_eq!(body["staged"], true);
+    let push_error = body["pushError"].as_str().unwrap();
+    assert!(push_error.contains("config/host") || push_error.contains("failed"));
+}
+
+/// Seerr rotation: regenerate server-side, read the new key from the admin
+/// response, stage it into the draft.
+#[tokio::test]
+async fn credential_rotate_seerr_regenerates_and_stages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (seerr_url, server) = scripted_mock(&[("200 OK", r#"{"apiKey":"seerr_new_key_12345"}"#)]);
+
+    let env_path = tmp.path().join(".env");
+    std::fs::write(
+        &env_path,
+        "RADARR_API_KEY=oldradarrkey\nSEERR_API_KEY=oldseerrkey\nPLEX_TOKEN=oldplextoken\n",
+    )
+    .unwrap();
+    let runtime = Arc::new(cave_deck::probes::Runtime {
+        docker: None,
+        http: reqwest::Client::new(),
+        config: cave_deck::probes::Config {
+            radarr_url: "http://radarr:7878".into(),
+            radarr_key: String::new(),
+            sonarr_url: "http://sonarr:8989".into(),
+            sonarr_key: String::new(),
+            prowlarr_url: "http://prowlarr:9696".into(),
+            prowlarr_key: String::new(),
+            seerr_url: seerr_url.clone(),
+            seerr_key: "oldseerrkey".into(),
+            plex_url: "http://plex:32400".into(),
+            plex_token: "oldplextoken".into(),
+            nzbdav_url: "http://nzbdav:3000".into(),
+            nzbdav_key: String::new(),
+            rclone_url: "http://nzbdav_rclone:5572".into(),
+            rclone_user: "rclone".into(),
+            rclone_pass: String::new(),
+            mountpoint: "/mnt/remote/nzbdav".into(),
+        },
+        env: cave_deck::env::EnvState::new(env_path, tmp.path().join("backups")),
+    });
+    let app = app_with_runtime(runtime.clone()).await;
+
+    let (status, body) =
+        json_request(&app, "POST", "/api/v1/credentials/SEERR_API_KEY", None).await;
+    server.join().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["rotated"], true);
+    assert_eq!(body["key"], "SEERR_API_KEY");
+    let draft = runtime.env.draft_snapshot().await;
+    assert_eq!(
+        draft.values.get("SEERR_API_KEY").unwrap(),
+        "seerr_new_key_12345"
+    );
+}
+
+/// Plex token verify reports reachability/validity against the running server.
+#[tokio::test]
+async fn plex_token_verify_reports_validity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (plex_url, server) = scripted_mock(&[(
+        "200 OK",
+        r#"{"MediaContainer":{"machineIdentifier":"abc"}}"#,
+    )]);
+    let env_path = tmp.path().join(".env");
+    std::fs::write(&env_path, "PLEX_TOKEN=oldplextoken\n").unwrap();
+    let runtime = Arc::new(cave_deck::probes::Runtime {
+        docker: None,
+        http: reqwest::Client::new(),
+        config: cave_deck::probes::Config {
+            radarr_url: "http://radarr:7878".into(),
+            radarr_key: String::new(),
+            sonarr_url: "http://sonarr:8989".into(),
+            sonarr_key: String::new(),
+            prowlarr_url: "http://prowlarr:9696".into(),
+            prowlarr_key: String::new(),
+            seerr_url: "http://seerr:5055".into(),
+            seerr_key: String::new(),
+            plex_url: plex_url.clone(),
+            plex_token: "oldplextoken".into(),
+            nzbdav_url: "http://nzbdav:3000".into(),
+            nzbdav_key: String::new(),
+            rclone_url: "http://nzbdav_rclone:5572".into(),
+            rclone_user: "rclone".into(),
+            rclone_pass: String::new(),
+            mountpoint: "/mnt/remote/nzbdav".into(),
+        },
+        env: cave_deck::env::EnvState::new(env_path, tmp.path().join("backups")),
+    });
+    let app = app_with_runtime(runtime).await;
+
+    let (status, body) = json_request(&app, "GET", "/api/v1/plex/token", None).await;
+    server.join().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["valid"], true);
+    assert_eq!(body["reachable"], true);
+    assert_eq!(body["token_set"], true);
+}
+
+/// Staging a new PLEX_TOKEN is refused when empty and staged when valid.
+#[tokio::test]
+async fn plex_token_update_validates_and_stages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env_path = tmp.path().join(".env");
+    std::fs::write(&env_path, "PLEX_TOKEN=oldplextoken\n").unwrap();
+    let runtime = Arc::new(cave_deck::probes::Runtime {
+        docker: None,
+        http: reqwest::Client::new(),
+        config: cave_deck::probes::Config {
+            radarr_url: "http://radarr:7878".into(),
+            radarr_key: String::new(),
+            sonarr_url: "http://sonarr:8989".into(),
+            sonarr_key: String::new(),
+            prowlarr_url: "http://prowlarr:9696".into(),
+            prowlarr_key: String::new(),
+            seerr_url: "http://seerr:5055".into(),
+            seerr_key: String::new(),
+            plex_url: "http://plex:32400".into(),
+            plex_token: "oldplextoken".into(),
+            nzbdav_url: "http://nzbdav:3000".into(),
+            nzbdav_key: String::new(),
+            rclone_url: "http://nzbdav_rclone:5572".into(),
+            rclone_user: "rclone".into(),
+            rclone_pass: String::new(),
+            mountpoint: "/mnt/remote/nzbdav".into(),
+        },
+        env: cave_deck::env::EnvState::new(env_path, tmp.path().join("backups")),
+    });
+    let app = app_with_runtime(runtime.clone()).await;
+
+    // Empty token refused.
+    let (status, body) =
+        json_request(&app, "POST", "/api/v1/plex/token", Some(r#"{"token":""}"#)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "invalid_token");
+
+    // Valid token staged into the draft.
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/plex/token",
+        Some(r#"{"token":"newplextoken123"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["staged"], true);
+    let draft = runtime.env.draft_snapshot().await;
+    assert_eq!(draft.values.get("PLEX_TOKEN").unwrap(), "newplextoken123");
 }
 
 /// Landmine #4: an apply touching nzbdav is ALLOWED when the queue is live and

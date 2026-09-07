@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod catalog;
+pub mod credentials;
 pub mod env;
 pub mod error;
 pub mod guards;

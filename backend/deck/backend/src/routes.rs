@@ -208,9 +208,14 @@ pub fn router_credentials() -> Router<Arc<Runtime>> {
         .route("/indexers", get(indexers))
         .route("/credentials", get(credentials_view))
         .route("/credentials/{key}/reveal", post(credential_reveal))
+        .route("/credentials/{key}", post(credential_rotate))
         .route(
             "/credentials/{key}/blast-radius",
             get(credential_blast_radius),
+        )
+        .route(
+            "/plex/token",
+            get(plex_token_verify).post(plex_token_update),
         )
         .route("/usenet/providers", get(usenet_providers))
         .route(
@@ -322,6 +327,43 @@ async fn credential_blast_radius(Path(key): Path<String>) -> Response {
         Json(json!({ "var": key, "consumers": crate::env::consumers_of(&key) })),
     )
         .into_response()
+}
+
+/// Rotate a key (Radarr/Sonarr/Prowlarr/Seerr): push a new key to the app,
+/// then stage the `.env` draft for the guarded apply flow (§6.4).
+async fn credential_rotate(
+    State(runtime): State<Arc<Runtime>>,
+    Path(key): Path<String>,
+) -> Response {
+    match crate::credentials::rotate(&runtime, &key).await {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Verify the configured Plex token against the running server.
+async fn plex_token_verify(State(runtime): State<Arc<Runtime>>) -> Response {
+    (
+        StatusCode::OK,
+        Json(crate::credentials::plex_verify(&runtime).await),
+    )
+        .into_response()
+}
+
+/// Stage a new PLEX_TOKEN into the .env draft (apply via /env/apply).
+#[derive(Debug, Deserialize)]
+struct PlexTokenBody {
+    token: String,
+}
+
+async fn plex_token_update(
+    State(runtime): State<Arc<Runtime>>,
+    Json(body): Json<PlexTokenBody>,
+) -> Response {
+    match crate::credentials::plex_token_update(&runtime, &body.token).await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 /// List the provider slots (wired + dormant) parsed from the flat
