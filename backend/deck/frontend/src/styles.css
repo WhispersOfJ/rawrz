@@ -108,3 +108,49 @@ h2 { margin: 5px 0 0; font-size: 17px; letter-spacing: -.025em; }
   .cd-app { display: block; } .cd-sidebar { display: none; } .cd-mobile-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--cd-border); } .cd-mobile-header .cd-brand { padding: 0; } .cd-mobile-header .cd-brand-mark { width: 30px; height: 30px; } .cd-main { padding: 20px 16px 35px; } .cd-topbar { margin-bottom: 27px; } .cd-page-heading { align-items: start; flex-direction: column; margin-bottom: 22px; } .cd-heading-meta { justify-items: start; } .cd-stat-grid { gap: 9px; } .cd-stat-card { padding: 14px; min-height: 112px; } .cd-stat-card strong { font-size: 24px; } .cd-service-grid { grid-template-columns: 1fr; } .cd-panel { padding: 15px; } .cd-live-pill { font-size: 10px; }
 }
 @media (max-width: 420px) { .cd-stat-grid { grid-template-columns: 1fr 1fr; } .cd-stat-card { min-height: 105px; } .cd-stat-card strong { font-size: 21px; } }
+
+/* --- M2 Env editor + Credentials panel --- */
+.cd-env-vars { display: grid; gap: 8px; }
+.cd-env-var { display: flex; align-items: center; gap: 14px; padding: 11px 4px; border-bottom: 1px solid var(--cd-border); }
+.cd-env-var:last-child { border-bottom: none; }
+.cd-env-var-meta { min-width: 0; flex: 0 0 44%; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.cd-env-var-meta code { color: var(--cd-text); font-size: 12px; }
+.cd-env-doc { color: var(--cd-faint); font-size: 10px; line-height: 1.45; }
+.cd-env-var-value { min-width: 0; flex: 1; }
+.cd-env-var-value input { width: 100%; }
+.cd-env-masked { color: var(--cd-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cd-revealed-value { color: var(--cd-green); font-size: 12px; word-break: break-all; }
+.cd-env-var-actions { display: flex; gap: 7px; align-items: center; white-space: nowrap; }
+.cd-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--cd-border); color: var(--cd-muted); }
+.cd-tag-secret { color: var(--cd-pink); border-color: #f18ac855; }
+.cd-tag-stale { color: var(--cd-orange); border-color: #f18e5d55; }
+.cd-tag-unset { color: var(--cd-faint); }
+.cd-tag-edit { color: var(--cd-blue); border-color: #69b7ff55; }
+.cd-tag-revealed { color: var(--cd-green); border-color: #4dd69a55; }
+.cd-tag-wired { color: var(--cd-violet); border-color: #a98cff55; }
+.cd-tag-ok { color: var(--cd-green); border-color: #4dd69a55; }
+.cd-tag-kind { text-transform: none; }
+.cd-tag-added { color: var(--cd-green); border-color: #4dd69a55; }
+.cd-tag-changed { color: var(--cd-blue); border-color: #69b7ff55; }
+.cd-tag-removed { color: var(--cd-orange); border-color: #f18e5d55; }
+.cd-btn-quiet { color: var(--cd-muted); }
+.cd-btn-primary { color: #17130d !important; background: var(--cd-accent) !important; border-color: var(--cd-accent) !important; font-weight: 700; }
+.cd-btn-danger { color: var(--cd-orange) !important; border-color: #f18e5d55 !important; }
+.cd-btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+.cd-draft-card { border-color: #69b7ff44; }
+.cd-env-diff-row { padding: 9px 4px; border-bottom: 1px solid var(--cd-border); }
+.cd-env-diff-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cd-env-consumers { color: var(--cd-faint); font-size: 10px; }
+.cd-env-diff-values { display: grid; gap: 2px; margin-top: 5px; font-size: 11px; }
+.cd-env-diff-old { color: var(--cd-orange); }
+.cd-env-diff-new { color: var(--cd-green); }
+.cd-apply-bar { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.cd-apply-bar input { flex: 1; min-width: 180px; }
+.cd-rotate-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--cd-border); }
+.cd-provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.cd-provider-form { margin-top: 12px; }
+.cd-provider-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 9px; margin-bottom: 11px; }
+.cd-provider-fields label { display: grid; gap: 4px; color: var(--cd-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.cd-provider-tags { display: flex; gap: 6px; }
+.cd-inline-error { padding: 9px 12px; margin-top: 8px; font-size: 11px; }
+.cd-banner-err { border-color: #f18e5d55; color: var(--cd-orange); background: #f18e5d0d; }
