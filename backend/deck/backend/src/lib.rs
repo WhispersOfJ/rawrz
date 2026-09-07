@@ -5,5 +5,6 @@ pub mod catalog;
 pub mod error;
 pub mod guards;
 pub mod jobs;
+pub mod probes;
 pub mod routes;
 pub mod ws;
