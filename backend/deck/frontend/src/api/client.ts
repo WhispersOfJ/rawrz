@@ -56,12 +56,17 @@ export interface CatalogDocument {
   installState: string;
   entries: CatalogEntry[];
 }
-export const getDashboard = () =>
-  api<{
-    containers: unknown[];
-    mount: { healthy: boolean; probed: boolean };
-    queues: { sonarr: number | null; radarr: number | null; nzbdav: number | null };
-    disk: { free_bytes: number | null };
-    note: string;
-  }>("/dashboard");
+export interface DashboardSnapshot {
+  containers: Array<{
+    id: string;
+    status: string;
+    health: string;
+  }>;
+  mount: { healthy: boolean; probed: boolean };
+  queues: { sonarr: number | null; radarr: number | null; nzbdav: number | null };
+  disk: { free_bytes: number | null };
+  note: string;
+}
+
+export const getDashboard = () => api<DashboardSnapshot>("/dashboard");
 export const getJobs = () => api<{ jobs: Job[] }>("/jobs");
