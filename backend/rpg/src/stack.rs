@@ -1,6 +1,6 @@
 use crate::{ProbeError, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,8 +144,9 @@ fn attr(attrs: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, value)| value.clone())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SonarrSeries {
+    pub id: Option<i64>,
     #[serde(rename = "tmdbId")]
     pub tmdb_id: Option<i64>,
     #[serde(rename = "tvdbId")]
@@ -156,8 +157,9 @@ pub struct SonarrSeries {
     pub raw: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RadarrMovie {
+    pub id: Option<i64>,
     #[serde(rename = "tmdbId")]
     pub tmdb_id: Option<i64>,
     #[serde(rename = "imdbId")]

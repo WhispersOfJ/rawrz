@@ -4,6 +4,7 @@ pub mod migrations;
 pub mod normalization;
 pub mod providers;
 pub mod stack;
+pub mod sync;
 
 use thiserror::Error;
 
@@ -19,6 +20,11 @@ pub enum ProbeError {
     Xml(String),
     #[error("missing required environment variable {0}")]
     MissingEnvironment(String),
+    #[error("invalid {origin} content record: {detail}")]
+    InvalidContent {
+        origin: &'static str,
+        detail: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
