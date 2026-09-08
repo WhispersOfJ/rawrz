@@ -3,6 +3,7 @@ pub mod enrichment;
 pub mod migrations;
 pub mod normalization;
 pub mod persistence;
+pub mod pipeline;
 pub mod providers;
 pub mod stack;
 pub mod sync;
