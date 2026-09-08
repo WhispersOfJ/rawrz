@@ -1,0 +1,27 @@
+# Env / secrets
+.env
+.env.local
+.env.template
+!.env.template
+
+# Build / target
+/target
+/Cargo.lock
+/node_modules
+/.svelte-kit
+/build
+/dist
+
+# IDE
+.vscode/*
+.idea/*
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime cache (gitignored runtime state, like the stack's .cache/)
+.cache/
+.data/

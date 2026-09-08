@@ -1,0 +1,40 @@
+name: validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: conventional commit title check
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          title="${{ github.event.pull_request.title }}"
+          if ! echo "$title" | grep -qE '^(feat|fix|docs|refactor|test|chore|ci|build|perf|style|revert)(\(.+\))?:'; then
+            echo "::error::PR title must be a conventional commit: type(scope): subject"
+            echo "Got: $title"
+            exit 1
+          fi
+
+      - name: spec file sanity
+        run: |
+          set -e
+          if [ ! -f movie-rpg-spec.md ]; then
+            echo "::error::movie-rpg-spec.md missing from repo root"
+            exit 1
+          fi
+          wc -l movie-rpg-spec.md | awk '{print "spec lines:", $1}'

@@ -1077,3 +1077,19 @@ These are **possible configurable features** for the RPG's settings surface — 
 > **Change log (2026-09-08, batch 1):** §12 Q1–Q5 resolved — Q1 host install (§6.3), Q2 Svelte (§8.4), Q3 5 min poll (§9.1), Q4 95% near-end threshold configurable (§5.1), Q5 base episode XP = 10 / level 2 at 100 XP rough anchors (§5.1, §5.2). Movie/season/series/streak XP values remain TBD.
 > **Change log (2026-09-08, batch 2):** §12 Q6–Q13 resolved — Q6 genre unlock model: horror opening, everything else locked, unlock via sub-genre XP purchase, cascade one genre at a time, library-filtered sub-genre suggested titles, date-detected holiday/seasonal bonuses (§5.2); Q7 featured cases = new arrivals or all-time ranking by external rating (§5.4, §4.5); Q8 massive achievement list, categories decided, items finalized during implementation (§5.5); Q9 port 86532 (§10.2); Q10 set-a-pin gate, PIN in Postgres, V1 single-user (§7.3); Q11 common libs fine, minimal non-coupling sharing, no shared RPG state in common lib (§7.2); Q12 no big backfill (library brand new), faster updates at first, settle to 5-min cadence once caught up (§9.3); Q13 mirror everything the APIs expose, full metadata store, stack remains source of truth (§4.5).
 > **Change log (2026-09-08, post-batch tightening):** §5.1/§5.2 got concrete V1 values — episode XP = 10, movie XP = 20, season bonus = 10 × episode count, series bonus = 25 × total episode count, first-completion +10, new-arrival +5 (48h window), featured +10, day-streak bonus table (§5.1.1), genre variety bonus +5/+15 (§5.1.2), level table 1→10 with cumulative XP thresholds (§5.2), genre unlock: horror opening, level-broadens-access (1 new genre per level), sub-genre XP purchase at 100 XP (+10 episode / +20 movie toward the sub-genre), fixed ordered genre list cascade, suggested titles from library mirror, holiday windows (Halloween/winter starters, +50% XP multiplier, date-gated feature modules) (§5.2); §6.4 concrete Postgres schema added (accounts, characters, character_state, genres, sub_genres, genre_access, sub_genre_xp, genre_xp_ledger, content with full metadata_blob mirror, watches, cases, featured_cases, achievements, character_achievements, sync_state, settings) + migration approach + seed data + design notes (§6.4).
+
+### 15.8 Thanks / attribution
+
+- **Legends of the Green Dragon (LoGD)** — https://www.lotgd.net/ — the original browser RPG
+  this spec's §15 drew inspiration from (daily loop, fame/renown signal, holiday modules,
+  host/module model, onboarding primer, genre/race/specialty flavor, rank ladder, new-game+
+  dragon cycle). LoGD is a remake/homage of Seth Able's **Legend of the Red Dragon (LoRD)**
+  (a BBS door game). LoGD is **not** a technical dependency of this RPG (this RPG is
+  Rust/Axum + Postgres, not PHP/MySQL); LoGD is acknowledged here as a design inspiration
+  source and as a model for how a host ships/modularizes features.
+- LoGD module catalog consulted: https://www.lotgd.net/about.php?op=listmodules .
+- LoGD New Player Primer consulted: https://www.lotgd.net/petition.php?op=primer .
+- Modern LoGD forks consulted: NB-Core +nb fork (https://github.com/NB-Core/lotgd),
+  StephenKise revival (https://github.com/stephenKise/Legend-of-the-Green-Dragon),
+  jimlunsford/lotgd + jimlunsford/lotgd-modules (https://github.com/jimlunsford/lotgd).
+  DragonPrime Reborn community module archive referenced for the host/modding-ecosystem picture.
