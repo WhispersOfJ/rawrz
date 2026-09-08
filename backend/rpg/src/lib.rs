@@ -1,5 +1,6 @@
 pub mod config;
 pub mod enrichment;
+pub mod migrations;
 pub mod normalization;
 pub mod providers;
 pub mod stack;
