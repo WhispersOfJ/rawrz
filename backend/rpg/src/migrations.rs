@@ -6,6 +6,11 @@ pub const SYNC_STATE_MIGRATION: &str = include_str!("../migrations/0002_sync_sta
 pub const ACCOUNTS_CHARACTERS_VERSION: &str = "0003_accounts_characters";
 pub const ACCOUNTS_CHARACTERS_MIGRATION: &str =
     include_str!("../migrations/0003_accounts_characters.sql");
+pub const GENRES_VERSION: &str = "0004_genres";
+pub const GENRES_MIGRATION: &str = include_str!("../migrations/0004_genres.sql");
+pub const CHARACTER_STATE_VERSION: &str = "0005_character_state";
+pub const CHARACTER_STATE_MIGRATION: &str =
+    include_str!("../migrations/0005_character_state.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -17,13 +22,15 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         ACCOUNTS_CHARACTERS_VERSION,
         ACCOUNTS_CHARACTERS_MIGRATION,
     ),
+    (GENRES_VERSION, GENRES_MIGRATION),
+    (CHARACTER_STATE_VERSION, CHARACTER_STATE_MIGRATION),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ACCOUNTS_CHARACTERS_MIGRATION, INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS,
-        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
+        ACCOUNTS_CHARACTERS_MIGRATION, CHARACTER_STATE_MIGRATION, GENRES_MIGRATION,
+        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -49,11 +56,14 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 3);
+        assert_eq!(MIGRATIONS.len(), 5);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
+        assert_eq!(MIGRATIONS[3].0, super::GENRES_VERSION);
+        assert_eq!(MIGRATIONS[4].0, super::CHARACTER_STATE_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
+        assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -103,6 +113,126 @@ mod tests {
         }
         assert!(ACCOUNTS_CHARACTERS_MIGRATION
             .contains("FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE"));
+    }
+
+    #[test]
+    fn seeds_the_fixed_genre_list_and_creates_genre_tables() {
+        let genres_position = GENRES_MIGRATION
+            .find("CREATE TABLE genres (")
+            .expect("migration is missing the genres table");
+        let sub_genres_position = GENRES_MIGRATION
+            .find("CREATE TABLE sub_genres (")
+            .expect("migration is missing the sub_genres table");
+        let access_position = GENRES_MIGRATION
+            .find("CREATE TABLE genre_access (")
+            .expect("migration is missing the genre_access table");
+        let xp_position = GENRES_MIGRATION
+            .find("CREATE TABLE sub_genre_xp (")
+            .expect("migration is missing the sub_genre_xp table");
+        assert!(
+            genres_position < sub_genres_position
+                && sub_genres_position < access_position
+                && access_position < xp_position
+        );
+
+        for field in [
+            "name text NOT NULL UNIQUE",
+            "list_order int NOT NULL",
+            "is_opening boolean NOT NULL DEFAULT false",
+        ] {
+            assert!(
+                contains_sql(statement_containing(GENRES_MIGRATION, "CREATE TABLE genres ("), field),
+                "genres table is missing {field:?}"
+            );
+        }
+        for field in [
+            "genre_id bigint NOT NULL REFERENCES genres(id) ON DELETE CASCADE",
+            "UNIQUE (genre_id, name)",
+        ] {
+            assert!(
+                contains_sql(
+                    statement_containing(GENRES_MIGRATION, "CREATE TABLE sub_genres ("),
+                    field
+                ),
+                "sub_genres table is missing {field:?}"
+            );
+        }
+        for field in [
+            "PRIMARY KEY (character_id, genre_id)",
+            "accessed_at timestamptz NOT NULL DEFAULT now()",
+        ] {
+            assert!(
+                contains_sql(
+                    statement_containing(GENRES_MIGRATION, "CREATE TABLE genre_access ("),
+                    field
+                ),
+                "genre_access table is missing {field:?}"
+            );
+        }
+        for field in [
+            "PRIMARY KEY (character_id, sub_genre_id)",
+            "xp bigint NOT NULL DEFAULT 0",
+            "purchased boolean NOT NULL DEFAULT false",
+            "purchased_at timestamptz",
+        ] {
+            assert!(
+                contains_sql(
+                    statement_containing(GENRES_MIGRATION, "CREATE TABLE sub_genre_xp ("),
+                    field
+                ),
+                "sub_genre_xp table is missing {field:?}"
+            );
+        }
+
+        // The finalized §5.2 genre list: horror first (the opening genre),
+        // then the fixed cascade, 10 genres matching the 10-level table.
+        let expected = [
+            ("Horror", 1, true),
+            ("Thriller", 2, false),
+            ("Mystery", 3, false),
+            ("Sci-Fi", 4, false),
+            ("Fantasy", 5, false),
+            ("Documentary", 6, false),
+            ("Comedy", 7, false),
+            ("Drama", 8, false),
+            ("Romance", 9, false),
+            ("Animation", 10, false),
+        ];
+        let seed = GENRES_MIGRATION
+            .split("INSERT INTO genres")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("migration is missing the genre seed");
+        for (name, order, opening) in expected {
+            assert!(
+                contains_sql(seed, &format!("'{name}', {order}, {opening}")),
+                "genre seed is missing ({name}, {order}, {opening})"
+            );
+        }
+    }
+
+    #[test]
+    fn creates_singleton_character_state_with_progression_and_streak_columns() {
+        let statement =
+            statement_containing(CHARACTER_STATE_MIGRATION, "CREATE TABLE character_state (");
+        for field in [
+            "character_id bigint PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE",
+            "xp bigint NOT NULL DEFAULT 0",
+            "level int NOT NULL DEFAULT 1",
+            "total_watches int NOT NULL DEFAULT 0",
+            "episode_watches int NOT NULL DEFAULT 0",
+            "movie_watches int NOT NULL DEFAULT 0",
+            "current_streak_days int NOT NULL DEFAULT 0",
+            "best_streak_days int NOT NULL DEFAULT 0",
+            "streak_last_watch_date date",
+            "genres_accessed int NOT NULL DEFAULT 1",
+            "last_level_up_at timestamptz",
+        ] {
+            assert!(
+                contains_sql(statement, field),
+                "character_state table is missing {field:?}"
+            );
+        }
     }
 
     #[test]

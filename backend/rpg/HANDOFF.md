@@ -18,30 +18,38 @@ asking.**
   - `0002_sync_state.sql` — poll cursors, FK to characters **deferred**
   - `0003_accounts_characters.sql` — accounts + characters (§6.4.1), **completes
     the deferred sync_state FK**
+  - `0004_genres.sql` — genres + sub_genres + genre_access + sub_genre_xp
+    (§6.4.3), seeds the **finalized §5.2 genre list** (Horror → Thriller →
+    Mystery → Sci-Fi → Fantasy → Documentary → Comedy → Drama → Romance →
+    Animation; horror opening, 10 genres = 10-level table). `genre_xp_ledger`
+    is **deferred to the watches migration** (its `source_watch_id` FK targets
+    `watches(id)` — spec §6.4.3 documents this placement).
+  - `0005_character_state.sql` — singleton character_state (§6.4.2)
 - Config/env loading: `backend/rpg/src/config.rs`
-- Fixtures + full test suite: **36 tests, all passing**
+- Fixtures + full test suite: **38 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
   blockers, not introduced by recent work.
 
-### Next steps (spec §6.4.11 migration order, after identity)
+### Next steps (spec §6.4.11 migration order, after character state)
 
-1. **Migration 0004 — genre tables** (§6.4.3): `genres` (seed horror-first fixed
-   list + `list_order` + `is_opening`), `sub_genres`, `genre_access`,
-   `sub_genre_xp` (100 XP purchase threshold, §5.2).
-2. **Migration 0005 — character_state** (§6.4.2): xp/level/total_watches/
-   streak columns, singleton per character.
-3. Then: `watches` → `cases` → `featured_cases` → `achievements` +
+1. **Migration 0006 — watches + genre_xp_ledger** (§6.4.5 + §6.4.3): the RPG's
+   awarded-completion ledger, plus the ledger's deferred `source_watch_id` FK.
+2. Then: `cases` → `featured_cases` → `achievements` +
    `character_achievements` → `settings` (V1 defaults in §6.4.10).
-4. **Open design call to resolve during implementation:** PIN hashing crate
+3. **Open design call to resolve during implementation:** PIN hashing crate
    (spec suggests argon2) for `accounts.pin_hash` / `pin_salts` — finalize in
    spec per CLAUDE.md ("spec-first") when decided.
+4. Seeding on character creation (`character_state` row, `genre_access` horror
+   row, `settings` V1 defaults) lands with the app's account/character
+   bootstrap logic — not in migrations (single-account V1 has no rows to seed
+   until first run).
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 36+ passing
+cd backend/rpg && cargo test        # expect 38+ passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
 
