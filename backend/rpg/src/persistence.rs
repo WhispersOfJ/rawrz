@@ -555,9 +555,10 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 2);
+        assert_eq!(MIGRATIONS.len(), 3);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
+        assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
 
         assert_eq!(
             migration_summary(0, 1),
