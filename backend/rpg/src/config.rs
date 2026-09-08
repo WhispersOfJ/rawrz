@@ -14,6 +14,7 @@ pub struct ProbeConfig {
     pub tvdb_api_key: String,
     pub omdb_api_key: String,
     pub fanart_api_key: String,
+    pub rpg_db_url: String,
 }
 
 impl ProbeConfig {
@@ -45,6 +46,7 @@ impl ProbeConfig {
             tvdb_api_key: required("TVDB_API_KEY")?,
             omdb_api_key: required("OMDB_API_KEY")?,
             fanart_api_key: required("FANART_API_KEY")?,
+            rpg_db_url: required("RPG_DB_URL")?,
         })
     }
 }
@@ -64,13 +66,14 @@ mod tests {
         ));
         fs::write(
             &path,
-            "PLEX_URL=http://plex\nPLEX_TOKEN=plex-token\nSONARR_URL=http://sonarr\nSONARR_API_KEY='sonarr-key'\nRADARR_URL=http://radarr\nRADARR_API_KEY=radarr-key\nTMDB_API_KEY=tmdb-key\nTVDB_API_KEY=tvdb-key\nOMDB_API_KEY=omdb-key\nFANART_API_KEY=fanart-key\n",
+            "PLEX_URL=http://plex\nPLEX_TOKEN=plex-token\nSONARR_URL=http://sonarr\nSONARR_API_KEY='sonarr-key'\nRADARR_URL=http://radarr\nRADARR_API_KEY=radarr-key\nTMDB_API_KEY=tmdb-key\nTVDB_API_KEY=tvdb-key\nOMDB_API_KEY=omdb-key\nFANART_API_KEY=fanart-key\nRPG_DB_URL=postgresql://rpg@localhost/movie_rpg\n",
         )
         .unwrap();
 
         let config = ProbeConfig::from_env_file(&path).unwrap();
         assert_eq!(config.sonarr_api_key, "sonarr-key");
         assert_eq!(config.fanart_api_key, "fanart-key");
+        assert_eq!(config.rpg_db_url, "postgresql://rpg@localhost/movie_rpg");
         fs::remove_file(path).unwrap();
     }
 }

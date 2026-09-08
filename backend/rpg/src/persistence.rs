@@ -6,6 +6,8 @@ use crate::sync::{
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use crate::Result;
+use tokio_postgres::{Client, NoTls};
 
 pub const CONTENT_UPSERT_SQL: &str = r#"
 INSERT INTO content (
@@ -19,7 +21,7 @@ VALUES (
   $1, $2, $3, $4, $5, $6, $7,
   (SELECT parent.id FROM content AS parent
    WHERE parent.source = $8 AND parent.source_id = $9),
-  $10, $11, $12, $13::date, $14::date, $15, $16, $17, $18, $19, $20,
+  $10, $11, $12, $13::text::date, $14::text::date, $15, $16, $17, $18, $19, $20,
   $21, $22, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb,
   CASE WHEN $26::jsonb <> '{}'::jsonb THEN now() ELSE NULL END
 )
@@ -269,10 +271,102 @@ fn source_rank(source: &str) -> u8 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PersistenceSummary {
+    pub content_rows: usize,
+    pub provider_cache_rows: usize,
+}
+
+pub struct PostgresContentStore {
+    client: Client,
+}
+
+impl PostgresContentStore {
+    pub fn validate_database_url(database_url: &str) -> Result<()> {
+        if database_url.trim().is_empty() {
+            return Err(crate::ProbeError::MissingEnvironment(
+                "RPG_DB_URL".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        Self::validate_database_url(database_url)?;
+        let (client, connection) = tokio_postgres::connect(database_url, NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        Ok(Self { client })
+    }
+
+    pub async fn persist(&mut self, plan: &ContentPersistencePlan) -> Result<PersistenceSummary> {
+        let transaction = self.client.transaction().await?;
+
+        for params in &plan.content {
+            let values: [&(dyn tokio_postgres::types::ToSql + Sync); 26] = [
+                &params.source,
+                &params.source_id,
+                &params.external_id,
+                &params.external_id_type,
+                &params.title,
+                &params.year,
+                &params.content_type,
+                &params.parent_source,
+                &params.parent_source_id,
+                &params.season_number,
+                &params.episode_number,
+                &params.runtime_seconds,
+                &params.release_date,
+                &params.first_air_date,
+                &params.status,
+                &params.summary,
+                &params.rating,
+                &params.rating_source,
+                &params.poster_url,
+                &params.fanart_url,
+                &params.section_key,
+                &params.section_title,
+                &params.genres,
+                &params.sub_genres,
+                &params.metadata_blob,
+                &params.provider_metadata,
+            ];
+            transaction.query_one(CONTENT_UPSERT_SQL, &values).await?;
+        }
+
+        for params in &plan.provider_cache {
+            let fetched_at = params.fetched_at_epoch as f64;
+            let expires_at = params.expires_at_epoch.map(|value| value as f64);
+            let http_status = params.http_status.map(i32::from);
+            let values: [&(dyn tokio_postgres::types::ToSql + Sync); 9] = [
+                &params.content_source,
+                &params.content_source_id,
+                &params.provider,
+                &params.provider_id,
+                &params.payload,
+                &fetched_at,
+                &expires_at,
+                &http_status,
+                &params.error,
+            ];
+            transaction
+                .query_one(PROVIDER_CACHE_UPSERT_SQL, &values)
+                .await?;
+        }
+
+        transaction.commit().await?;
+        Ok(PersistenceSummary {
+            content_rows: plan.content.len(),
+            provider_cache_rows: plan.provider_cache.len(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ContentPersistencePlan, ContentUpsertParams, CONTENT_UPSERT_SQL,
+        ContentPersistencePlan, ContentUpsertParams, PostgresContentStore, CONTENT_UPSERT_SQL,
         PROVIDER_CACHE_UPSERT_SQL,
     };
     use crate::enrichment::{
@@ -283,6 +377,15 @@ mod tests {
         ProviderSyncFailure, StackSyncFailure,
     };
     use serde_json::json;
+
+    #[test]
+    fn validates_database_url_without_opening_a_connection() {
+        assert!(PostgresContentStore::validate_database_url(
+            "postgresql://rpg@localhost/movie_rpg"
+        )
+        .is_ok());
+        assert!(PostgresContentStore::validate_database_url(" ").is_err());
+    }
 
     #[test]
     fn maps_fixture_records_to_complete_content_upsert_parameters() {
@@ -310,6 +413,7 @@ mod tests {
             "ON CONFLICT (source, source_id) DO UPDATE",
             "last_synced_at = now()",
             "last_enriched_at",
+            "$13::text::date",
             "RETURNING id, source, source_id",
         ] {
             assert!(CONTENT_UPSERT_SQL.contains(fragment), "missing {fragment:?}");

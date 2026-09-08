@@ -26,6 +26,8 @@ pub enum ProbeError {
         origin: &'static str,
         detail: String,
     },
+    #[error("database operation failed: {0}")]
+    Database(#[from] tokio_postgres::Error),
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
