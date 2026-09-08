@@ -6,6 +6,7 @@
 
 # Build / target
 /target
+**/target/
 /Cargo.lock
 /node_modules
 /.svelte-kit

@@ -6,10 +6,16 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TmdbGenre { pub id: i64, pub name: String }
+pub struct TmdbGenre {
+    pub id: i64,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TmdbKeyword { pub id: i64, pub name: String }
+pub struct TmdbKeyword {
+    pub id: i64,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TmdbDetails {
@@ -40,7 +46,11 @@ pub struct TmdbKeywords {
 
 impl TmdbDetails {
     pub fn keywords(&self) -> &[TmdbKeyword] {
-        if self.keywords.keywords.is_empty() { &self.keywords.results } else { &self.keywords.keywords }
+        if self.keywords.keywords.is_empty() {
+            &self.keywords.results
+        } else {
+            &self.keywords.keywords
+        }
     }
 }
 
@@ -76,7 +86,10 @@ pub struct OmdbResponse {
 
 impl OmdbResponse {
     pub fn rotten_tomatoes_rating(&self) -> Option<String> {
-        self.ratings.iter().find(|rating| rating.source == "Rotten Tomatoes").map(|rating| rating.value.clone())
+        self.ratings
+            .iter()
+            .find(|rating| rating.source == "Rotten Tomatoes")
+            .map(|rating| rating.value.clone())
     }
 }
 
@@ -100,107 +113,231 @@ impl FanartPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TvdbLogin { pub token: String }
+pub struct TvdbLogin {
+    pub token: String,
+}
 
 #[derive(Debug, Serialize)]
-struct TvdbLoginRequest<'a> { apikey: &'a str }
+struct TvdbLoginRequest<'a> {
+    apikey: &'a str,
+}
 
-pub fn parse_tmdb_details(json: &str) -> Result<TmdbDetails> { Ok(serde_json::from_str(json)?) }
-pub fn parse_omdb_response(json: &str) -> Result<OmdbResponse> { Ok(serde_json::from_str(json)?) }
-pub fn parse_fanart_payload(json: &str) -> Result<FanartPayload> { Ok(serde_json::from_str(json)?) }
+pub fn parse_tmdb_details(json: &str) -> Result<TmdbDetails> {
+    Ok(serde_json::from_str(json)?)
+}
+
+pub fn parse_omdb_response(json: &str) -> Result<OmdbResponse> {
+    Ok(serde_json::from_str(json)?)
+}
+
+pub fn parse_fanart_payload(json: &str) -> Result<FanartPayload> {
+    Ok(serde_json::from_str(json)?)
+}
+
 pub fn parse_tvdb_login(json: &str) -> Result<TvdbLogin> {
-    #[derive(Deserialize)] struct Envelope { data: TvdbLogin }
+    #[derive(Deserialize)]
+    struct Envelope {
+        data: TvdbLogin,
+    }
+
     Ok(serde_json::from_str::<Envelope>(json)?.data)
 }
 
-pub struct TmdbClient { http: Client, base_url: String, api_key: String }
+pub struct TmdbClient {
+    http: Client,
+    base_url: String,
+    api_key: String,
+}
+
 impl TmdbClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_base_url("https://api.themoviedb.org/3", api_key)
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+        }
     }
-    pub async fn movie(&self, id: i64) -> Result<TmdbDetails> { self.details("movie", id).await }
-    pub async fn tv(&self, id: i64) -> Result<TmdbDetails> { self.details("tv", id).await }
+
+    pub async fn movie(&self, id: i64) -> Result<TmdbDetails> {
+        self.details("movie", id).await
+    }
+
+    pub async fn tv(&self, id: i64) -> Result<TmdbDetails> {
+        self.details("tv", id).await
+    }
+
     async fn details(&self, kind: &str, id: i64) -> Result<TmdbDetails> {
-        let response = self.http.get(format!("{}/{}/{}", self.base_url, kind, id)).query(&[("api_key", self.api_key.as_str()), ("append_to_response", "keywords,credits,images")]).send().await?;
-        ensure_success("tmdb", &response)?;
+        let response = crate::send_with_retry(
+            "tmdb",
+            self.http
+                .get(format!("{}/{}/{}", self.base_url, kind, id))
+                .query(&[
+                    ("api_key", self.api_key.as_str()),
+                    ("append_to_response", "keywords,credits,images"),
+                ]),
+        )
+        .await?;
         Ok(response.json().await?)
     }
 }
 
-pub struct OmdbClient { http: Client, base_url: String, api_key: String }
+pub struct OmdbClient {
+    http: Client,
+    base_url: String,
+    api_key: String,
+}
+
 impl OmdbClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_base_url("https://www.omdbapi.com/", api_key)
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+        }
     }
-    pub async fn by_imdb_id(&self, imdb_id: &str) -> Result<OmdbResponse> { self.lookup(&[("i", imdb_id)]).await }
+
+    pub async fn by_imdb_id(&self, imdb_id: &str) -> Result<OmdbResponse> {
+        self.lookup(&[("i", imdb_id)]).await
+    }
+
     pub async fn by_title_year(&self, title: &str, year: Option<i32>) -> Result<OmdbResponse> {
         let year = year.map(|value| value.to_string());
         let mut params = vec![("t", title.to_owned())];
-        if let Some(year) = year { params.push(("y", year)); }
-        let refs = params.iter().map(|(key, value)| (*key, value.as_str())).collect::<Vec<_>>();
+        if let Some(year) = year {
+            params.push(("y", year));
+        }
+        let refs = params
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
         self.lookup(&refs).await
     }
+
     async fn lookup(&self, extra: &[(&str, &str)]) -> Result<OmdbResponse> {
         let mut params = vec![("apikey", self.api_key.as_str()), ("plot", "full")];
         params.extend(extra.iter().copied());
-        let response = self.http.get(&self.base_url).query(&params).send().await?;
-        ensure_success("omdb", &response)?;
+        let response = crate::send_with_retry(
+            "omdb",
+            self.http.get(&self.base_url).query(&params),
+        )
+        .await?;
         let parsed: OmdbResponse = response.json().await?;
-        if parsed.response.as_deref() == Some("False") { return Err(ProbeError::HttpStatus { provider: "omdb", status: 404 }); }
+        if parsed.response.as_deref() == Some("False") {
+            return Err(ProbeError::HttpStatus {
+                provider: "omdb",
+                status: 404,
+            });
+        }
         Ok(parsed)
     }
 }
 
-pub struct FanartClient { http: Client, base_url: String, api_key: String }
+pub struct FanartClient {
+    http: Client,
+    base_url: String,
+    api_key: String,
+}
+
 impl FanartClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_base_url("https://webservice.fanart.tv/v3", api_key)
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+        }
     }
-    pub async fn movie(&self, tmdb_id: i64) -> Result<FanartPayload> { self.lookup("movies", tmdb_id).await }
-    pub async fn tv(&self, tvdb_id: i64) -> Result<FanartPayload> { self.lookup("tv", tvdb_id).await }
+
+    pub async fn movie(&self, tmdb_id: i64) -> Result<FanartPayload> {
+        self.lookup("movies", tmdb_id).await
+    }
+
+    pub async fn tv(&self, tvdb_id: i64) -> Result<FanartPayload> {
+        self.lookup("tv", tvdb_id).await
+    }
+
     async fn lookup(&self, kind: &str, id: i64) -> Result<FanartPayload> {
-        let response = self.http.get(format!("{}/{}/{}", self.base_url, kind, id)).header("api-key", &self.api_key).send().await?;
-        ensure_success("fanart", &response)?;
+        let response = crate::send_with_retry(
+            "fanart",
+            self.http
+                .get(format!("{}/{}/{}", self.base_url, kind, id))
+                .header("api-key", &self.api_key),
+        )
+        .await?;
         Ok(response.json().await?)
     }
 }
 
-pub struct TvdbClient { http: Client, base_url: String, api_key: String, token: Arc<Mutex<Option<String>>> }
+pub struct TvdbClient {
+    http: Client,
+    base_url: String,
+    api_key: String,
+    token: Arc<Mutex<Option<String>>>,
+}
+
 impl TvdbClient {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_base_url("https://api4.thetvdb.com/v4", api_key)
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into(), token: Arc::new(Mutex::new(None)) }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+            token: Arc::new(Mutex::new(None)),
+        }
     }
+
     pub async fn login(&self) -> Result<String> {
-        let response = self.http.post(format!("{}/login", self.base_url)).json(&TvdbLoginRequest { apikey: &self.api_key }).send().await?;
-        ensure_success("tvdb", &response)?;
-        let token = response.json::<serde_json::Value>().await?.get("data").and_then(|data| data.get("token")).and_then(Value::as_str).ok_or_else(|| ProbeError::Xml("TVDB login response did not contain data.token".into()))?.to_owned();
+        let response = crate::send_with_retry(
+            "tvdb",
+            self.http
+                .post(format!("{}/login", self.base_url))
+                .json(&TvdbLoginRequest {
+                    apikey: &self.api_key,
+                }),
+        )
+        .await?;
+        let token = response
+            .json::<serde_json::Value>()
+            .await?
+            .get("data")
+            .and_then(|data| data.get("token"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| ProbeError::Xml("TVDB login response did not contain data.token".into()))?
+            .to_owned();
         *self.token.lock().expect("TVDB token mutex poisoned") = Some(token.clone());
         Ok(token)
     }
+
     pub async fn series(&self, id: i64) -> Result<Value> {
-        let token = self.token.lock().expect("TVDB token mutex poisoned").clone().ok_or_else(|| ProbeError::MissingEnvironment("TVDB runtime token (call login first)".into()))?;
-        let response = self.http.get(format!("{}/series/{}", self.base_url, id)).bearer_auth(token).send().await?;
-        ensure_success("tvdb", &response)?;
+        let token = self
+            .token
+            .lock()
+            .expect("TVDB token mutex poisoned")
+            .clone()
+            .ok_or_else(|| {
+                ProbeError::MissingEnvironment("TVDB runtime token (call login first)".into())
+            })?;
+        let response = crate::send_with_retry(
+            "tvdb",
+            self.http
+                .get(format!("{}/series/{}", self.base_url, id))
+                .bearer_auth(token),
+        )
+        .await?;
         Ok(response.json().await?)
     }
-}
-
-fn ensure_success(provider: &'static str, response: &reqwest::Response) -> Result<()> {
-    if response.status().is_success() { Ok(()) } else { Err(ProbeError::HttpStatus { provider, status: response.status().as_u16() }) }
 }

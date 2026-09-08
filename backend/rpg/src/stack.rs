@@ -28,16 +28,19 @@ pub fn parse_plex_sections(xml: &str) -> Result<Vec<PlexSection>> {
 
     loop {
         match reader.read_event() {
-            Ok(quick_xml::events::Event::Empty(event)) | Ok(quick_xml::events::Event::Start(event))
+            Ok(quick_xml::events::Event::Empty(event))
+            | Ok(quick_xml::events::Event::Start(event))
                 if event.name().as_ref() == b"Directory" =>
             {
                 let attrs = attributes(&event)?;
-                if attrs.iter().any(|(key, value)| key == "type" && (value == "movie" || value == "show")) {
+                if attrs.iter().any(|(key, value)| {
+                    key == "type" && (value == "movie" || value == "show")
+                }) {
                     sections.push(PlexSection {
                         key: attr(&attrs, "key"),
                         title: attr(&attrs, "title"),
                         kind: attr(&attrs, "type"),
-                        size: attr(&attrs, "size").and_then(|v| v.parse().ok()),
+                        size: attr(&attrs, "size").and_then(|value| value.parse().ok()),
                     });
                 }
             }
@@ -60,14 +63,15 @@ pub fn parse_plex_library_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(event))
-                if event.name().as_ref() == b"Video" || event.name().as_ref() == b"Directory" =>
+                if event.name().as_ref() == b"Video"
+                    || event.name().as_ref() == b"Directory" =>
             {
                 if current.is_none() {
                     let attrs = attributes(&event)?;
                     current = Some(PlexLibraryItem {
                         rating_key: attr(&attrs, "ratingKey"),
                         title: attr(&attrs, "title"),
-                        year: attr(&attrs, "year").and_then(|v| v.parse().ok()),
+                        year: attr(&attrs, "year").and_then(|value| value.parse().ok()),
                         item_type: attr(&attrs, "type"),
                         genres: Vec::new(),
                         raw_attributes: attrs,
@@ -76,21 +80,24 @@ pub fn parse_plex_library_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
                 }
             }
             Ok(quick_xml::events::Event::Empty(event))
-                if event.name().as_ref() == b"Video" || event.name().as_ref() == b"Directory" =>
+                if event.name().as_ref() == b"Video"
+                    || event.name().as_ref() == b"Directory" =>
             {
                 let attrs = attributes(&event)?;
                 if current.is_none() {
                     items.push(PlexLibraryItem {
                         rating_key: attr(&attrs, "ratingKey"),
                         title: attr(&attrs, "title"),
-                        year: attr(&attrs, "year").and_then(|v| v.parse().ok()),
+                        year: attr(&attrs, "year").and_then(|value| value.parse().ok()),
                         item_type: attr(&attrs, "type"),
                         genres: Vec::new(),
                         raw_attributes: attrs,
                     });
                 }
             }
-            Ok(quick_xml::events::Event::Empty(event)) if event.name().as_ref() == b"Genre" => {
+            Ok(quick_xml::events::Event::Empty(event))
+                if event.name().as_ref() == b"Genre" =>
+            {
                 if let Some(item) = current.as_mut() {
                     let attrs = attributes(&event)?;
                     if let Some(tag) = attr(&attrs, "tag") {
@@ -131,7 +138,10 @@ fn attributes<'a>(event: &quick_xml::events::BytesStart<'a>) -> Result<Vec<(Stri
 }
 
 fn attr(attrs: &[(String, String)], name: &str) -> Option<String> {
-    attrs.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone())
+    attrs
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,18 +180,35 @@ impl PlexClient {
     }
 
     pub fn with_base_url(base_url: impl Into<String>, token: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), token: token.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            token: token.into(),
+        }
     }
 
     pub async fn sections(&self) -> Result<Vec<PlexSection>> {
-        let response = self.http.get(format!("{}/library/sections", self.base_url)).header("X-Plex-Token", &self.token).send().await?;
-        ensure_success("plex", &response)?;
+        let response = crate::send_with_retry(
+            "plex",
+            self.http
+                .get(format!("{}/library/sections", self.base_url))
+                .header("X-Plex-Token", &self.token),
+        )
+        .await?;
         parse_plex_sections(&response.text().await?)
     }
 
     pub async fn library_items(&self, section_key: &str) -> Result<Vec<PlexLibraryItem>> {
-        let response = self.http.get(format!("{}/library/sections/{}/all", self.base_url, section_key)).header("X-Plex-Token", &self.token).send().await?;
-        ensure_success("plex", &response)?;
+        let response = crate::send_with_retry(
+            "plex",
+            self.http
+                .get(format!(
+                    "{}/library/sections/{}/all",
+                    self.base_url, section_key
+                ))
+                .header("X-Plex-Token", &self.token),
+        )
+        .await?;
         parse_plex_library_items(&response.text().await?)
     }
 }
@@ -198,12 +225,22 @@ impl SonarrClient {
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+        }
     }
 
     pub async fn series(&self) -> Result<Vec<SonarrSeries>> {
-        let response = self.http.get(format!("{}/api/v3/series", self.base_url)).query(&[("includeStatistics", "true")]).header("X-Api-Key", &self.api_key).send().await?;
-        ensure_success("sonarr", &response)?;
+        let response = crate::send_with_retry(
+            "sonarr",
+            self.http
+                .get(format!("{}/api/v3/series", self.base_url))
+                .query(&[("includeStatistics", "true")])
+                .header("X-Api-Key", &self.api_key),
+        )
+        .await?;
         Ok(response.json().await?)
     }
 }
@@ -220,16 +257,21 @@ impl RadarrClient {
     }
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+        Self {
+            http: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: api_key.into(),
+        }
     }
 
     pub async fn movies(&self) -> Result<Vec<RadarrMovie>> {
-        let response = self.http.get(format!("{}/api/v3/movie", self.base_url)).header("X-Api-Key", &self.api_key).send().await?;
-        ensure_success("radarr", &response)?;
+        let response = crate::send_with_retry(
+            "radarr",
+            self.http
+                .get(format!("{}/api/v3/movie", self.base_url))
+                .header("X-Api-Key", &self.api_key),
+        )
+        .await?;
         Ok(response.json().await?)
     }
-}
-
-fn ensure_success(provider: &'static str, response: &reqwest::Response) -> Result<()> {
-    if response.status().is_success() { Ok(()) } else { Err(ProbeError::HttpStatus { provider, status: response.status().as_u16() }) }
 }

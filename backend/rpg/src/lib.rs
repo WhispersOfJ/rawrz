@@ -21,9 +21,55 @@ pub enum ProbeError {
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
 
+pub(crate) async fn send_with_retry(
+    provider: &'static str,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response> {
+    const MAX_ATTEMPTS: usize = 3;
+    let retry_template = request.try_clone().ok_or_else(|| ProbeError::HttpStatus {
+        provider,
+        status: 400,
+    })?;
+    let mut request = Some(request);
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        let response = request
+            .take()
+            .expect("retry request missing")
+            .send()
+            .await?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let retryable = response.status().as_u16() == 429 || response.status().is_server_error();
+        if !retryable || attempt == MAX_ATTEMPTS {
+            return Err(ProbeError::HttpStatus {
+                provider,
+                status: response.status().as_u16(),
+            });
+        }
+
+        let delay_seconds = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1_u64 << (attempt - 1));
+        tokio::time::sleep(std::time::Duration::from_secs(delay_seconds.min(4))).await;
+        request = Some(retry_template.try_clone().ok_or_else(|| ProbeError::HttpStatus {
+            provider,
+            status: response.status().as_u16(),
+        })?);
+    }
+
+    unreachable!("retry loop always returns")
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalization::NormalizedMetadata;
+    use super::ProbeError;
     use super::providers::{
         parse_fanart_payload, parse_omdb_response, parse_tmdb_details, parse_tvdb_login,
         TmdbClient,
@@ -115,6 +161,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retries_transient_responses_but_not_client_errors() {
+        let (base_url, server) = retry_mock_server(vec![503, 429, 200], "ok").await;
+        let response = super::send_with_retry("fixture", reqwest::Client::new().get(&base_url))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        server.await.unwrap();
+
+        let (base_url, server) = retry_mock_server(vec![401], "unauthorized").await;
+        let error = super::send_with_retry("fixture", reqwest::Client::new().get(&base_url))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProbeError::HttpStatus { status: 401, .. }));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn clients_use_injected_base_urls_without_live_services() {
         let (base_url, server) = mock_server(
             "/library/sections",
@@ -139,6 +202,31 @@ mod tests {
             .unwrap();
         assert_eq!(details.id, 603);
         server.await.unwrap();
+    }
+
+    async fn retry_mock_server(
+        statuses: Vec<u16>,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for status in statuses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).await.unwrap();
+                let reason = if status == 200 { "OK" } else { "Error" };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    reason,
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{}", address), server)
     }
 
     async fn mock_server(expected_path: &'static str, body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
