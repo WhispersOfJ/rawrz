@@ -1,8 +1,14 @@
+use crate::enrichment::{
+    ContentKind, EnrichmentBatch, EnrichmentCoordinator, EnrichmentFailure, EnrichmentRequest,
+    MetadataCache,
+};
 use crate::normalization::NormalizedMetadata;
+use crate::providers::{FanartClient, FanartPayload, OmdbClient, OmdbResponse, TmdbClient, TmdbDetails, TvdbClient};
 use crate::stack::{
     PlexClient, PlexLibraryItem, RadarrClient, RadarrMovie, SonarrClient, SonarrSeries,
 };
 use crate::{ProbeError, Result};
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -68,6 +74,34 @@ pub enum ContentIdentityKey {
         title: String,
         year: Option<i32>,
     },
+}
+
+impl ContentIdentityKey {
+    pub fn cache_id(&self) -> String {
+        match self {
+            Self::External {
+                content_type,
+                external_id_type,
+                external_id,
+            } => format!(
+                "{}:{}:{}",
+                content_type.as_str(),
+                external_id_type,
+                external_id
+            ),
+            Self::TitleYear {
+                content_type,
+                title,
+                year,
+            } => format!(
+                "{}:title:{}:{}",
+                content_type.as_str(),
+                title.replace(' ', "-"),
+                year.map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_owned())
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -292,9 +326,9 @@ impl ContentSyncRecord {
             }
         }
 
-        if !metadata.genres.is_empty() {
-            self.genres = tag_names(&metadata.genres);
-        }
+        self.genres.extend(tag_names(&metadata.genres));
+        self.genres.sort();
+        self.genres.dedup();
         self.sub_genres = tag_names(&metadata.sub_genres);
 
         if let Some(score) = &metadata.featured_score {
@@ -334,6 +368,144 @@ pub struct StackSyncFailure {
 pub struct StackSyncOutcome {
     pub batch: ContentSyncBatch,
     pub failures: Vec<StackSyncFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderSyncFailure {
+    pub identity: ContentIdentityKey,
+    pub failure: EnrichmentFailure,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct EnrichedSyncOutcome {
+    pub batch: ContentSyncBatch,
+    pub stack_failures: Vec<StackSyncFailure>,
+    pub provider_failures: Vec<ProviderSyncFailure>,
+}
+
+pub struct ProviderEnrichmentOrchestrator<'a> {
+    tmdb: &'a TmdbClient,
+    tvdb: &'a TvdbClient,
+    omdb: &'a OmdbClient,
+    fanart: &'a FanartClient,
+    cache: &'a mut MetadataCache,
+    ttl_seconds: u64,
+    keyword_parent_map: BTreeMap<String, String>,
+}
+
+impl<'a> ProviderEnrichmentOrchestrator<'a> {
+    pub fn new(
+        tmdb: &'a TmdbClient,
+        tvdb: &'a TvdbClient,
+        omdb: &'a OmdbClient,
+        fanart: &'a FanartClient,
+        cache: &'a mut MetadataCache,
+        ttl_seconds: u64,
+        keyword_parent_map: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            tmdb,
+            tvdb,
+            omdb,
+            fanart,
+            cache,
+            ttl_seconds,
+            keyword_parent_map,
+        }
+    }
+
+    pub async fn enrich(
+        &mut self,
+        outcome: StackSyncOutcome,
+        now: u64,
+    ) -> EnrichedSyncOutcome {
+        let StackSyncOutcome {
+            mut batch,
+            failures: stack_failures,
+        } = outcome;
+        let mut provider_failures = Vec::new();
+        let mut coordinator = EnrichmentCoordinator::new(
+            self.tmdb,
+            self.tvdb,
+            self.omdb,
+            self.fanart,
+            self.cache,
+            self.ttl_seconds,
+        );
+
+        for group in batch.groups.values_mut() {
+            let identity = group.identity.clone();
+            let Some(request) = enrichment_request(group) else {
+                continue;
+            };
+            let enrichment = coordinator.enrich(&request, now).await;
+            provider_failures.extend(enrichment.failures.iter().cloned().map(|failure| {
+                ProviderSyncFailure {
+                    identity: identity.clone(),
+                    failure,
+                }
+            }));
+
+            let tmdb = parse_provider_payload::<TmdbDetails>(
+                &enrichment,
+                "tmdb",
+                &identity,
+                &mut provider_failures,
+            );
+            let omdb = parse_provider_payload::<OmdbResponse>(
+                &enrichment,
+                "omdb",
+                &identity,
+                &mut provider_failures,
+            );
+            let fanart = parse_provider_payload::<FanartPayload>(
+                &enrichment,
+                "fanart",
+                &identity,
+                &mut provider_failures,
+            );
+            let tvdb = enrichment
+                .payloads
+                .get("tvdb")
+                .map(|payload| payload.payload.clone());
+
+            if tmdb.is_none() && omdb.is_none() && fanart.is_none() && tvdb.is_none() {
+                continue;
+            }
+
+            let normalized = NormalizedMetadata::from_sources(
+                None,
+                None,
+                None,
+                tmdb.as_ref(),
+                omdb.as_ref(),
+                tvdb.as_ref(),
+                fanart.as_ref(),
+                &self.keyword_parent_map,
+            );
+            for record in group.records.values_mut() {
+                if let Err(error) = record.attach_normalized_metadata(&normalized) {
+                    provider_failures.push(ProviderSyncFailure {
+                        identity: identity.clone(),
+                        failure: EnrichmentFailure {
+                            provider: "normalization".to_owned(),
+                            provider_id: String::new(),
+                            content_id: request.content_id.clone(),
+                            error: error.to_string(),
+                            http_status: None,
+                            used_stale: false,
+                        },
+                    });
+                }
+            }
+        }
+
+        EnrichedSyncOutcome {
+            batch,
+            stack_failures,
+            provider_failures,
+        }
+    }
 }
 
 pub struct StackSyncOrchestrator<'a> {
@@ -445,6 +617,95 @@ impl<'a> StackSyncOrchestrator<'a> {
         StackSyncOutcome {
             batch: ContentSyncBatch::from_records(records),
             failures,
+        }
+    }
+}
+
+fn enrichment_request(group: &ContentSyncGroup) -> Option<EnrichmentRequest> {
+    let representative = group.records.values().next()?;
+    let kind = match representative.content_type {
+        ContentType::Movie => ContentKind::Movie,
+        ContentType::Series | ContentType::Episode => ContentKind::Series,
+    };
+    let mut tmdb_id = None;
+    let mut tvdb_id = None;
+    let mut imdb_id = None;
+
+    for record in group.records.values() {
+        if let (Some(external_id), Some(external_id_type)) =
+            (&record.external_id, &record.external_id_type)
+        {
+            match external_id_type.as_str() {
+                "tmdb" if tmdb_id.is_none() => tmdb_id = external_id.parse().ok(),
+                "tvdb" if tvdb_id.is_none() => tvdb_id = external_id.parse().ok(),
+                _ => {}
+            }
+        }
+        if tmdb_id.is_none() {
+            tmdb_id = json_i64_field(
+                &record.metadata_blob,
+                &["tmdbId", "tmdb_id", "tmdbID"],
+            );
+        }
+        if tvdb_id.is_none() {
+            tvdb_id = json_i64_field(
+                &record.metadata_blob,
+                &["tvdbId", "tvdb_id", "tvdbID"],
+            );
+        }
+        if imdb_id.is_none() {
+            imdb_id = record
+                .metadata_blob
+                .get("imdbId")
+                .or_else(|| record.metadata_blob.get("imdb_id"))
+                .or_else(|| record.metadata_blob.get("imdbID"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+
+    Some(EnrichmentRequest {
+        content_id: group.identity.cache_id(),
+        kind,
+        title: Some(representative.title.clone()),
+        year: representative.year,
+        tmdb_id,
+        tvdb_id,
+        imdb_id,
+    })
+}
+
+fn json_i64_field(value: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        let value = value.get(*key)?;
+        value
+            .as_i64()
+            .or_else(|| value.as_str()?.parse::<i64>().ok())
+    })
+}
+
+fn parse_provider_payload<T: DeserializeOwned>(
+    enrichment: &EnrichmentBatch,
+    provider: &'static str,
+    identity: &ContentIdentityKey,
+    failures: &mut Vec<ProviderSyncFailure>,
+) -> Option<T> {
+    let payload = enrichment.payloads.get(provider)?;
+    match serde_json::from_value(payload.payload.clone()) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            failures.push(ProviderSyncFailure {
+                identity: identity.clone(),
+                failure: EnrichmentFailure {
+                    provider: provider.to_owned(),
+                    provider_id: payload.provider_id.clone(),
+                    content_id: payload.content_id.clone(),
+                    error: error.to_string(),
+                    http_status: None,
+                    used_stale: payload.stale,
+                },
+            });
+            None
         }
     }
 }
