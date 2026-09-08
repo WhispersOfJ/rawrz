@@ -22,7 +22,7 @@ impl ContentSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ContentType {
     Movie,
     Series,
@@ -54,6 +54,31 @@ impl ContentUpsertKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum ContentIdentityKey {
+    External {
+        content_type: ContentType,
+        external_id_type: String,
+        external_id: String,
+    },
+    TitleYear {
+        content_type: ContentType,
+        title: String,
+        year: Option<i32>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ContentSyncGroup {
+    pub identity: ContentIdentityKey,
+    pub records: BTreeMap<ContentUpsertKey, ContentSyncRecord>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ContentSyncBatch {
+    pub groups: BTreeMap<ContentIdentityKey, ContentSyncGroup>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContentSyncRecord {
     pub key: ContentUpsertKey,
@@ -83,6 +108,21 @@ pub struct ContentSyncRecord {
 }
 
 impl ContentSyncRecord {
+    pub fn identity_key(&self) -> ContentIdentityKey {
+        match (&self.external_id, &self.external_id_type) {
+            (Some(external_id), Some(external_id_type)) => ContentIdentityKey::External {
+                content_type: self.content_type,
+                external_id_type: external_id_type.clone(),
+                external_id: external_id.clone(),
+            },
+            _ => ContentIdentityKey::TitleYear {
+                content_type: self.content_type,
+                title: normalize_title(&self.title),
+                year: self.year,
+            },
+        }
+    }
+
     pub fn from_plex(item: &PlexLibraryItem) -> Result<Self> {
         let source_id = required(item.rating_key.clone(), "ratingKey")?;
         let title = required(item.title.clone(), "title")?;
@@ -281,6 +321,120 @@ impl ContentSyncRecord {
     }
 }
 
+impl ContentSyncBatch {
+    pub fn from_records(records: impl IntoIterator<Item = ContentSyncRecord>) -> Self {
+        let mut groups = ContentSyncRecord::deduplicate(records)
+            .into_values()
+            .fold(BTreeMap::new(), |mut groups, record| {
+                let identity = record.identity_key();
+                groups
+                    .entry(identity.clone())
+                    .or_insert_with(|| ContentSyncGroup {
+                        identity,
+                        records: BTreeMap::new(),
+                    })
+                    .records
+                    .insert(record.key.clone(), record);
+                groups
+            });
+
+        let fallback_groups = groups
+            .keys()
+            .filter_map(|identity| match identity {
+                ContentIdentityKey::TitleYear { .. } => Some(identity.clone()),
+                ContentIdentityKey::External { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        for fallback_identity in fallback_groups {
+            let matching_external = groups
+                .keys()
+                .filter(|identity| {
+                    matches!(identity, ContentIdentityKey::External { .. })
+                        && same_title_year(identity, groups.get(&fallback_identity).unwrap())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if matching_external.len() != 1 {
+                continue;
+            }
+
+            let external_identity = matching_external.into_iter().next().unwrap();
+            let fallback_group = groups.remove(&fallback_identity).unwrap();
+            groups
+                .get_mut(&external_identity)
+                .expect("external identity group disappeared")
+                .records
+                .extend(fallback_group.records);
+        }
+
+        Self {
+            groups: groups
+                .into_values()
+                .map(|group| (group.identity.clone(), group))
+                .collect(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    pub fn groups(&self) -> impl Iterator<Item = &ContentSyncGroup> {
+        self.groups.values()
+    }
+}
+
+fn same_title_year(identity: &ContentIdentityKey, group: &ContentSyncGroup) -> bool {
+    let ContentIdentityKey::TitleYear {
+        content_type,
+        title,
+        year,
+    } = group.records.values().next().map(ContentSyncRecord::identity_key).unwrap_or_else(|| {
+        ContentIdentityKey::TitleYear {
+            content_type: ContentType::Movie,
+            title: String::new(),
+            year: None,
+        }
+    }) else {
+        return false;
+    };
+    let ContentIdentityKey::External { content_type: external_type, .. } = identity else {
+        return false;
+    };
+    if content_type != *external_type {
+        return false;
+    }
+    group.records.values().any(|record| {
+        record.content_type == *external_type
+            && normalize_title(&record.title) == title
+            && record.year == year
+    })
+}
+
+fn normalize_title(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn tag_names(tags: &[crate::normalization::NormalizedTag]) -> Vec<String> {
     let mut names = tags.iter().map(|tag| tag.name.clone()).collect::<Vec<_>>();
     names.sort();
@@ -372,7 +526,9 @@ fn json_string_array(raw: &Map<String, Value>, key: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContentSource, ContentSyncRecord, ContentType};
+    use super::{
+        ContentIdentityKey, ContentSource, ContentSyncBatch, ContentSyncRecord, ContentType,
+    };
     use crate::stack::{PlexLibraryItem, RadarrMovie, SonarrSeries};
     use serde_json::json;
 
@@ -552,6 +708,70 @@ mod tests {
         assert_eq!(deduped.len(), 2);
         assert_eq!(deduped[&super::ContentUpsertKey::new(ContentSource::Plex, "271")].title, "Fixture Movie (updated)");
         assert!(deduped.contains_key(&super::ContentUpsertKey::new(ContentSource::Radarr, "17")));
+    }
+
+    #[test]
+    fn groups_plex_fallback_with_one_matching_arr_identity() {
+        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+            .unwrap();
+        let movies: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let mut plex_record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
+        let mut radarr_record = ContentSyncRecord::from_radarr(&movies[0]).unwrap();
+        plex_record.title = "Fixture-Movie".to_owned();
+        plex_record.year = Some(2024);
+        radarr_record.title = "Fixture Movie".to_owned();
+        radarr_record.year = Some(2024);
+
+        let batch = ContentSyncBatch::from_records([plex_record, radarr_record]);
+        assert_eq!(batch.len(), 1);
+        let group = batch.groups().next().unwrap();
+        assert_eq!(
+            group.identity,
+            ContentIdentityKey::External {
+                content_type: ContentType::Movie,
+                external_id_type: "tmdb".to_owned(),
+                external_id: "591275".to_owned(),
+            }
+        );
+        assert_eq!(group.records.len(), 2);
+        assert!(group.records.keys().any(|key| {
+            key.source == ContentSource::Plex.as_str() && key.source_id == "271"
+        }));
+        assert!(group.records.keys().any(|key| {
+            key.source == ContentSource::Radarr.as_str() && key.source_id == "17"
+        }));
+    }
+
+    #[test]
+    fn leaves_ambiguous_title_year_fallbacks_unmerged() {
+        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+            .unwrap();
+        let movies: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let mut plex_record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
+        let radarr_record = ContentSyncRecord::from_radarr(&movies[0]).unwrap();
+        let mut other_radarr_record = radarr_record.clone();
+        other_radarr_record.key = super::ContentUpsertKey::new(ContentSource::Radarr, "18");
+        other_radarr_record.external_id = Some("999999".to_owned());
+        plex_record.title = "Fixture Movie".to_owned();
+        plex_record.year = Some(2024);
+
+        let batch = ContentSyncBatch::from_records([
+            plex_record,
+            radarr_record,
+            other_radarr_record,
+        ]);
+        assert_eq!(batch.len(), 3);
+        assert!(batch.groups().any(|group| {
+            matches!(
+                group.identity,
+                ContentIdentityKey::TitleYear {
+                    content_type: ContentType::Movie,
+                    ..
+                }
+            ) && group.records.len() == 1
+        }));
     }
 
     #[test]
