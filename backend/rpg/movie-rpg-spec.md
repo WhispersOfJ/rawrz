@@ -109,9 +109,30 @@ The app doesn't change how you watch. You keep using Plex as normal. The RPG rea
 
 - **Sync keys:** use stable external IDs (TMDb for movies, TMDb/TVDb for series/episodes) plus Plex `ratingKey` where needed for watch-state. Incremental sync is keyed on these IDs + last-sync timestamps so a poll only fetches what changed.
 - **Watch state (authoritative source for completion):** Plex is the ground truth for watched/unwatched and watch progress. Sonarr/Radarr contribute import/arrival events and episode file state, not watch state. (This matches §5.1's completion-based model: the RPG awards points when Plex reports a near-complete watch.)
-- **Ratings source hierarchy (for featured-case ranking — see §5.4):** prefer **TMDb/TVDb** IDs as the stable key across Plex/Sonarr/Radarr, then enrich rating from the best available source per title (IMDb / TMDB vote average / TVDb rating / Rotten Tomatoes where reachable). **Which rating source for the "all-time ranking" featured case is a finalize-during-implementation detail** — the spec commits to "aggregate external rating (TMDb/IMDb/TVDb/Rotten Tomatoes as available) for ranking; pick primary source during implementation."
+- **Ratings source hierarchy (for featured-case ranking — see §5.4):** rank by the normalized provider score in this order: TMDb vote average, OMDb IMDb rating, TVDB rating, then Plex/Sonarr/Radarr ratings. Preserve vote counts and every provider score for display and audit; do not merge unlike scales into a single opaque value.
 
-**Why mirror everything:** the user wants the full picture available, and the library is brand new (small), so there's no scaling pressure to trim for V1. Storing the full mirror keeps options open for the UI (case board, character sheet, genre map, achievement context, sub-genre filtering for the unlock model §5.2/Q6, featured-case ranking §5.4/Q7) without a later "add back what we skipped" pass. The stack remains the source of truth; the RPG's Postgres is a read-only mirror.
+**Why mirror everything:** the user wants the full picture available, and the library is brand new (small: Plex Movies = 4 items, Plex TV Shows = 8 shows / Sonarr = 24 series per the 2026-09-08 probe), so there's no scaling pressure to trim for V1. Storing the full mirror keeps options open for the UI (case board, character sheet, genre map, achievement context, genre filtering for the unlock model §5.2, featured-case ranking §5.4) without a later "add back what we skipped" pass. The stack remains the source of truth; the RPG's Postgres is a read-only mirror.
+
+**Probe correction (2026-09-08) — stack genres plus external enrichment:** Plex exposes operational top-level genres as `<Genre tag="...">`; Sonarr/Radarr do not reliably expose genres in this library. Plex remains the fallback operational genre source. The selected V1 enrichment pipeline then adds canonical TMDb parent genre IDs, TMDb keyword-derived sub-genres, and TVDB genre/tag candidates where available. OMDb and Fanart.tv do not determine gameplay genre access. Every normalized tag records its provider and source payload in the mirror/cache (§4.6, §6.4.4a).
+
+---
+
+### 4.6 External metadata providers and enrichment policy
+
+The Bear Cave services remain authoritative for operational state: Plex owns playback progress and watched state; Sonarr/Radarr own import history, file state, and their managed IDs. External providers enrich the RPG mirror only; the RPG never writes to them or uses their metadata to fabricate a watch completion.
+
+**Provider roles (V1):**
+
+- **TMDb** — canonical cross-source enrichment for movie/TV details, official genre IDs, keywords used as sub-genre candidates, release/air dates, ratings, credits, collections, and provider image paths. Query by the `tmdbId` from Sonarr/Radarr. Required configuration: `TMDB_API_KEY`; use the v3 API with the key sent as a query parameter or bearer authentication, never log it.
+- **TVDB** — TV identity and episode/season enrichment, TVDB IDs, genres/tags, episode metadata, ratings, and artwork references where TMDb data is incomplete. Authenticate once through TVDB API v4 `/login` using `TVDB_API_KEY`, cache the returned short-lived bearer token in memory/runtime state, and refresh on expiry. Required configuration: `TVDB_API_KEY`.
+- **OMDb** — IMDb-facing validation and rating fallback for movies and series, including IMDb ID, IMDb rating/votes, Rotten Tomatoes rating when returned, awards, plot, cast, and director fields. Query by `imdbId` when Radarr supplies it; otherwise use a controlled title/year lookup. Required configuration: `OMDB_API_KEY`.
+- **Fanart.tv** — artwork enrichment only: posters, backgrounds, logos, clearart, banners, and thumbnails for movies and TV. Query movies by TMDb ID and TV by TVDB ID, preserving all returned artwork records and attribution/provider URLs. Required configuration: `FANART_API_KEY`.
+
+**Precedence and conflict rules:** Plex/Sonarr/Radarr win for operational fields; TMDb wins for canonical parent genre IDs and TMDb IDs; TVDB wins for TVDB identity and episode numbering when available; OMDb is the IMDb/Rotten Tomatoes rating fallback; Fanart.tv wins only for artwork slots it supplies. Conflicting values are retained in the provider payload cache and provenance metadata rather than discarded. The featured-case ranking uses TMDb vote average first, then OMDb IMDb rating, TVDB rating, and source ratings as fallbacks.
+
+**Caching, limits, and failure behavior:** Enrichment is incremental and keyed by `(provider, provider_id, content_id)`. A provider is queried only for new/changed content, missing fields, or an expired cache entry; normal polls reuse cached payloads. Responses, `fetched_at`, `expires_at`, HTTP status, and error details are persisted in a provider cache table. Apply bounded concurrency, exponential backoff, and `Retry-After` handling for 429/5xx responses. A provider outage never deletes a previously successful payload or blocks Plex watch detection; stale metadata is marked stale and retried on a later poll.
+
+**TMDb genre/sub-genre rule:** TMDb official genre IDs become parent genres. TMDb keywords are normalized to lowercase slugs and become sub-genre candidates only when mapped to a parent genre by the seeded mapping table. TVDB genres/tags can add TV sub-genre candidates through the same mapping. The mapping and provider source for every tag are stored in the mirror so the rules can evolve without rewriting watch history.
 
 ---
 
@@ -213,12 +234,12 @@ The app doesn't change how you watch. You keep using Plex as normal. The RPG rea
     - **Cascade (concrete):** the order of genres available to purchase is a **fixed genre list order** (finalize during implementation — e.g. horror → thriller → mystery → sci-fi → fantasy → documentary → comedy → drama → romance → animation → ... or whatever the list is). At level 2, the player can buy the **first non-horror genre in the list** (the next one after horror) by purchasing any of its sub-genres (100 sub-genre XP in one of its sub-genres). At level 3, the **second** non-horror genre in the list becomes purchasable, etc. So level unlocks the right to buy the next genre in the list; sub-genre XP pays for it. One genre at a time, in list order, player chooses when to buy. (The list order and which genres are in it finalize during implementation — the spec commits to "fixed ordered genre list, horror first, one new genre accessible per level, buy via 100 sub-genre XP in any of its sub-genres.")
   - **Suggested titles per sub-genre (concrete):** when a sub-genre is **in progress** (sub-genre XP accumulated but not yet bought) or **just bought** or **available to pursue** (the next genre in the list is accessible at current level), the case board / genre map suggests actual titles from the stack library filtered to that sub-genre (from the content mirror, §4.5), so the player knows what to watch to accumulate sub-genre XP toward buying it. Suggested-title lists are derived from the content mirror on each poll (filter content by sub-genre tags).
   - **Genre "hardness":** horror starts unlocked (the investigator's home ground). Other genres are locked until bought via sub-genre XP + level access. The "harder" genres are simply those later in the list / not yet bought — there is no separate difficulty rating; the unlock cost (100 sub-genre XP) + the level gate is what gates them.
-  - **Holiday / date-appropriate bonuses (resolved §12 Q6, concrete):** the app **detects the current date and applies date-appropriate bonuses** via a **holiday window calendar** (fixed calendar mapping, finalize during implementation). Example windows:
-    - **Halloween window:** Oct 1 – Oct 31. Horror-content watches (≥95% completion) during this window get **+50% XP** (i.e. episode → +15 XP, movie → +30 XP) in addition to normal XP. (Horror is the natural Halloween genre, but the window could also apply to horror-adjacent sub-genres. Finalize which sub-genres/ genres the Halloween window applies to during implementation.)
-    - **Winter holiday window:** Dec 1 – Dec 31. Cozy/holiday-adjacent content (finalize which genres/sub-genres qualify during implementation) gets **+50% XP** during the window.
-    - **Other seasonal windows:** TBD — e.g. summer blockbuster window (Jun–Aug, action/movies), Valentine's romance window (Feb, romance), spring documentary window, etc. The spec commits to "a fixed holiday-window calendar, each window = date range + genre/sub-genre filter + bonus multiplier (≥95% completion in-window → bonus XP)." The Halloween + winter examples are concrete starters.
+  - **Holiday / date-appropriate bonuses (resolved §12 Q6, concrete):** the app **detects the current date and applies date-appropriate bonuses** via a **holiday window calendar** (fixed calendar mapping, finalize before build — at least Halloween + winter locked down now; more deferred). Example windows:
+    - **Halloween window:** Oct 1 – Oct 31. Horror-content watches (≥95% completion) during this window get **+50% XP** (episode → +15 XP, movie → +30 XP) in addition to normal XP. Applies to the **Horror** genre (the opening genre) and any horror-adjacent genres once they're unlocked (finalize exact genre scope during implementation — default: Horror only for V1).
+    - **Winter holiday window:** Dec 1 – Dec 31. Cozy/holiday-adjacent content gets **+50% XP** during the window. **Genre scope for V1 (finalize before build):** pick the genre(s) that qualify for the winter window (e.g. Comedy, Drama, or "holiday-themed" — which may be identifiable by title/keywords since Plex doesn't have a "holiday" genre; finalize the winter-window genre set before build, or defer winter to a later holiday cycle).
+    - **Other seasonal windows:** TBD — e.g. summer blockbuster window (Jun–Aug, action/movies), Valentine's romance window (Feb, romance), spring documentary window, etc. The spec commits to "a fixed holiday-window calendar, each window = date range + genre filter + bonus multiplier (≥95% completion in-window → bonus XP)." The Halloween + winter examples are concrete starters; the rest are finalized-before-build or deferred.
     - **Bonus type:** V1 = **bonus XP** (multiplier on the normal XP for qualifying watches in the window). **Items/perks** as the bonus are noted as a V1-possible extension (finalize during implementation — the spec's default is bonus XP only for V1; items are optional and deferred unless decided otherwise).
-    - Holiday windows are **implemented as date-gated feature modules** (§15.4/§15.5 inspiration from LoGD's holiday text modules): each window = a small feature with a start date, end date, genre/sub-genre filter, and bonus multiplier. New windows can be added by adding a new window record/module without touching core.
+    - Holiday windows are **implemented as date-gated feature modules** (§15.4/§15.5 inspiration from LoGD's holiday text modules): each window = a small feature with a start date, end date, genre filter, and bonus multiplier, stored in `settings.holiday_windows` (§6.4.10). New windows can be added by adding a new window record without touching core.
 - **Perks / tools (concrete starter list — finalize during implementation):** level-up unlocks small passive bonuses. Starter perk ideas (each perk is a level-gated unlock, one per level or selective):
   - **Level 2 perk (choice):** +10% XP for horror (your home genre) OR widen the new-arrival window from 48h to 72h (once). (Example — finalize during implementation.)
   - **Level 3 perk:** +5% XP for a genre of your choice (one genre, permanent once chosen).
@@ -229,26 +250,6 @@ The app doesn't change how you watch. You keep using Plex as normal. The RPG rea
 - **Titles / ranks (optional):** soft narrative flavor — "Junior Investigator" → "Investigator" → "Detective" → "Senior Detective" → "Lead Investigator" at milestone levels. Mostly cosmetic/flavor, on the character sheet.
 
 **Stats (V1):** XP (total), level, watch count (total completions), episode count, movie count, genres accessed, sub-genres owned, current streak (days), best streak, completed cases/campaigns (series completed, movies completed, featured cases completed), sub-genre XP per sub-genre (for purchase progress), holiday-window bonus count, achievement count (unlocked / total). Displayed on the character sheet.
-
-### 5.2 Character & progression
-
-**Character:** Single investigator character (V1, single-player).
-
-**Levels (resolved §12 Q5, rough):** XP accumulates → level up at thresholds. **Starting scheme (rough, finalize during implementation):** level 1 → level 2 at **100 XP**, with higher thresholds to be designed (e.g., 250 / 500 / 1000 XP for levels 3/4/5, or a scaling formula). The base episode XP = 10 anchor means ~10 episodes to level 2 as a rough sense of pace.
-
-**What leveling unlocks (decided: unlock new investigation tools/genres, with Q6 resolution):**
-
-- **Genre unlock model (resolved §12 Q6):**
-  - **Horror is the opening unlocked genre** — the investigator starts qualified for horror cases. All other genres start **locked**.
-  - **Unlock purchase via sub-genre XP:** each genre has sub-genres (from the library, filtered by sub-genre metadata). Watching movies/episodes in a sub-genre accumulates XP toward that sub-genre; when a **certain amount of watched content in a sub-genre** adds up to **X XP**, the player can **"buy" that sub-genre unlock** (spend the accumulated sub-genre XP). Unlocking a sub-genre unlocks its parent genre's access in the map/coverage sense.
-  - **Cascade:** unlocking one genre (via its sub-genre XP) opens the door to the next genre becoming available to pursue — one genre at a time, sub-genres within it, accumulate XP, buy the next. The player **chooses** when to buy, not auto-at-level.
-  - **Suggested titles per sub-genre:** when a sub-genre becomes available (or is in progress), the case board / genre map suggests actual titles from the stack library filtered to that sub-genre, so the player knows what to watch to accumulate sub-genre XP.
-  - **Genre "hardness":** horror starts unlocked (the investigator's home ground). Other genres are locked until bought via sub-genre XP. The "harder" genres are simply those the player hasn't bought yet — there is no separate difficulty rating; the unlock cost / sub-genre XP threshold is what gates them.
-  - **Holiday / date-appropriate bonuses (resolved §12 Q6):** the app **detects the current date and applies date-appropriate bonuses** — e.g., horror around Halloween, holiday/slasher/cozy-content around winter holidays, summer blockbuster-ish genres in summer, etc. The app picks the relevant holiday from the date (fixed calendar mapping, e.g. Oct = Halloween horror window, Dec = winter holiday window). During the window, watching relevant content gives **bonus XP** (and optionally a transient "item"/perk effect — TBD whether V1 includes items or just bonus XP; items are noted as a V1-possible extension, finalize during implementation).
-- **Perks / tools:** Level-up unlocks small passive bonuses (e.g., +X% XP for a genre, streak multiplier increase, wider new-arrival window). These are "tools" in the detective metaphor — better equipment for the job. (Interaction with the genre-buy model TBD: perks are separate from genre purchases, or perks can be the "item" side of holiday bonuses — finalize during implementation.)
-- **Titles / ranks (optional):** Soft narrative flavor — "Junior Investigator" → "Detective" → etc. at milestone levels. Mostly cosmetic/flavor.
-
-**Stats (V1):** XP, level, watch count, genre coverage, streak, completed cases/campaigns. Displayed on the character sheet.
 
 ### 5.3 Movies vs TV — distinct roles
 
@@ -265,7 +266,7 @@ Both feed the same XP/level system. They differ in *granularity and framing*, no
 
 **New arrivals:** When Sonarr/Radarr records a new import (or a new item appears in the library), the RPG can generate a *case card* for it. The case card represents "there's something new to investigate." It is **not assigned** — the player sees it on the case board and chooses whether to take it on.
 
-**Featured cases:** A smaller set of cases that are highlighted each period (e.g., weekly). Selected algorithmically or by simple rules from available content (e.g., "high-rated thriller that arrived this week"). Featured cases give bonus XP when completed. The selection logic is intentionally simple at first (TBD — could be "top-rated new arrival in an unlocked genre" or similar).
+**Featured cases:** A smaller set of cases highlighted each period (V1 default: weekly). Select from available content using either the configured new-arrival mode or all-time mode. Rank candidates by normalized provider score: TMDb vote average, then OMDb IMDb rating, TVDB rating, then stack ratings. Restrict candidates to the character's accessed genres and retain the selected provider scores in the featured-case audit. Featured cases give +10 XP when completed.
 
 **Player-driven case picking:** The player sees a board of available cases (new arrivals + existing library unwatched + featured) and *chooses* which to take. The RPG doesn't auto-assign. This preserves autonomy — you watch what you want; the RPG just frames it.
 
@@ -455,8 +456,9 @@ PostgreSQL is introduced as a **shared metadata store** — the RPG uses it as i
 ### 6.3 Connection & deployment of Postgres
 
 - **Not a new Compose container.** Postgres is expected to be available on the host network.
-- **Hosting mode (resolved §12 Q1):** **host-side Postgres install** — a Postgres instance running directly on the stack host (not a container, not in `docker-compose.yml`). The RPG backend connects to it via a connection string from `.env`. Concrete provisioning (install method, version, data directory, service management) is an implementation detail; the spec only commits to "host install, available on host network, not a new compose container."
-- **Auth/config:** `RPG_DB_URL` (Postgres connection string, e.g. `postgresql://user:pass@localhost:5432/rpg`) in `.env`/`.env.template`. Not committed. The account/password for the RPG login (§7.3/Q10) is stored in Postgres, not in `.env`.
+- **Hosting mode (resolved §12 Q1, with probe correction):** **host-side Postgres install**, available on host network, not a new compose container. **Probe result (2026-09-08):** **no Postgres currently available on the host** — no `pg_isready`/`psql` on PATH, no systemd `postgresql` service, nothing on port 5432. The RPG backend cannot connect to Postgres until one is installed/provisioned.
+- **Concrete provisioning step (finalize before build — pre-build task, not RPG code):** install Postgres on the host (default assumption: host package-manager install → systemd `postgresql` service → a dedicated `rpg` database + a dedicated db user + `RPG_DB_URL` = `postgresql://<user>:<pass>@localhost:5432/rpg`). Exact install method (package manager + version), data directory, service name, and auth (password for the db user) are implementation/pre-build details. The RPG backend only ever reads `RPG_DB_URL` from `.env` and connects — it does not install Postgres itself.
+- **Auth/config:** `RPG_DB_URL` (Postgres connection string, e.g. `postgresql://rpg_user:rpg_pass@localhost:5432/rpg`) in `.env`/`.env.template`. Not committed. The account/password for the RPG login (§7.3/Q10, the set-a-pin) is stored in Postgres (the `accounts.pin_hash`), not in `.env`. The Postgres db-user password (in `RPG_DB_URL`) is the only Postgres credential in `.env` — also not committed.
 - **Migration approach:** A migration layer (e.g., SQLx migrations, or a lightweight migration table) to manage schema versioning.
 
 ---
@@ -561,8 +563,8 @@ The UI remains **game-like** (character sheet, quest log, maps, case-board aesth
 
 - **Library is brand new → backfill is not the starting scenario.** The spec does **not** assume a large existing library to backfill on first run. The first-run flow is therefore **faster, more frequent updates at first** rather than a big backfill blast.
 - **Faster updates at first:** early poll cycles can run more frequently (or do a more complete incremental sync) until the content table is populated to a stable state, then settle into the normal 5-minute poll (§9.1). This is a "catch-up then settle" pattern: while the library is small / the content mirror is still filling in, sync faster; once caught up, use the standard poll cadence.
-- **What "caught up" means (finalize during implementation):** e.g., the content mirror has current metadata for the library sections Plex/Sonarr/Radarr expose and the last poll found no new/changed items. The threshold for "settle to 5 minutes" is an implementation detail; the spec only commits to "no big backfill assumed; start faster, settle to the normal poll cadence once caught up."
-- **Existing watch state:** on first run the RPG can pull current Plex watched-state for the (small, new) library so the character doesn't start from zero if there's already watching history — but this is lightweight (the library is new), not a full historical backfill.
+- **What "caught up" means (finalize during implementation):** the content mirror has current stack metadata, required provider IDs have been queued for enrichment, and the last poll found no new/changed items. Provider enrichment may continue asynchronously; the normal 5-minute cadence must not wait on external providers.
+- **Existing watch state:** on first run the RPG can pull current Plex watched-state for the (small, new) library so the character doesn't start from zero if there's already watching history — but this is lightweight (Plex Movies = 4 items, Plex TV Shows = 8 shows per the 2026-09-08 probe), not a full historical backfill.
 
 ---
 
@@ -579,12 +581,12 @@ The UI remains **game-like** (character sheet, quest log, maps, case-board aesth
 
 - **LAN only, on the stack host.** The RPG is accessed from devices on the LAN (the host's browser, or other LAN devices).
 - No external exposure by default. Remote access (if ever wanted) is a future addition (e.g., Tailscale), not V1.
-- Port: a host port (TBD, e.g., a high port) that does not conflict with the stack's existing ports. Document the port clearly.
+- Port: **86532**, a host port that does not conflict with the stack's existing ports. Document the port clearly.
 
 ### 10.3 Configuration & secrets
 
 - The RPG reuses the same `.env` secrets the stack uses: `PLEX_TOKEN`, `SONARR_API_KEY`, `RADARR_API_KEY`, `PLEX_URL`, `SONARR_URL`, `RADARR_URL`, `HOST_IP`, etc.
-- **Additional RPG env:** `RPG_DB_URL` (Postgres connection string), RPG poll interval, any RPG-specific config.
+- **Additional RPG env:** `RPG_DB_URL` (Postgres connection string), `TMDB_API_KEY`, `TVDB_API_KEY`, `OMDB_API_KEY`, and `FANART_API_KEY`. `TVDB_API_KEY` is exchanged for a runtime bearer token; the token is not committed or persisted as a secret. RPG poll interval, cache TTLs, concurrency limits, and enrichment toggles are RPG-specific config.
 - **`.env.template` update:** Add RPG-specific entries to `.env.template` (documented, not committed with real values).
 - **No new secrets infrastructure** — reuse the existing `.env` + Docker secrets pattern the stack already has.
 
@@ -612,21 +614,22 @@ The UI remains **game-like** (character sheet, quest log, maps, case-board aesth
 
 ## 12. Open questions for implementation
 
-**Status (2026-09-08, after batch resolution): all 13 resolved.** None are pre-V1 blockers; all were either resolved in the interview or in the two resolution batches (2026-09-08). The list is kept for the record + change log; new open questions that arise during implementation get added here as they come up.
+**Status (2026-09-08, after batch resolution): all 14 resolved.** None are pre-V1 blockers; all were either resolved in the interview or in the resolution batches (2026-09-08). Provider enrichment is now a committed V1 capability, with TMDb, TVDB, OMDb, and Fanart.tv API keys configured through the shared `~/Cave/.env`. The list is kept for the record + change log; new implementation questions get added here as they arise.
 
-1. **Postgres provisioning — RESOLVED (host install):** host-side Postgres install, available on host network, not a new compose container. (See §6.3.) ✔
+1. **Postgres provisioning — RESOLVED (host install, NOT yet available — needs provisioning):** host-side Postgres install, available on host network, not a new compose container. **Probe result (2026-09-08):** no Postgres currently running on the host — no `pg_isready`/`psql` on PATH, no systemd `postgresql` service, nothing on port 5432. The RPG backend cannot connect to Postgres until one is installed/provisioned on the host. **Concrete provisioning decision (finalize before build):** plan + run a host-side Postgres install (the spec's default assumption is a packaged install via the host's package manager + systemd service + a dedicated `rpg` db + a dedicated db user, with `RPG_DB_URL` = `postgresql://<user>:<pass>@localhost:5432/rpg`). Provisioning is a pre-build step, not part of the RPG backend code itself. (See §6.3, §6.4.10.) ✔
 2. **Frontend tech — RESOLVED (Svelte):** Svelte (likely SvelteKit or Svelte+Vite SPA), served as static assets by the Axum backend (or separate dev server during dev). (See §8.4.) ✔
 3. **Poll interval — RESOLVED (5 minutes):** 5-minute poll cycle. (See §9.1.) ✔
 4. **Near-end threshold — RESOLVED (95%, configurable):** watch counts as completed at ≥95% viewed; configurable default. (See §5.1.) ✔
-5. **XP numbers & level thresholds — RESOLVED (rough anchors, finalize later):** base episode XP = 10; level 2 at 100 XP. Movie/season/series/streak values TBD (finalize during implementation). (See §5.1, §5.2.) ✔
-6. **Genre unlock thresholds & which genres are "harder":** — design during implementation.
-7. **Featured case selection logic — RESOLVED (new or all-time ranking by external rating):** featured cases are selected as either **(a) new arrivals** or **(b) all-time ranking** based on external ratings — Tomatometer/ImDb/TVDb/etc. (see §4.5 for the rating-source hierarchy). A featured case is chosen from the available content by ranking (e.g., highest-rated new arrival in an unlocked/sub-genre-available genre, or highest-rated all-time title in an unlocked genre), with the selection rule finalized during implementation (e.g., "top-rated new arrival this period" vs "top-rated all-time in an unlocked genre" — both modes exist; which is featured each period is implementor's choice or a simple rotation). ✔
+5. **XP numbers & level thresholds — RESOLVED (concrete V1 values):** episode XP = 10, movie XP = 20, season bonus = 10 × episode count, series bonus = 25 × total episode count, first-completion +10, new-arrival +5 (48h window), featured +10, day-streak bonus table (§5.1.1), genre variety bonus +5/+15 (§5.1.2), level table 1→10 with cumulative XP thresholds (§5.2). (See §5.1, §5.2.) ✔
+6. **Genre unlock thresholds and enrichment — RESOLVED:** Horror opens at level 1; other genres use the fixed cascade, level gate, and 100 sub-genre XP purchase threshold. TMDb is the canonical movie/TV genre and keyword provider; TVDB supplies TV tags/genres when available; Plex tags remain the fallback. Provider IDs, mappings, cache TTLs, and stale-data behavior are defined in §4.6 and §6.4.4a. ✔
+7. **Featured case selection logic — RESOLVED (new or all-time ranking by provider score):** featured cases are selected as either **(a) new arrivals** or **(b) all-time ranking**. Candidates are restricted to accessed genres and ranked by normalized provider score in this order: TMDb vote average, OMDb IMDb rating, TVDB rating, then stack ratings. Provider scores and the selected mode are retained for audit. ✔
 8. **Achievement list — RESOLVED (massive list, finalize the concrete items during implementation):** a **large/ extensive achievement list** is wanted. Categories are decided (§5.5): completion milestones, genre coverage, time/streak, novelty, themed/quirky (incl. hidden). The spec does **not** enumerate every achievement now — that's a "massive list" to be written as part of implementation (with visible + hidden split). The spec commits to "many achievements across the categories; finalize the list during implementation." ✔
 9. **RPG backend port — RESOLVED (86532):** the RPG backend binds to host port **86532** on the stack host (LAN-only access, §10.2). Not conflicting with the stack's existing ports (3000, 5055, 7878, 8989, 9696, 32400). ✔
 10. **Auth on the RPG frontend — RESOLVED (set-a-pin gate):** PIN-based gate (§7.3), PIN stored in Postgres, V1 single-user. No full username/password account system for V1. ✔
 11. **Shared modules between the two backend crates — RESOLVED (common libs fine):** both crates may share a common `backend/` lib (§7.2) for non-coupling shared bits (`.env`/config, HTTP helpers, auth/secret patterns). No shared RPG state in the common lib. ✔
-12. **Backfill scope & speed on first run — RESOLVED (no big backfill assumed; faster updates at first, settle to 5-min cadence once caught up):** the library is brand new, so first-run is "faster, more frequent updates at first" rather than a large backfill blast; settle to the normal 5-minute poll once the content mirror is caught up. (See §9.3.) ✔
-13. **Exactly which Plex/Sonarr/Radarr endpoints and how much metadata to mirror — RESOLVED (start from §4 + §4.5 metadata mirror note):** mirror title/year/genres/ratings/IDs/runtime/summary/poster/watch-state/episode-data as detailed in §4.5; skip MediaInfo blobs, extras, full actor/collection sets for V1. Sync keyed by TMDb/TVDb/Plex ratingKey + last-sync markers. (See §4.5.) ✔
+12. **Backfill scope & speed on first run — RESOLVED (no big backfill assumed; faster updates at first, settle to 5-min cadence once caught up):** the library is brand new, so first-run is "faster, more frequent updates at first" rather than a large backfill blast; settle to the normal 5-minute poll once the content mirror is caught up. **Probe result (2026-09-08):** confirms the assumption — Plex Movies = 4 items, Plex TV Shows = 8 shows (24 series in Sonarr). Tiny/new library. (See §9.3.) ✔
+13. **Stack endpoints and metadata mirror — RESOLVED:** mirror the complete Plex/Sonarr/Radarr payloads described in §4, then enqueue enrichment by TMDb/TVDB/OMDb/Fanart.tv using stable TMDb, TVDB, and IMDb IDs. Plex is authoritative for watch state; Sonarr/Radarr for imports and file state; providers enrich metadata only. ✔
+14. **Provider-enriched sub-genres — RESOLVED:** use TMDb official genre IDs as parent genres and mapped TMDb keywords as sub-genre candidates; TVDB tags/genres may supplement TV content. Cache raw responses and normalized provenance. OMDb and Fanart.tv are used for ratings/identity and artwork respectively, not genre access. ✔
 
 ---
 
@@ -754,9 +757,11 @@ CREATE TABLE content (
   section_key       text,                         -- Plex library section key (e.g. '/library/sections/<key>')
   section_title     text,                         -- Plex library section title (e.g. 'Movies', 'Shows')
   genres            jsonb NOT NULL DEFAULT '[]',  -- list of genre names from the source
-  sub_genres        jsonb NOT NULL DEFAULT '[]', -- list of sub-genre names where the source exposes them
-  metadata_blob     jsonb NOT NULL DEFAULT '{}', -- everything else the source exposes (full mirror, §4.5): cast, directors, writers, studio, mpaa, network, episode file state, MediaInfo blobs, credits, extras, etc.
+  sub_genres        jsonb NOT NULL DEFAULT '[]', -- enriched tags from TMDb keywords / TVDB tags, mapped to parent genres
+  metadata_blob     jsonb NOT NULL DEFAULT '{}', -- full raw stack metadata mirror: cast, directors, writers, studio, mpaa, network, file state, MediaInfo, credits, extras, etc.
+  provider_metadata jsonb NOT NULL DEFAULT '{}', -- normalized provider values + provenance for TMDb/TVDB/OMDb/Fanart.tv
   last_synced_at    timestamptz NOT NULL DEFAULT now(),
+  last_enriched_at  timestamptz,
   UNIQUE (source, source_id)
 );
 
@@ -766,7 +771,29 @@ CREATE INDEX content_parent ON content(parent_id) WHERE parent_id IS NOT NULL;
 CREATE INDEX content_genres_gin ON content USING GIN (genres jsonb_path_ops);
 CREATE INDEX content_sub_genres_gin ON content USING GIN (sub_genres jsonb_path_ops);
 CREATE INDEX content_section ON content(section_key);
+CREATE INDEX content_provider_metadata_gin ON content USING GIN (provider_metadata jsonb_path_ops);
 ```
+
+### 6.4.4a External provider cache
+
+```sql
+CREATE TABLE content_provider_cache (
+  id           bigserial PRIMARY KEY,
+  content_id   bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  provider     text NOT NULL,                 -- 'tmdb' | 'tvdb' | 'omdb' | 'fanart'
+  provider_id  text NOT NULL,                 -- TMDb ID, TVDB ID, IMDb ID, or provider lookup key
+  payload      jsonb NOT NULL,
+  fetched_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz,
+  http_status  int,
+  error        text,
+  UNIQUE (content_id, provider, provider_id)
+);
+
+CREATE INDEX content_provider_cache_lookup ON content_provider_cache(provider, provider_id);
+```
+
+The cache preserves the complete successful response and the latest failure metadata for each provider. `content.provider_metadata` contains the normalized values used by gameplay; the cache is the auditable raw source.
 
 - `content` is the **full metadata mirror** (§4.5: mirror everything). Core searchable fields are columns (`title`, `year`, `content_type`, `external_id`, `genres`, `sub_genres`, `section_key`, `rating`, etc.); **everything else** the source exposes goes into `metadata_blob` (jsonb) so the mirror is complete without a schema per source field. This matches "mirror everything" + "full picture, no trimming for V1".
 - `source` + `source_id` is the unique key per source. `external_id` (TMDb/TVDb) is the stable cross-source key used to de-duplicate / match across Plex/Sonarr/Radarr when the same title appears in multiple sources.
@@ -917,6 +944,8 @@ CREATE TABLE settings (
   - `near_end_threshold_pct` = '95' (§5.1)
   - `new_arrival_window_hours` = '48' (§5.1)
   - `poll_interval_seconds` = '300' (§9.1: 5 min)
+  - `provider_cache_ttl_seconds` = '86400' (default enrichment freshness; provider-specific overrides may be added later)
+  - `provider_max_concurrency` = '2' (bounded external-provider concurrency)
   - `horror_list_order` / genre list order — stored as a JSON array of genre names in order, e.g. key `genre_list_order`, value `'["Horror","Thriller","Mystery","Sci-Fi","Fantasy","Documentary","Comedy","Drama","Romance","Animation"]'` (§5.2 cascade)
   - `sub_genre_purchase_xp_threshold` = '100' (§5.2)
   - `holiday_windows` = JSON array of window objects: `[{"name":"halloween","start":"10-01","end":"10-31","genres":["Horror"],"multiplier":1.5}, {"name":"winter_holiday","start":"12-01","end":"12-31","genres":["Comedy","Drama"],"multiplier":1.5}]` (finalize genres per window during implementation)
@@ -1071,25 +1100,60 @@ These are **possible configurable features** for the RPG's settings surface — 
 - When you resolve a §12-style open question that overlaps something here (e.g. "should there be a daily budget?", "fame formula?"), resolve it in §12/§5 and reference §15 as the inspiration source.
 - The **host/module model (§15.4)** is the most actionable takeaway: design the RPG's settings/feature surface to be modular/config-driven like LoGD's module manager, scaled to a single-player/household app. Write that decision into the spec when it's resolved (it's currently "inspiration, not committed").
 
+### 15.8 Thanks / attribution
+
+- **Legends of the Green Dragon (LoGD)** — <http://www.lotgd.net/> — the original browser RPG this spec's §15 drew inspiration from (daily loop, fame/renown signal, holiday modules, host/module model, onboarding primer, genre/race/specialty flavor, rank ladder, new-game+ dragon cycle). LoGD is a remake/homage of Seth Able's **Legend of the Red Dragon (LoRD)** (a BBS door game). LoGD is **not** a technical dependency of this RPG (this RPG is Rust/Axum + Postgres, not PHP/MySQL); LoGD is acknowledged here as a design inspiration source and as a model for how a host ships/modularizes features.
+- LoGD module catalog consulted: <http://www.lotgd.net/about.php?op=listmodules>.
+- LoGD New Player Primer consulted: <http://www.lotgd.net/petition.php?op=primer>.
+- Modern LoGD forks consulted: NB-Core +nb fork (<https://github.com/NB-Core/lotgd>), StephenKise revival (<https://github.com/stephenKise/Legend-of-the-Green-Dragon>), jimlunsford/lotgd + jimlunsford/lotgd-modules (<https://github.com/jimlunsford/lotgd>). DragonPrime Reborn community module archive referenced for the host/modding-ecosystem picture.
+
+---
+
+## 16. Pre-build probe results & remaining pre-build calls
+
+> **Why this section exists:** a place to record the live stack probe (2026-09-08) and the pre-build info calls that come out of it, so they don't get lost before the first build. This is informational + tracking; resolve the remaining calls into §5/§6/§12 as they're decided.
+
+### 16.1 Probe — what was checked (2026-09-08)
+
+- **Plex** (`http://192.168.4.105:32400`, token redacted in log): reachable; `GET /library/sections` returns two sections — **Movies** (key=1, type=movie) and **TV Shows** (key=2, type=show). Counts (via `size` attrib): **Movies = 4**, **TV Shows = 8 shows** (the 8 shows map to 24 series in Sonarr). Sample movie: "Fear Street: Part One - 1994" (ratingKey 271, tmdbId not in Plex guid; Plex guid = opaque `plex://movie/...`; genres `Horror`+`Mystery` from `<Genre tag>`; rating 8.4 RT via `ratingImage="rottentomatoes://..."`; `originallyAvailableAt="2021-07-02"`; `addedAt` present). Sample show: "Gay for Play" (ratingKey 552, genres `Game Show`+`Comedy` from `<Genre tag>`; `audienceRating=6.0` with `themoviedb://image.rating` — TMDb rating source for shows; `guid="plex://show/..."`). Plex exposes **genres as top-level `<Genre tag>` only, no sub-genres**; Plex guids are opaque (no tmdbId/TVDb in guid). Plex does expose `addedAt`/`originallyAvailableAt`/`duration`/`year`/`contentRating`/`summary`/`poster`+`fanart`/`rating` (varies by type).
+- **Sonarr** (`http://192.168.4.105:8989`, X-Api-Key): reachable; `GET /api/v3/health` ok; `GET /api/v3/series?includeStatistics=true` → **24 series**. Each series has **tvdbId + tmdbId**, `status`, `year`; **`genre: None`** (no genres in the v3 series response). Fetching by tvdbId (e.g. 85002) also returns `genre: None` and no genre-like keys.
+- **Radarr** (`http://192.168.4.105:7878`, X-Api-Key): reachable; `GET /api/v3/health` ok; `GET /api/v3/movie` → **173 movies**. Each movie has **tmdbId + imdbId**, `year`, rich `ratings` object (imdb/tmdb/metacritic/rottenTomatoes/trakt, each with `value`+`votes`+`type`); **`genre: None`** (empty `genres` array). Fetching by tmdbId (e.g. 591275) returns `genre: None`, but the `genres` key exists (empty).
+- **Host Postgres:** **not available.** No `pg_isready`/`psql` on PATH; no systemd `postgresql` service (inactive); nothing listening on port 5432. → Postgres must be installed/provisioned on the host before the RPG backend can connect.
+
+### 16.2 Probe conclusions that touch the spec
+
+- **Stack reachable + keys valid:** ✅ confirmed. The §2/§4 assumption holds; the probe layer (§7.3) can be written against real endpoints.
+- **Library is small/new:** ✅ confirms §9.3 (no big backfill; faster updates at first; settle to 5-min cadence). 4 movies + 8 shows/24 series is a genuinely tiny library — V1 will have very few titles to work with, so the genre cascade will be thin (few genres present). Keep the genre list + cascade generic so it works on a tiny library and on a larger one later.
+- **Genres come from Plex plus provider enrichment:** Plex `<Genre tag>` remains the fallback operational source; TMDb/TVDB add canonical genres and mapped sub-genre candidates. This is the selected V1 model, not an optional future path.
+- **external_id (TMDb/TVDb) comes from *arrs only:** Radarr+Sonarr have `tmdbId` (movies+shows); Radarr movies also have `imdbId`. Plex guids are opaque. → the mirror's cross-source de-dup key (`external_id`) is populated from *arrs; Plex items matched to *arr items by title+year (and Plex ratingKey is the Plex-side key). → §4.5, §6.4.4.
+- **Ratings and artwork use all four providers:** TMDb is the primary normalized score; OMDb supplies IMDb/Rotten Tomatoes fallback and identity validation; TVDB supplies TV ratings/metadata; Fanart.tv supplies artwork variants. Stack ratings remain fallback/audit data.
+- **Postgres not on host:** ✅ correction to §6.3. Needs provisioning before build.
+
+### 16.3 Remaining pre-build calls from this probe (resolve into §5/§6/§12)
+
+- **Provider enrichment is resolved:** TMDb, TVDB, OMDb, and Fanart.tv roles, cache boundaries, provenance, and failure behavior are defined in §4.6 and §6.4.4a. The provider-enriched sub-genre unlock model is committed for V1.
+- **#15 — holiday window genre scope:** Halloween defaults to Horror; winter scope remains a configurable setting and can use enriched TMDb keywords when available. Additional windows are deferred.
+- **#16 — genre list order:** seed a generic fixed list with Horror first, then Thriller, Mystery, Science Fiction, Fantasy, Documentary, Comedy, Drama, Romance, Animation, and expand through settings as the library grows. TMDb official genre names are normalized to this list where they match; unmatched genres remain visible but outside the unlock cascade until configured.
+
+### 16.4 Provider-enriched unlock model — implementation contract
+
+The V1 unlock model uses TMDb/TVDB enrichment and sub-genre XP purchase:
+
+- Completed watches add normal XP to each matching enriched sub-genre bucket (episode +10, movie +20), with parent genre derived from the provider mapping. Plex genres remain the fallback when enrichment is unavailable.
+- A sub-genre is purchased at 100 XP. The first purchased sub-genre in the next fixed-cascade parent genre grants that genre access, subject to the character's level gate; only the next genre in the cascade is purchasable.
+- Suggested titles filter the content mirror by enriched parent/sub-genre tags, with provider provenance retained.
+- The `sub_genres`, `sub_genre_xp`, and `genre_xp_ledger` tables remain in the V1 schema. Raw provider payloads are stored in `content_provider_cache`.
+
+### 16.5 How to use this section going forward
+
+- §16 records the 2026-09-08 probe and its conclusions. As build progresses, move resolved calls into §5/§6/§12 and remove them from §16.
+- **Call #14 is resolved in favor of TMDb/TVDB enrichment.** Provider API roles, cache boundaries, and enrichment provenance are committed in §4.6. Remaining genre-list and holiday-scope tuning is configuration/seed-data work, not a reason to drop provider enrichment.
+
 ---
 
 *Spec end. Next step: implementation planning (or add new open questions to §12 as they arise during implementation and I'll update the spec in place).*
 > **Change log (2026-09-08, batch 1):** §12 Q1–Q5 resolved — Q1 host install (§6.3), Q2 Svelte (§8.4), Q3 5 min poll (§9.1), Q4 95% near-end threshold configurable (§5.1), Q5 base episode XP = 10 / level 2 at 100 XP rough anchors (§5.1, §5.2). Movie/season/series/streak XP values remain TBD.
 > **Change log (2026-09-08, batch 2):** §12 Q6–Q13 resolved — Q6 genre unlock model: horror opening, everything else locked, unlock via sub-genre XP purchase, cascade one genre at a time, library-filtered sub-genre suggested titles, date-detected holiday/seasonal bonuses (§5.2); Q7 featured cases = new arrivals or all-time ranking by external rating (§5.4, §4.5); Q8 massive achievement list, categories decided, items finalized during implementation (§5.5); Q9 port 86532 (§10.2); Q10 set-a-pin gate, PIN in Postgres, V1 single-user (§7.3); Q11 common libs fine, minimal non-coupling sharing, no shared RPG state in common lib (§7.2); Q12 no big backfill (library brand new), faster updates at first, settle to 5-min cadence once caught up (§9.3); Q13 mirror everything the APIs expose, full metadata store, stack remains source of truth (§4.5).
 > **Change log (2026-09-08, post-batch tightening):** §5.1/§5.2 got concrete V1 values — episode XP = 10, movie XP = 20, season bonus = 10 × episode count, series bonus = 25 × total episode count, first-completion +10, new-arrival +5 (48h window), featured +10, day-streak bonus table (§5.1.1), genre variety bonus +5/+15 (§5.1.2), level table 1→10 with cumulative XP thresholds (§5.2), genre unlock: horror opening, level-broadens-access (1 new genre per level), sub-genre XP purchase at 100 XP (+10 episode / +20 movie toward the sub-genre), fixed ordered genre list cascade, suggested titles from library mirror, holiday windows (Halloween/winter starters, +50% XP multiplier, date-gated feature modules) (§5.2); §6.4 concrete Postgres schema added (accounts, characters, character_state, genres, sub_genres, genre_access, sub_genre_xp, genre_xp_ledger, content with full metadata_blob mirror, watches, cases, featured_cases, achievements, character_achievements, sync_state, settings) + migration approach + seed data + design notes (§6.4).
-
-### 15.8 Thanks / attribution
-
-- **Legends of the Green Dragon (LoGD)** — https://www.lotgd.net/ — the original browser RPG
-  this spec's §15 drew inspiration from (daily loop, fame/renown signal, holiday modules,
-  host/module model, onboarding primer, genre/race/specialty flavor, rank ladder, new-game+
-  dragon cycle). LoGD is a remake/homage of Seth Able's **Legend of the Red Dragon (LoRD)**
-  (a BBS door game). LoGD is **not** a technical dependency of this RPG (this RPG is
-  Rust/Axum + Postgres, not PHP/MySQL); LoGD is acknowledged here as a design inspiration
-  source and as a model for how a host ships/modularizes features.
-- LoGD module catalog consulted: https://www.lotgd.net/about.php?op=listmodules .
-- LoGD New Player Primer consulted: https://www.lotgd.net/petition.php?op=primer .
-- Modern LoGD forks consulted: NB-Core +nb fork (https://github.com/NB-Core/lotgd),
-  StephenKise revival (https://github.com/stephenKise/Legend-of-the-Green-Dragon),
-  jimlunsford/lotgd + jimlunsford/lotgd-modules (https://github.com/jimlunsford/lotgd).
-  DragonPrime Reborn community module archive referenced for the host/modding-ecosystem picture.
+> **Change log (2026-09-08, pre-build probe batch — batch 1 of info gathering):** live probe of Plex (192.168.4.105:32400) + Sonarr (:8989) + Radarr (:7878) + host Postgres → resolved §12 Q1 (Postgres NOT on host — needs provisioning before build, §6.3), §12 Q13 (Plex `<Genre tag>` is the operational genre source; external enrichment is now selected for canonical genres/sub-genres, §4.5/§4.6/§16.4), §12 Q5 (probe confirms ratings from Radarr's `ratings` object), §12 Q12 (confirmed tiny library: Plex Movies=4, TV Shows=8 shows/Sonarr=24 series → §9.3). §16 records the probe and provider-enrichment resolution.
+> **Change log (2026-09-08, provider enrichment resolution):** TMDb, TVDB, OMDb, and Fanart.tv are committed V1 metadata providers. TMDb supplies canonical genres/keywords, TVDB supplies TV identity/episodes/tags, OMDb supplies IMDb/Rotten Tomatoes fallback data, and Fanart.tv supplies artwork. Responses are cached with provider IDs, timestamps, status/error metadata, raw payloads, normalized provenance, bounded retries, and stale-data fallback (§4.6, §6.4.4a, §10.3).

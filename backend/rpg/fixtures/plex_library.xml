@@ -1,0 +1,10 @@
+<MediaContainer size="2">
+  <Video ratingKey="271" title="Fear Street: Part One - 1994" year="2021" type="movie" originallyAvailableAt="2021-07-02">
+    <Genre tag="Horror" />
+    <Genre tag="Mystery" />
+  </Video>
+  <Directory ratingKey="552" title="Gay for Play" year="2016" type="show">
+    <Genre tag="Game Show" />
+    <Genre tag="Comedy" />
+  </Directory>
+</MediaContainer>

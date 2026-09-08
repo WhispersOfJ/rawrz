@@ -1,0 +1,8 @@
+{
+  "movieposter": [
+    {"id": "poster-1", "url": "https://assets.example/poster.jpg", "lang": "en", "likes": "3"}
+  ],
+  "moviebackground": [
+    {"id": "background-1", "url": "https://assets.example/background.jpg", "lang": "en", "likes": "2"}
+  ]
+}
