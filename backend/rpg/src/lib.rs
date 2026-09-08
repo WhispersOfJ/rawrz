@@ -6,6 +6,7 @@ pub mod normalization;
 pub mod persistence;
 pub mod pipeline;
 pub mod providers;
+pub mod server;
 pub mod stack;
 pub mod sync;
 
@@ -34,6 +35,8 @@ pub enum ProbeError {
     PinHashing(String),
     #[error("database operation failed: {0}")]
     Database(#[from] tokio_postgres::Error),
+    #[error("unauthenticated")]
+    Unauthenticated,
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;

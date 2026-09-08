@@ -642,6 +642,12 @@ impl PostgresContentStore {
         Ok((AccountPinOutcome { account_created }, summary))
     }
 
+    /// Whether any account exists (drives `GET /auth/status` gate state).
+    pub async fn account_exists(&self) -> Result<bool> {
+        let row = self.client.query_one(ACCOUNT_EXISTS_SQL, &[]).await?;
+        Ok(row.get(0))
+    }
+
     /// Verify flow (§6.4.1): loads the single account's PHC `pin_hash` and
     /// re-derives the PIN. A missing account is **locked** (`None`); a wrong
     /// PIN is `Rejected`, not an error; a malformed stored hash is an
@@ -757,6 +763,57 @@ impl PostgresContentStore {
             provider_cache_rows: plan.provider_cache.len(),
         })
     }
+
+    /// Character-sheet payload for the gated API (§7.4): the singleton
+    /// character's identity, progression state, and accessed genre names.
+    pub async fn character_overview(&self) -> Result<Option<CharacterOverview>> {
+        let Some(row) = self
+            .client
+            .query_opt(
+                "SELECT c.name, cs.xp, cs.level, cs.total_watches, cs.episode_watches,
+                        cs.movie_watches, cs.current_streak_days, cs.best_streak_days,
+                        cs.genres_accessed, COALESCE(array_agg(g.name ORDER BY g.list_order)
+                            FILTER (WHERE g.name IS NOT NULL), '{}')
+                 FROM characters c
+                 LEFT JOIN character_state cs ON cs.character_id = c.id
+                 LEFT JOIN genre_access ga ON ga.character_id = c.id
+                 LEFT JOIN genres g ON g.id = ga.genre_id
+                 GROUP BY c.id, c.name, cs.xp, cs.level, cs.total_watches,
+                          cs.episode_watches, cs.movie_watches, cs.current_streak_days,
+                          cs.best_streak_days, cs.genres_accessed",
+                &[],
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(CharacterOverview {
+            name: row.get(0),
+            xp: row.get::<_, Option<i64>>(1).unwrap_or(0),
+            level: row.get::<_, Option<i32>>(2).unwrap_or(1),
+            total_watches: row.get::<_, Option<i32>>(3).unwrap_or(0),
+            episode_watches: row.get::<_, Option<i32>>(4).unwrap_or(0),
+            movie_watches: row.get::<_, Option<i32>>(5).unwrap_or(0),
+            current_streak_days: row.get::<_, Option<i32>>(6).unwrap_or(0),
+            best_streak_days: row.get::<_, Option<i32>>(7).unwrap_or(0),
+            genres_accessed: row.get::<_, Option<i32>>(8).unwrap_or(1),
+            genres: row.get(9),
+        }))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CharacterOverview {
+    pub name: String,
+    pub xp: i64,
+    pub level: i32,
+    pub total_watches: i32,
+    pub episode_watches: i32,
+    pub movie_watches: i32,
+    pub current_streak_days: i32,
+    pub best_streak_days: i32,
+    pub genres_accessed: i32,
+    pub genres: Vec<String>,
 }
 
 #[cfg(test)]
