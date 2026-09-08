@@ -5,9 +5,10 @@
 
 ## Status (updated 2026-09-08)
 
-**Unpushed commit on `main`:** `a285ea0` — feat: add accounts and characters
-identity migration. **User said "stop at next push" — do not push without
-asking.**
+**Latest pushed commit on `main`:** `8b15e56` — test: prove persistence
+surface against scratch postgres. The HTTP server work (binary, PIN gate,
+sessions, port correction to 46532) is **uncommitted local work** on top —
+commit it when the session asks.
 
 ### Done so far
 
@@ -28,6 +29,10 @@ asking.**
   - `0006_settings.sql` — settings key/value table (§6.4.10). Created early
     (not last) because bootstrap seeding needs it — placement note in spec
     §6.4.11.
+  - `0007_watches.sql` — watches ledger (§6.4.5) + the deferred
+    `genre_xp_ledger` (§6.4.3, `source_watch_id` FK now resolvable).
+    `watches.featured_case_id` is a plain column — its FK to `featured_cases`
+    (0009) is deferred, same pattern as sync_state/genre_xp_ledger.
 - Config/env loading: `backend/rpg/src/config.rs`
 - Character-creation bootstrap: `PostgresContentStore::bootstrap_single_character`
   (persistence.rs) — one transaction, idempotent: resolves the single account's
@@ -40,9 +45,19 @@ asking.**
   `PinHash { phc_string, salt_b64 }`, `verify_pin` → Accepted/Rejected.
   Store flows in persistence.rs: `set_account_pin` (first-run: validate →
   hash → insert account → create default character → shared seed, one
-  transaction, idempotent on re-run) and `verify_account_pin` (missing
-  account = locked/`None`; wrong PIN = `Rejected`, not an error).
-- Fixtures + full test suite: **50 tests, all passing**
+  transaction, idempotent on re-run), `verify_account_pin` (missing
+  account = locked/`None`; wrong PIN = `Rejected`, not an error),
+  `account_exists`, `character_overview` (gated API payload).
+- **HTTP server + binary** (`server.rs`, `main.rs`): Axum on **0.0.0.0:46532**
+  (port corrected from 86532 — impossible, TCP max 65535; spec §12 Q9
+  updated). Session mechanics per spec §7.3 (finalized): opaque 128-bit
+  tokens, `rpg_session` HttpOnly/SameSite=Lax cookie, in-memory sessions,
+  7-day TTL. Public: `/healthz`, `/auth/status`, `/auth/set-pin`,
+  `/auth/login`; gated: `/auth/logout`, `/api/character`. Startup: `.env` →
+  connect → `migrate()` → serve. Run: `cargo run -- [path/to/.env]`
+  (defaults to `../.env`). End-to-end smoke-tested with curl against a
+  scratch Postgres; HTTP flow also covered in the live-DB proof (§6 below).
+- Fixtures + full test suite: **57 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -50,31 +65,42 @@ asking.**
 
 ### Next steps (spec §6.4.11 migration order, after character state)
 
-1. **Migration 0007 — watches + genre_xp_ledger** (§6.4.5 + §6.4.3): the RPG's
-   awarded-completion ledger, plus the ledger's deferred `source_watch_id` FK.
-2. Then: `cases` → `featured_cases` → `achievements` +
-   `character_achievements`.
-3. ~~Open design call~~ **Resolved:** PIN hashing finalized in spec (§6.4.1, §7.3,
-   change log) — RustCrypto `argon2` crate, Argon2id, PHC string format;
-   `pin_hash` = full PHC string, `pin_salts` = base64 salt. Wired into code:
-   `auth` module + `set_account_pin`/`verify_account_pin` store flows.
-4. Wire `set_account_pin` + session issuance (cookie vs token — open
-   implementation detail) into the Axum routes when the backend server lands;
-   `bootstrap_single_character` remains available for standalone re-runs.
+1. **Migration 0008 — cases** (§6.4.6), then **0009 — featured_cases**
+   (§6.4.7) — 0009 must also `ALTER TABLE watches ADD CONSTRAINT
+   watches_featured_case FOREIGN KEY (featured_case_id) REFERENCES
+   featured_cases(id)` to complete the FK deferred in 0007.
+2. Then: `achievements` + `character_achievements` (§6.4.8) and the
+   §5.5 achievement-list seed.
+3. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
+4. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
+   set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
+   `server.rs`, `main.rs`. Sessions are in-memory (restart logs everyone
+   out) — acceptable for V1; revisit if restarts become frequent.
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 50+ passing
+cd backend/rpg && cargo test        # expect 51+ passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
+
+Live-DB proof (disposable postgres container, ~3s run):
+
+```bash
+./scripts/scratch_pg_proof.sh       # migrations + PIN flows + seeds on real PG
+```
+
+CI (`.github/workflows/validate.yml`) runs the same suite with a Postgres
+service container (`store-proof` job); setting `RPG_DB_URL` locally activates
+the same proof inside plain `cargo test`.
 
 ## Conventions
 
 - Commit style: conventional commits (feat/fix/docs/chore/test).
 - Spec-first: update `movie-rpg-spec.md` before design changes; resolve
   "finalize during implementation" items in the spec, not silently.
-- No new compose containers; RPG is a separate crate/process, port 86532.
+- No new compose containers; RPG is a separate crate/process, port 46532
+  (corrected from 86532, which exceeded the 65535 TCP limit — spec §12 Q9).
 - Tests follow the existing pattern: mock TCP servers + fixture files in
   `backend/rpg/fixtures/`, SQL asserted by fragment in unit tests. Note: the
   migration test helper `statement_containing` splits on `;` — avoid `;`

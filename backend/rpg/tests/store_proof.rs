@@ -27,8 +27,7 @@ async fn fresh_connection(database_url: &str) -> tokio_postgres::Client {
 /// holds (including nothing, on a virgin container).
 async fn reset_database(database_url: &str) {
     let client = fresh_connection(database_url).await;
-    client
-        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    client        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("scratch database must be resettable");
 }
@@ -56,7 +55,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("store connects to scratch database");
     let summary = store.migrate().await.expect("migrate() succeeds");
-    assert_eq!(summary.applied, 6, "all six migrations apply on a fresh database");
+    assert_eq!(summary.applied, 7, "all seven migrations apply on a fresh database");
     assert_eq!(summary.already_applied, 0);
 
     // (2a) verify with no account yet: locked.
@@ -217,5 +216,112 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // (5) re-run migrate() on an already-migrated database: clean no-op.
     let summary = store.migrate().await.expect("re-migrate succeeds");
     assert_eq!(summary.applied, 0, "re-migrate applies nothing");
-    assert_eq!(summary.already_applied, 6, "re-migrate recognizes all six versions");
+    assert_eq!(summary.already_applied, 7, "re-migrate recognizes all seven versions");
+
+    // (6) HTTP surface: serve the real router on an ephemeral port and drive
+    // the full gate flow over TCP (spec §7.3 session mechanics).
+    let store = std::sync::Arc::new(tokio::sync::Mutex::new(store));
+    let app = movie_rpg::server::router(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("ephemeral bind succeeds");
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("server runs");
+    });
+
+    let http = reqwest::Client::new();
+
+    // Public routes work without a session.
+    let response = http
+        .get(format!("{base_url}/healthz"))
+        .send()
+        .await
+        .expect("healthz reachable");
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "ok");
+
+    let status: serde_json::Value = http
+        .get(format!("{base_url}/auth/status"))
+        .send()
+        .await
+        .expect("status reachable")
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["locked"], false, "account exists, gate is ready for login");
+
+    // Gated route without a cookie: 401.
+    let response = http
+        .get(format!("{base_url}/api/character"))
+        .send()
+        .await
+        .expect("gated route reachable");
+    assert_eq!(response.status(), 401);
+
+    // Wrong PIN rejected at the gate.
+    let response = http
+        .post(format!("{base_url}/auth/login"))
+        .json(&serde_json::json!({ "pin": "9999" }))
+        .send()
+        .await
+        .expect("login reachable");
+    assert_eq!(response.status(), 401, "wrong PIN must be rejected");
+
+    // Correct PIN sets the session cookie.
+    let response = http
+        .post(format!("{base_url}/auth/login"))
+        .json(&serde_json::json!({ "pin": "1357" }))
+        .send()
+        .await
+        .expect("login reachable");
+    assert_eq!(response.status(), 200);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("login sets the session cookie")
+        .to_owned();
+    assert!(set_cookie.starts_with("rpg_session="), "cookie is {set_cookie:?}");
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"));
+    let token = set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .trim_start_matches("rpg_session=")
+        .to_owned();
+    let cookie_header = format!("rpg_session={token}");
+
+    // The cookie unlocks the gated API.
+    let overview: serde_json::Value = http
+        .get(format!("{base_url}/api/character"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("character reachable")
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(overview["name"], "The Investigator");
+    assert_eq!(overview["level"], 1);
+    assert_eq!(overview["xp"], 0);
+    assert_eq!(overview["genres"], serde_json::json!(["Horror"]));
+
+    // Logout revokes the session server-side.
+    let response = http
+        .post(format!("{base_url}/auth/logout"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("logout reachable");
+    assert_eq!(response.status(), 200);
+    let response = http
+        .get(format!("{base_url}/api/character"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("gated route reachable after logout");
+    assert_eq!(response.status(), 401, "revoked session must be rejected");
+
+    server_handle.abort();
 }

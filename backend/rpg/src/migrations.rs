@@ -13,6 +13,8 @@ pub const CHARACTER_STATE_MIGRATION: &str =
     include_str!("../migrations/0005_character_state.sql");
 pub const SETTINGS_VERSION: &str = "0006_settings";
 pub const SETTINGS_MIGRATION: &str = include_str!("../migrations/0006_settings.sql");
+pub const WATCHES_VERSION: &str = "0007_watches";
+pub const WATCHES_MIGRATION: &str = include_str!("../migrations/0007_watches.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -27,6 +29,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (GENRES_VERSION, GENRES_MIGRATION),
     (CHARACTER_STATE_VERSION, CHARACTER_STATE_MIGRATION),
     (SETTINGS_VERSION, SETTINGS_MIGRATION),
+    (WATCHES_VERSION, WATCHES_MIGRATION),
 ];
 
 #[cfg(test)]
@@ -34,7 +37,7 @@ mod tests {
     use super::{
         ACCOUNTS_CHARACTERS_MIGRATION, CHARACTER_STATE_MIGRATION, GENRES_MIGRATION,
         INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
-        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
+        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -60,16 +63,17 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 6);
+        assert_eq!(MIGRATIONS.len(), 7);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
         assert_eq!(MIGRATIONS[3].0, super::GENRES_VERSION);
         assert_eq!(MIGRATIONS[4].0, super::CHARACTER_STATE_VERSION);
         assert_eq!(MIGRATIONS[5].0, super::SETTINGS_VERSION);
+        assert_eq!(MIGRATIONS[6].0, super::WATCHES_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
-        assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0);
+        assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -254,6 +258,74 @@ mod tests {
             assert!(
                 contains_sql(statement, field),
                 "settings table is missing {field:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn creates_watches_ledger_with_audit_flags_and_deferred_featured_fk() {
+        let watches_position = WATCHES_MIGRATION
+            .find("CREATE TABLE watches (")
+            .expect("migration is missing the watches table");
+        let ledger_position = WATCHES_MIGRATION
+            .find("CREATE TABLE genre_xp_ledger (")
+            .expect("migration is missing the genre_xp_ledger table");
+        assert!(watches_position < ledger_position);
+
+        let statement = statement_containing(WATCHES_MIGRATION, "CREATE TABLE watches (");
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "content_id bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE",
+            "content_type text NOT NULL",
+            "completed_at timestamptz NOT NULL DEFAULT now()",
+            "pct_viewed numeric NOT NULL",
+            "xp_awarded bigint NOT NULL",
+            "normal_xp bigint NOT NULL",
+            "bonuses jsonb NOT NULL DEFAULT '[]'",
+            "new_arrival boolean NOT NULL DEFAULT false",
+            "featured boolean NOT NULL DEFAULT false",
+            "featured_case_id bigint",
+            "season_bonus boolean NOT NULL DEFAULT false",
+            "series_bonus boolean NOT NULL DEFAULT false",
+            "first_completion boolean NOT NULL DEFAULT false",
+            "holiday_bonus jsonb",
+            "via_plex boolean NOT NULL DEFAULT true",
+            "via_manual boolean NOT NULL DEFAULT false",
+        ] {
+            assert!(
+                contains_sql(statement, field),
+                "watches table is missing {field:?}"
+            );
+        }
+        // The featured_cases FK is deferred to 0009 — the column must be a
+        // plain bigint here.
+        assert!(
+            !statement.contains("REFERENCES featured_cases"),
+            "watches must not reference featured_cases before it exists"
+        );
+        for index in [
+            "CREATE INDEX watches_character ON watches(character_id)",
+            "CREATE INDEX watches_completed_at ON watches(character_id, completed_at DESC)",
+            "CREATE INDEX watches_content ON watches(content_id)",
+        ] {
+            assert!(WATCHES_MIGRATION.contains(index), "watches migration is missing {index:?}");
+        }
+    }
+
+    #[test]
+    fn lands_the_deferred_genre_xp_ledger_with_watch_link() {
+        let statement =
+            statement_containing(WATCHES_MIGRATION, "CREATE TABLE genre_xp_ledger (");
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "sub_genre_id bigint NOT NULL REFERENCES sub_genres(id) ON DELETE CASCADE",
+            "xp_added bigint NOT NULL",
+            "source_watch_id bigint REFERENCES watches(id)",
+            "at timestamptz NOT NULL DEFAULT now()",
+        ] {
+            assert!(
+                contains_sql(statement, field),
+                "genre_xp_ledger table is missing {field:?}"
             );
         }
     }
