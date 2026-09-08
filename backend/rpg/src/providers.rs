@@ -115,7 +115,13 @@ pub fn parse_tvdb_login(json: &str) -> Result<TvdbLogin> {
 
 pub struct TmdbClient { http: Client, base_url: String, api_key: String }
 impl TmdbClient {
-    pub fn new(api_key: impl Into<String>) -> Self { Self { http: Client::new(), base_url: "https://api.themoviedb.org/3".into(), api_key: api_key.into() } }
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url("https://api.themoviedb.org/3", api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+    }
     pub async fn movie(&self, id: i64) -> Result<TmdbDetails> { self.details("movie", id).await }
     pub async fn tv(&self, id: i64) -> Result<TmdbDetails> { self.details("tv", id).await }
     async fn details(&self, kind: &str, id: i64) -> Result<TmdbDetails> {
@@ -127,7 +133,13 @@ impl TmdbClient {
 
 pub struct OmdbClient { http: Client, base_url: String, api_key: String }
 impl OmdbClient {
-    pub fn new(api_key: impl Into<String>) -> Self { Self { http: Client::new(), base_url: "https://www.omdbapi.com/".into(), api_key: api_key.into() } }
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url("https://www.omdbapi.com/", api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+    }
     pub async fn by_imdb_id(&self, imdb_id: &str) -> Result<OmdbResponse> { self.lookup(&[("i", imdb_id)]).await }
     pub async fn by_title_year(&self, title: &str, year: Option<i32>) -> Result<OmdbResponse> {
         let year = year.map(|value| value.to_string());
@@ -149,7 +161,13 @@ impl OmdbClient {
 
 pub struct FanartClient { http: Client, base_url: String, api_key: String }
 impl FanartClient {
-    pub fn new(api_key: impl Into<String>) -> Self { Self { http: Client::new(), base_url: "https://webservice.fanart.tv/v3".into(), api_key: api_key.into() } }
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url("https://webservice.fanart.tv/v3", api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
+    }
     pub async fn movie(&self, tmdb_id: i64) -> Result<FanartPayload> { self.lookup("movies", tmdb_id).await }
     pub async fn tv(&self, tvdb_id: i64) -> Result<FanartPayload> { self.lookup("tv", tvdb_id).await }
     async fn lookup(&self, kind: &str, id: i64) -> Result<FanartPayload> {
@@ -161,7 +179,13 @@ impl FanartClient {
 
 pub struct TvdbClient { http: Client, base_url: String, api_key: String, token: Arc<Mutex<Option<String>>> }
 impl TvdbClient {
-    pub fn new(api_key: impl Into<String>) -> Self { Self { http: Client::new(), base_url: "https://api4.thetvdb.com/v4".into(), api_key: api_key.into(), token: Arc::new(Mutex::new(None)) } }
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url("https://api4.thetvdb.com/v4", api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into(), token: Arc::new(Mutex::new(None)) }
+    }
     pub async fn login(&self) -> Result<String> {
         let response = self.http.post(format!("{}/login", self.base_url)).json(&TvdbLoginRequest { apikey: &self.api_key }).send().await?;
         ensure_success("tvdb", &response)?;

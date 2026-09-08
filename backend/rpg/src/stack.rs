@@ -166,6 +166,10 @@ pub struct PlexClient {
 
 impl PlexClient {
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_base_url(base_url, token)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), token: token.into() }
     }
 
@@ -190,6 +194,10 @@ pub struct SonarrClient {
 
 impl SonarrClient {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_base_url(base_url, api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
     }
 
@@ -208,6 +216,10 @@ pub struct RadarrClient {
 
 impl RadarrClient {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_base_url(base_url, api_key)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self { http: Client::new(), base_url: base_url.into().trim_end_matches('/').to_owned(), api_key: api_key.into() }
     }
 

@@ -26,11 +26,14 @@ mod tests {
     use super::normalization::NormalizedMetadata;
     use super::providers::{
         parse_fanart_payload, parse_omdb_response, parse_tmdb_details, parse_tvdb_login,
+        TmdbClient,
+    };
+    use super::stack::{
+        parse_plex_library_items, parse_plex_sections, PlexClient, RadarrMovie, SonarrSeries,
     };
     use std::collections::BTreeMap;
-    use super::stack::{
-        parse_plex_library_items, parse_plex_sections, SonarrSeries, RadarrMovie,
-    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn parses_plex_sections_and_library_genres() {
@@ -109,5 +112,51 @@ mod tests {
         assert!(metadata.sub_genres.iter().any(|tag| tag.slug == "dream"));
         assert_eq!(metadata.artwork.len(), 2);
         assert_eq!(metadata.provenance["horror"], vec!["plex"]);
+    }
+
+    #[tokio::test]
+    async fn clients_use_injected_base_urls_without_live_services() {
+        let (base_url, server) = mock_server(
+            "/library/sections",
+            "<MediaContainer size=\"0\"></MediaContainer>",
+        )
+        .await;
+        assert!(PlexClient::with_base_url(base_url, "fixture-token")
+            .sections()
+            .await
+            .unwrap()
+            .is_empty());
+        server.await.unwrap();
+
+        let (base_url, server) = mock_server(
+            "/movie/603",
+            include_str!("../fixtures/tmdb_movie.json"),
+        )
+        .await;
+        let details = TmdbClient::with_base_url(base_url, "fixture-key")
+            .movie(603)
+            .await
+            .unwrap();
+        assert_eq!(details.id, 603);
+        server.await.unwrap();
+    }
+
+    async fn mock_server(expected_path: &'static str, body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let bytes_read = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..bytes_read]);
+            assert!(request.contains(expected_path), "request did not contain {expected_path}: {request}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        (format!("http://{}", address), server)
     }
 }

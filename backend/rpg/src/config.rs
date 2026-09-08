@@ -49,6 +49,32 @@ impl ProbeConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::ProbeConfig;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn loads_required_values_from_env_file_and_strips_quotes() {
+        let path = std::env::temp_dir().join(format!(
+            "movie-rpg-config-{}-{}.env",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::write(
+            &path,
+            "PLEX_URL=http://plex\nPLEX_TOKEN=plex-token\nSONARR_URL=http://sonarr\nSONARR_API_KEY='sonarr-key'\nRADARR_URL=http://radarr\nRADARR_API_KEY=radarr-key\nTMDB_API_KEY=tmdb-key\nTVDB_API_KEY=tvdb-key\nOMDB_API_KEY=omdb-key\nFANART_API_KEY=fanart-key\n",
+        )
+        .unwrap();
+
+        let config = ProbeConfig::from_env_file(&path).unwrap();
+        assert_eq!(config.sonarr_api_key, "sonarr-key");
+        assert_eq!(config.fanart_api_key, "fanart-key");
+        fs::remove_file(path).unwrap();
+    }
+}
+
 fn parse_env_line(line: &str) -> Option<(String, String)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
