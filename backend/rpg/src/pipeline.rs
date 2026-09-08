@@ -91,6 +91,7 @@ impl<'a> SyncPipeline<'a> {
         store: &mut PostgresContentStore,
         now: u64,
     ) -> Result<SyncRunResult> {
+        store.migrate().await?;
         store.hydrate_cache(self.cache).await?;
         let prepared = self.prepare(now).await;
         let persistence = store.persist(&prepared.plan).await?;

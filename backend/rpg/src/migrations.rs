@@ -1,3 +1,4 @@
+pub const INITIAL_CONTENT_PROVIDER_CACHE_VERSION: &str = "0001_content_provider_cache";
 pub const INITIAL_CONTENT_PROVIDER_CACHE: &str =
     include_str!("../migrations/0001_content_provider_cache.sql");
 
@@ -15,6 +16,15 @@ mod tests {
         let normalized = statement.split_whitespace().collect::<Vec<_>>().join(" ");
         let fragment = fragment.split_whitespace().collect::<Vec<_>>().join(" ");
         normalized.contains(&fragment)
+    }
+
+    #[test]
+    fn exposes_a_stable_initial_migration_version() {
+        assert_eq!(
+            super::INITIAL_CONTENT_PROVIDER_CACHE_VERSION,
+            "0001_content_provider_cache"
+        );
+        assert!(!SQL.trim().is_empty());
     }
 
     #[test]

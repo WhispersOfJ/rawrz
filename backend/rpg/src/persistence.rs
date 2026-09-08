@@ -1,4 +1,7 @@
 use crate::enrichment::{MetadataCache, ProviderCacheEntry};
+use crate::migrations::{
+    INITIAL_CONTENT_PROVIDER_CACHE, INITIAL_CONTENT_PROVIDER_CACHE_VERSION,
+};
 use crate::sync::{
     ContentIdentityKey, ContentSyncGroup, ContentSyncRecord, EnrichedSyncOutcome,
     ProviderSyncFailure, StackSyncFailure,
@@ -8,6 +11,32 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use crate::Result;
 use tokio_postgres::{Client, NoTls};
+
+pub const SCHEMA_MIGRATIONS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+"#;
+
+pub const MIGRATION_LOOKUP_SQL: &str =
+    "SELECT version FROM schema_migrations WHERE version = $1";
+pub const MIGRATION_RECORD_SQL: &str =
+    "INSERT INTO schema_migrations (version) VALUES ($1)";
+
+fn migration_summary(already_applied: bool) -> MigrationSummary {
+    if already_applied {
+        MigrationSummary {
+            applied: 0,
+            already_applied: 1,
+        }
+    } else {
+        MigrationSummary {
+            applied: 1,
+            already_applied: 0,
+        }
+    }
+}
 
 pub const CONTENT_UPSERT_SQL: &str = r#"
 INSERT INTO content (
@@ -344,6 +373,12 @@ fn provider_cache_entry_from_fields(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct MigrationSummary {
+    pub applied: usize,
+    pub already_applied: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CacheHydrationSummary {
     pub loaded: usize,
     pub already_present: usize,
@@ -377,6 +412,27 @@ impl PostgresContentStore {
             let _ = connection.await;
         });
         Ok(Self { client })
+    }
+
+    pub async fn migrate(&mut self) -> Result<MigrationSummary> {
+        let transaction = self.client.transaction().await?;
+        transaction.batch_execute(SCHEMA_MIGRATIONS_SQL).await?;
+        let version = INITIAL_CONTENT_PROVIDER_CACHE_VERSION;
+        if transaction
+            .query_opt(MIGRATION_LOOKUP_SQL, &[&version])
+            .await?
+            .is_some()
+        {
+            transaction.commit().await?;
+            return Ok(migration_summary(true));
+        }
+
+        transaction.batch_execute(INITIAL_CONTENT_PROVIDER_CACHE).await?;
+        transaction
+            .execute(MIGRATION_RECORD_SQL, &[&version])
+            .await?;
+        transaction.commit().await?;
+        Ok(migration_summary(false))
     }
 
     pub async fn hydrate_cache(
@@ -483,9 +539,10 @@ impl PostgresContentStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        provider_cache_entry_from_fields, ContentPersistencePlan, ContentUpsertParams,
-        PersistedProviderCacheFields, PostgresContentStore, CONTENT_UPSERT_SQL,
-        PROVIDER_CACHE_HYDRATE_SQL, PROVIDER_CACHE_UPSERT_SQL,
+        migration_summary, provider_cache_entry_from_fields, ContentPersistencePlan,
+        ContentUpsertParams, MigrationSummary, PersistedProviderCacheFields,
+        PostgresContentStore, CONTENT_UPSERT_SQL, MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL,
+        PROVIDER_CACHE_HYDRATE_SQL, PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -495,6 +552,34 @@ mod tests {
         ProviderSyncFailure, StackSyncFailure,
     };
     use serde_json::json;
+
+    #[test]
+    fn migration_runner_tracks_version_and_no_op_state() {
+        assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
+        assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
+        assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
+        assert!(
+            crate::migrations::INITIAL_CONTENT_PROVIDER_CACHE
+                .find("CREATE TABLE content (")
+                < crate::migrations::INITIAL_CONTENT_PROVIDER_CACHE
+                    .find("CREATE TABLE content_provider_cache (")
+        );
+
+        assert_eq!(
+            migration_summary(true),
+            MigrationSummary {
+                applied: 0,
+                already_applied: 1,
+            }
+        );
+        assert_eq!(
+            migration_summary(false),
+            MigrationSummary {
+                applied: 1,
+                already_applied: 0,
+            }
+        );
+    }
 
     #[test]
     fn reconstructs_persisted_cache_identity_and_retains_failure_metadata() {
