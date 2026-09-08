@@ -214,6 +214,18 @@ ORDER BY id
 LIMIT 1
 "#;
 
+pub const CHARACTER_EXISTS_SQL: &str = "SELECT EXISTS (SELECT 1 FROM characters)";
+
+// V1 has exactly one character per account (§6.4.1); the exists-check above
+// guards the insert so repeat set-PIN calls never duplicate characters.
+pub const CHARACTER_INSERT_SQL: &str = r#"
+INSERT INTO characters (account_id)
+SELECT accounts.id FROM accounts
+ORDER BY accounts.id
+LIMIT 1
+RETURNING id
+"#;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContentUpsertParams {
     pub source: String,
@@ -490,6 +502,11 @@ pub struct BootstrapSummary {
     pub settings_seeded: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AccountPinOutcome {
+    pub account_created: bool,
+}
+
 /// V1 settings defaults (§6.4.10), verbatim. Missing keys are seeded at
 /// character-creation bootstrap; existing values are never overwritten.
 pub const SETTINGS_V1_DEFAULTS: &[(&str, &str)] = &[
@@ -578,6 +595,67 @@ impl PostgresContentStore {
         let summary = seed_rows_for(&transaction, character_id).await?;
         transaction.commit().await?;
         Ok(summary)
+    }
+
+    /// Set-PIN flow (§6.4.1, first run only): validates the PIN, hashes it
+    /// with Argon2id, inserts the single account, and — since a fresh
+    /// account has no character yet — creates the default investigator plus
+    /// the full bootstrap seed, all in one transaction. Returns
+    /// `account_created: false` when an account already exists (V1 has no
+    /// PIN change flow; bootstrap is then still run, idempotently).
+    pub async fn set_account_pin(&mut self, pin: &str) -> Result<(AccountPinOutcome, BootstrapSummary)> {
+        crate::auth::validate_pin(pin)?;
+        let hashed = crate::auth::hash_pin(pin)?;
+
+        let transaction = self.client.transaction().await?;
+
+        let existing: bool = transaction
+            .query_one(ACCOUNT_EXISTS_SQL, &[])
+            .await?
+            .get(0);
+        let account_created = !existing;
+        if account_created {
+            transaction
+                .query_one(ACCOUNT_INSERT_SQL, &[&hashed.phc_string, &hashed.salt_b64])
+                .await?;
+        }
+
+        // The default investigator: one character per account (§6.4.1).
+        // Created only if the account has none yet (V1: set-PIN is the only
+        // account-creation path, so this runs exactly once).
+        let character_exists: bool = transaction
+            .query_one(CHARACTER_EXISTS_SQL, &[])
+            .await?
+            .get(0);
+        if !character_exists {
+            transaction
+                .query_one(CHARACTER_INSERT_SQL, &[])
+                .await?;
+        }
+        let character_id: i64 = transaction
+            .query_one(SINGLE_CHARACTER_ID_SQL, &[])
+            .await?
+            .get(0);
+
+        let summary = seed_rows_for(&transaction, character_id).await?;
+        transaction.commit().await?;
+        Ok((AccountPinOutcome { account_created }, summary))
+    }
+
+    /// Verify flow (§6.4.1): loads the single account's PHC `pin_hash` and
+    /// re-derives the PIN. A missing account is **locked** (`None`); a wrong
+    /// PIN is `Rejected`, not an error; a malformed stored hash is an
+    /// operational error.
+    pub async fn verify_account_pin(&self, pin: &str) -> Result<Option<crate::auth::PinVerifyOutcome>> {
+        let Some(stored) = self
+            .client
+            .query_opt(SINGLE_ACCOUNT_PIN_SQL, &[])
+            .await?
+            .map(|row| row.get::<_, String>(0))
+        else {
+            return Ok(None);
+        };
+        crate::auth::verify_pin(pin, &stored).map(Some)
     }
 
     pub async fn hydrate_cache(
@@ -687,10 +765,11 @@ mod tests {
         bootstrap_summary, migration_summary, provider_cache_entry_from_fields,
         BootstrapSummary, ContentPersistencePlan, ContentUpsertParams, MigrationSummary,
         PersistedProviderCacheFields, PostgresContentStore, SETTINGS_V1_DEFAULTS,
+        ACCOUNT_EXISTS_SQL, ACCOUNT_INSERT_SQL, CHARACTER_EXISTS_SQL, CHARACTER_INSERT_SQL,
         CHARACTER_STATE_SEED_SQL, CONTENT_UPSERT_SQL, GENRE_ACCESS_SEED_SQL,
         MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL, PROVIDER_CACHE_HYDRATE_SQL,
         PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
-        SINGLE_CHARACTER_ID_SQL,
+        SINGLE_ACCOUNT_PIN_SQL, SINGLE_CHARACTER_ID_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -813,6 +892,23 @@ mod tests {
                 settings_seeded: 0,
             }
         );
+    }
+
+    #[test]
+    fn account_pin_statements_resolve_the_single_account() {
+        assert_eq!(ACCOUNT_EXISTS_SQL, "SELECT EXISTS (SELECT 1 FROM accounts)");
+        assert!(ACCOUNT_INSERT_SQL.contains("INSERT INTO accounts (pin_hash, pin_salts)"));
+        assert!(ACCOUNT_INSERT_SQL.contains("VALUES ($1, $2)"));
+        assert!(ACCOUNT_INSERT_SQL.contains("RETURNING id"));
+
+        assert!(SINGLE_ACCOUNT_PIN_SQL.contains("SELECT pin_hash FROM accounts"));
+        assert!(SINGLE_ACCOUNT_PIN_SQL.contains("ORDER BY id"));
+        assert!(SINGLE_ACCOUNT_PIN_SQL.contains("LIMIT 1"));
+
+        assert!(CHARACTER_EXISTS_SQL.contains("SELECT EXISTS (SELECT 1 FROM characters)"));
+        assert!(CHARACTER_INSERT_SQL.contains("INSERT INTO characters (account_id)"));
+        assert!(CHARACTER_INSERT_SQL.contains("SELECT accounts.id FROM accounts"));
+        assert!(CHARACTER_INSERT_SQL.contains("RETURNING id"));
     }
 
     #[test]

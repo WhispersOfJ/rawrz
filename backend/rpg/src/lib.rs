@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod enrichment;
 pub mod migrations;
@@ -27,6 +28,10 @@ pub enum ProbeError {
         origin: &'static str,
         detail: String,
     },
+    #[error("PIN must be 4-12 digits")]
+    InvalidPin,
+    #[error("PIN hashing failed: {0}")]
+    PinHashing(String),
     #[error("database operation failed: {0}")]
     Database(#[from] tokio_postgres::Error),
 }

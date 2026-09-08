@@ -25,8 +25,24 @@ asking.**
     is **deferred to the watches migration** (its `source_watch_id` FK targets
     `watches(id)` — spec §6.4.3 documents this placement).
   - `0005_character_state.sql` — singleton character_state (§6.4.2)
+  - `0006_settings.sql` — settings key/value table (§6.4.10). Created early
+    (not last) because bootstrap seeding needs it — placement note in spec
+    §6.4.11.
 - Config/env loading: `backend/rpg/src/config.rs`
-- Fixtures + full test suite: **38 tests, all passing**
+- Character-creation bootstrap: `PostgresContentStore::bootstrap_single_character`
+  (persistence.rs) — one transaction, idempotent: resolves the single account's
+  character, seeds `character_state` (defaults), the `genre_access` horror row
+  (`genres.is_opening`), and **missing** `settings` V1 defaults
+  (`SETTINGS_V1_DEFAULTS`, §6.4.10 verbatim; `featured_selection_mode`
+  finalized as `all_time_ranking`). No-op when no account exists yet.
+- PIN gate: `backend/rpg/src/auth.rs` — `argon2` (Argon2id, PHC string) +
+  `rand_core`/getrandom; `validate_pin` (4–12 digits), `hash_pin` →
+  `PinHash { phc_string, salt_b64 }`, `verify_pin` → Accepted/Rejected.
+  Store flows in persistence.rs: `set_account_pin` (first-run: validate →
+  hash → insert account → create default character → shared seed, one
+  transaction, idempotent on re-run) and `verify_account_pin` (missing
+  account = locked/`None`; wrong PIN = `Rejected`, not an error).
+- Fixtures + full test suite: **50 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -34,22 +50,22 @@ asking.**
 
 ### Next steps (spec §6.4.11 migration order, after character state)
 
-1. **Migration 0006 — watches + genre_xp_ledger** (§6.4.5 + §6.4.3): the RPG's
+1. **Migration 0007 — watches + genre_xp_ledger** (§6.4.5 + §6.4.3): the RPG's
    awarded-completion ledger, plus the ledger's deferred `source_watch_id` FK.
 2. Then: `cases` → `featured_cases` → `achievements` +
-   `character_achievements` → `settings` (V1 defaults in §6.4.10).
-3. **Open design call to resolve during implementation:** PIN hashing crate
-   (spec suggests argon2) for `accounts.pin_hash` / `pin_salts` — finalize in
-   spec per CLAUDE.md ("spec-first") when decided.
-4. Seeding on character creation (`character_state` row, `genre_access` horror
-   row, `settings` V1 defaults) lands with the app's account/character
-   bootstrap logic — not in migrations (single-account V1 has no rows to seed
-   until first run).
+   `character_achievements`.
+3. ~~Open design call~~ **Resolved:** PIN hashing finalized in spec (§6.4.1, §7.3,
+   change log) — RustCrypto `argon2` crate, Argon2id, PHC string format;
+   `pin_hash` = full PHC string, `pin_salts` = base64 salt. Wired into code:
+   `auth` module + `set_account_pin`/`verify_account_pin` store flows.
+4. Wire `set_account_pin` + session issuance (cookie vs token — open
+   implementation detail) into the Axum routes when the backend server lands;
+   `bootstrap_single_character` remains available for standalone re-runs.
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 38+ passing
+cd backend/rpg && cargo test        # expect 50+ passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
 
