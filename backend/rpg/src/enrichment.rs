@@ -77,6 +77,15 @@ impl MetadataCache {
         self.entries.insert(entry.key.clone(), entry);
     }
 
+    /// Restore a persisted entry only when the current poll has not already populated it.
+    pub fn restore_if_absent(&mut self, entry: ProviderCacheEntry) -> bool {
+        if self.entries.contains_key(&entry.key) {
+            return false;
+        }
+        self.entries.insert(entry.key.clone(), entry);
+        true
+    }
+
     fn fresh(&self, key: &ProviderCacheKey, now: u64) -> Option<ProviderCacheEntry> {
         let entry = self.entries.get(key)?;
         let expires_at = entry.expires_at?;

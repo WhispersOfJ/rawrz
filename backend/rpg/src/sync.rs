@@ -102,6 +102,35 @@ impl ContentIdentityKey {
             ),
         }
     }
+
+    pub fn from_persisted_fields(
+        content_type: &str,
+        external_id_type: Option<&str>,
+        external_id: Option<&str>,
+        title: &str,
+        year: Option<i32>,
+    ) -> Option<Self> {
+        let content_type = match content_type {
+            "movie" => ContentType::Movie,
+            "series" => ContentType::Series,
+            "episode" => ContentType::Episode,
+            _ => return None,
+        };
+        if let (Some(external_id_type), Some(external_id)) = (external_id_type, external_id) {
+            if !external_id_type.is_empty() && !external_id.is_empty() {
+                return Some(Self::External {
+                    content_type,
+                    external_id_type: external_id_type.to_owned(),
+                    external_id: external_id.to_owned(),
+                });
+            }
+        }
+        Some(Self::TitleYear {
+            content_type,
+            title: normalize_title(title),
+            year,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -1,7 +1,7 @@
 use crate::enrichment::{MetadataCache, ProviderCacheEntry};
 use crate::sync::{
-    ContentSyncGroup, ContentSyncRecord, EnrichedSyncOutcome, ProviderSyncFailure,
-    StackSyncFailure,
+    ContentIdentityKey, ContentSyncGroup, ContentSyncRecord, EnrichedSyncOutcome,
+    ProviderSyncFailure, StackSyncFailure,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -76,6 +76,25 @@ ON CONFLICT (content_id, provider, provider_id) DO UPDATE SET
   http_status = EXCLUDED.http_status,
   error = EXCLUDED.error
 RETURNING id, content_id, provider, provider_id;
+"#;
+
+pub const PROVIDER_CACHE_HYDRATE_SQL: &str = r#"
+SELECT
+  content.content_type,
+  content.external_id_type,
+  content.external_id,
+  content.title,
+  content.year,
+  cache.provider,
+  cache.provider_id,
+  cache.payload,
+  EXTRACT(EPOCH FROM cache.fetched_at)::bigint,
+  EXTRACT(EPOCH FROM cache.expires_at)::bigint,
+  cache.http_status,
+  cache.error
+FROM content_provider_cache AS cache
+JOIN content ON content.id = cache.content_id
+ORDER BY cache.id;
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -271,6 +290,66 @@ fn source_rank(source: &str) -> u8 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PersistedProviderCacheFields {
+    content_type: String,
+    external_id_type: Option<String>,
+    external_id: Option<String>,
+    title: String,
+    year: Option<i32>,
+    provider: String,
+    provider_id: String,
+    payload: Value,
+    fetched_at_epoch: i64,
+    expires_at_epoch: Option<i64>,
+    http_status: Option<i32>,
+    error: Option<String>,
+}
+
+fn provider_cache_entry_from_fields(
+    fields: PersistedProviderCacheFields,
+) -> Option<ProviderCacheEntry> {
+    if fields.provider.is_empty() || fields.provider_id.is_empty() {
+        return None;
+    }
+    let identity = ContentIdentityKey::from_persisted_fields(
+        &fields.content_type,
+        fields.external_id_type.as_deref(),
+        fields.external_id.as_deref(),
+        &fields.title,
+        fields.year,
+    )?;
+    let fetched_at = u64::try_from(fields.fetched_at_epoch).ok()?;
+    let expires_at = fields
+        .expires_at_epoch
+        .map(u64::try_from)
+        .transpose()
+        .ok()?;
+    Some(ProviderCacheEntry {
+        key: crate::enrichment::ProviderCacheKey::new(
+            fields.provider,
+            fields.provider_id,
+            identity.cache_id(),
+        ),
+        payload: (!fields.payload.is_null()).then_some(fields.payload),
+        fetched_at: Some(fetched_at),
+        expires_at,
+        // The schema records the successful fetch time but not a separate attempt time.
+        attempted_at: fetched_at,
+        http_status: fields
+            .http_status
+            .and_then(|status| u16::try_from(status).ok()),
+        error: fields.error,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CacheHydrationSummary {
+    pub loaded: usize,
+    pub already_present: usize,
+    pub skipped: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct PersistenceSummary {
     pub content_rows: usize,
@@ -298,6 +377,44 @@ impl PostgresContentStore {
             let _ = connection.await;
         });
         Ok(Self { client })
+    }
+
+    pub async fn hydrate_cache(
+        &self,
+        cache: &mut MetadataCache,
+    ) -> Result<CacheHydrationSummary> {
+        let rows = self.client.query(PROVIDER_CACHE_HYDRATE_SQL, &[]).await?;
+        let mut summary = CacheHydrationSummary {
+            loaded: 0,
+            already_present: 0,
+            skipped: 0,
+        };
+        for row in rows {
+            let fields = PersistedProviderCacheFields {
+                content_type: row.get(0),
+                external_id_type: row.get(1),
+                external_id: row.get(2),
+                title: row.get(3),
+                year: row.get(4),
+                provider: row.get(5),
+                provider_id: row.get(6),
+                payload: row.get(7),
+                fetched_at_epoch: row.get(8),
+                expires_at_epoch: row.get(9),
+                http_status: row.get(10),
+                error: row.get(11),
+            };
+            let Some(entry) = provider_cache_entry_from_fields(fields) else {
+                summary.skipped += 1;
+                continue;
+            };
+            if cache.restore_if_absent(entry) {
+                summary.loaded += 1;
+            } else {
+                summary.already_present += 1;
+            }
+        }
+        Ok(summary)
     }
 
     pub async fn persist(&mut self, plan: &ContentPersistencePlan) -> Result<PersistenceSummary> {
@@ -366,8 +483,9 @@ impl PostgresContentStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContentPersistencePlan, ContentUpsertParams, PostgresContentStore, CONTENT_UPSERT_SQL,
-        PROVIDER_CACHE_UPSERT_SQL,
+        provider_cache_entry_from_fields, ContentPersistencePlan, ContentUpsertParams,
+        PersistedProviderCacheFields, PostgresContentStore, CONTENT_UPSERT_SQL,
+        PROVIDER_CACHE_HYDRATE_SQL, PROVIDER_CACHE_UPSERT_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -377,6 +495,101 @@ mod tests {
         ProviderSyncFailure, StackSyncFailure,
     };
     use serde_json::json;
+
+    #[test]
+    fn reconstructs_persisted_cache_identity_and_retains_failure_metadata() {
+        let entry = provider_cache_entry_from_fields(PersistedProviderCacheFields {
+            content_type: "movie".to_owned(),
+            external_id_type: Some("tmdb".to_owned()),
+            external_id: Some("603".to_owned()),
+            title: "The Matrix".to_owned(),
+            year: Some(1999),
+            provider: "tmdb".to_owned(),
+            provider_id: "603".to_owned(),
+            payload: serde_json::Value::Null,
+            fetched_at_epoch: 100,
+            expires_at_epoch: Some(200),
+            http_status: Some(503),
+            error: Some("tmdb returned HTTP 503".to_owned()),
+        })
+        .unwrap();
+
+        assert_eq!(entry.key.content_id, "movie:tmdb:603");
+        assert_eq!(entry.payload, None);
+        assert_eq!(entry.fetched_at, Some(100));
+        assert_eq!(entry.expires_at, Some(200));
+        assert_eq!(entry.attempted_at, 100);
+        assert_eq!(entry.http_status, Some(503));
+        assert_eq!(entry.error.as_deref(), Some("tmdb returned HTTP 503"));
+    }
+
+    #[test]
+    fn reconstructs_title_year_identity_when_external_ids_are_missing() {
+        let entry = provider_cache_entry_from_fields(PersistedProviderCacheFields {
+            content_type: "series".to_owned(),
+            external_id_type: None,
+            external_id: None,
+            title: "Fixture Series".to_owned(),
+            year: Some(2024),
+            provider: "omdb".to_owned(),
+            provider_id: "title:fixture-series:2024".to_owned(),
+            payload: serde_json::json!({"Response": "True"}),
+            fetched_at_epoch: 100,
+            expires_at_epoch: None,
+            http_status: Some(200),
+            error: None,
+        })
+        .unwrap();
+
+        assert_eq!(entry.key.content_id, "series:title:fixture-series:2024");
+        assert_eq!(entry.payload, Some(serde_json::json!({"Response": "True"})));
+        assert_eq!(entry.expires_at, None);
+    }
+
+    #[test]
+    fn restores_persisted_entries_without_overwriting_current_poll_data() {
+        let key = crate::enrichment::ProviderCacheKey::new("tmdb", "603", "movie:tmdb:603");
+        let mut cache = MetadataCache::default();
+        cache.restore(ProviderCacheEntry {
+            key: key.clone(),
+            payload: Some(json!({"revision": "current"})),
+            fetched_at: Some(300),
+            expires_at: Some(400),
+            attempted_at: 300,
+            http_status: Some(200),
+            error: None,
+        });
+
+        let restored = cache.restore_if_absent(ProviderCacheEntry {
+            key,
+            payload: Some(json!({"revision": "persisted"})),
+            fetched_at: Some(100),
+            expires_at: Some(200),
+            attempted_at: 100,
+            http_status: Some(200),
+            error: None,
+        });
+
+        assert!(!restored);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.entries().next().unwrap().payload, Some(json!({"revision": "current"})));
+    }
+
+    #[test]
+    fn exposes_joined_cache_hydration_sql() {
+        for fragment in [
+            "FROM content_provider_cache AS cache",
+            "JOIN content ON content.id = cache.content_id",
+            "content.external_id_type",
+            "EXTRACT(EPOCH FROM cache.fetched_at)",
+            "ORDER BY cache.id",
+        ] {
+            assert!(
+                PROVIDER_CACHE_HYDRATE_SQL.contains(fragment),
+                "missing {fragment:?}"
+            );
+        }
+    }
 
     #[test]
     fn validates_database_url_without_opening_a_connection() {
