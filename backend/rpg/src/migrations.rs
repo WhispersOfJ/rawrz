@@ -1,10 +1,23 @@
 pub const INITIAL_CONTENT_PROVIDER_CACHE_VERSION: &str = "0001_content_provider_cache";
 pub const INITIAL_CONTENT_PROVIDER_CACHE: &str =
     include_str!("../migrations/0001_content_provider_cache.sql");
+pub const SYNC_STATE_VERSION: &str = "0002_sync_state";
+pub const SYNC_STATE_MIGRATION: &str = include_str!("../migrations/0002_sync_state.sql");
+
+pub const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        INITIAL_CONTENT_PROVIDER_CACHE_VERSION,
+        INITIAL_CONTENT_PROVIDER_CACHE,
+    ),
+    (SYNC_STATE_VERSION, SYNC_STATE_MIGRATION),
+];
 
 #[cfg(test)]
 mod tests {
-    use super::INITIAL_CONTENT_PROVIDER_CACHE as SQL;
+    use super::{
+        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SYNC_STATE_MIGRATION,
+        SYNC_STATE_VERSION,
+    };
 
     fn statement_containing(fragment: &str) -> &str {
         SQL.split(';')
@@ -25,6 +38,16 @@ mod tests {
             "0001_content_provider_cache"
         );
         assert!(!SQL.trim().is_empty());
+    }
+
+    #[test]
+    fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
+        assert_eq!(MIGRATIONS.len(), 2);
+        assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
+        assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
+        assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0);
+        assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
+        assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
 
     #[test]

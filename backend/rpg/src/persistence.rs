@@ -1,7 +1,5 @@
 use crate::enrichment::{MetadataCache, ProviderCacheEntry};
-use crate::migrations::{
-    INITIAL_CONTENT_PROVIDER_CACHE, INITIAL_CONTENT_PROVIDER_CACHE_VERSION,
-};
+use crate::migrations::MIGRATIONS;
 use crate::sync::{
     ContentIdentityKey, ContentSyncGroup, ContentSyncRecord, EnrichedSyncOutcome,
     ProviderSyncFailure, StackSyncFailure,
@@ -24,17 +22,10 @@ pub const MIGRATION_LOOKUP_SQL: &str =
 pub const MIGRATION_RECORD_SQL: &str =
     "INSERT INTO schema_migrations (version) VALUES ($1)";
 
-fn migration_summary(already_applied: bool) -> MigrationSummary {
-    if already_applied {
-        MigrationSummary {
-            applied: 0,
-            already_applied: 1,
-        }
-    } else {
-        MigrationSummary {
-            applied: 1,
-            already_applied: 0,
-        }
+fn migration_summary(applied: usize, already_applied: usize) -> MigrationSummary {
+    MigrationSummary {
+        applied,
+        already_applied,
     }
 }
 
@@ -417,22 +408,27 @@ impl PostgresContentStore {
     pub async fn migrate(&mut self) -> Result<MigrationSummary> {
         let transaction = self.client.transaction().await?;
         transaction.batch_execute(SCHEMA_MIGRATIONS_SQL).await?;
-        let version = INITIAL_CONTENT_PROVIDER_CACHE_VERSION;
-        if transaction
-            .query_opt(MIGRATION_LOOKUP_SQL, &[&version])
-            .await?
-            .is_some()
-        {
-            transaction.commit().await?;
-            return Ok(migration_summary(true));
+        let mut applied = 0;
+        let mut already_applied = 0;
+
+        for &(version, sql) in MIGRATIONS {
+            if transaction
+                .query_opt(MIGRATION_LOOKUP_SQL, &[&version])
+                .await?
+                .is_some()
+            {
+                already_applied += 1;
+                continue;
+            }
+            transaction.batch_execute(sql).await?;
+            transaction
+                .execute(MIGRATION_RECORD_SQL, &[&version])
+                .await?;
+            applied += 1;
         }
 
-        transaction.batch_execute(INITIAL_CONTENT_PROVIDER_CACHE).await?;
-        transaction
-            .execute(MIGRATION_RECORD_SQL, &[&version])
-            .await?;
         transaction.commit().await?;
-        Ok(migration_summary(false))
+        Ok(migration_summary(applied, already_applied))
     }
 
     pub async fn hydrate_cache(
@@ -547,6 +543,7 @@ mod tests {
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
     };
+    use crate::migrations::MIGRATIONS;
     use crate::sync::{
         ContentSource, ContentSyncBatch, ContentSyncRecord, EnrichedSyncOutcome,
         ProviderSyncFailure, StackSyncFailure,
@@ -558,22 +555,19 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert!(
-            crate::migrations::INITIAL_CONTENT_PROVIDER_CACHE
-                .find("CREATE TABLE content (")
-                < crate::migrations::INITIAL_CONTENT_PROVIDER_CACHE
-                    .find("CREATE TABLE content_provider_cache (")
-        );
+        assert_eq!(MIGRATIONS.len(), 2);
+        assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
+        assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
 
         assert_eq!(
-            migration_summary(true),
+            migration_summary(0, 1),
             MigrationSummary {
                 applied: 0,
                 already_applied: 1,
             }
         );
         assert_eq!(
-            migration_summary(false),
+            migration_summary(1, 0),
             MigrationSummary {
                 applied: 1,
                 already_applied: 0,
