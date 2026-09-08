@@ -252,6 +252,16 @@ impl ContentSyncRecord {
         } else {
             None
         };
+        let mut metadata = series.raw.clone();
+        if let Some(id) = series.id {
+            metadata.insert("id".to_owned(), json!(id));
+        }
+        if let Some(tmdb_id) = series.tmdb_id {
+            metadata.insert("tmdbId".to_owned(), json!(tmdb_id));
+        }
+        if let Some(tvdb_id) = series.tvdb_id {
+            metadata.insert("tvdbId".to_owned(), json!(tvdb_id));
+        }
 
         Ok(Self {
             key: ContentUpsertKey::new(ContentSource::Sonarr, source_id),
@@ -276,7 +286,7 @@ impl ContentSyncRecord {
             section_title: None,
             genres: json_string_array(&series.raw, "genres"),
             sub_genres: Vec::new(),
-            metadata_blob: Value::Object(series.raw.clone()),
+            metadata_blob: Value::Object(metadata),
             provider_metadata: json!({}),
         })
     }
@@ -286,6 +296,16 @@ impl ContentSyncRecord {
         let title = required(movie.title.clone(), "title")?;
         let external_id = movie.tmdb_id.map(|value| value.to_string());
         let external_id_type = external_id.as_ref().map(|_| "tmdb".to_owned());
+        let mut metadata = movie.raw.clone();
+        if let Some(id) = movie.id {
+            metadata.insert("id".to_owned(), json!(id));
+        }
+        if let Some(tmdb_id) = movie.tmdb_id {
+            metadata.insert("tmdbId".to_owned(), json!(tmdb_id));
+        }
+        if let Some(imdb_id) = &movie.imdb_id {
+            metadata.insert("imdbId".to_owned(), json!(imdb_id));
+        }
 
         Ok(Self {
             key: ContentUpsertKey::new(ContentSource::Radarr, source_id),
@@ -310,7 +330,7 @@ impl ContentSyncRecord {
             section_title: None,
             genres: json_string_array(&movie.raw, "genres"),
             sub_genres: Vec::new(),
-            metadata_blob: Value::Object(movie.raw.clone()),
+            metadata_blob: Value::Object(metadata),
             provider_metadata: json!({}),
         })
     }
@@ -904,14 +924,145 @@ fn json_string_array(raw: &Map<String, Value>, key: &str) -> Vec<String> {
 mod tests {
     use super::{
         ContentIdentityKey, ContentSource, ContentSyncBatch, ContentSyncRecord, ContentType,
-        StackSyncOrchestrator,
+        StackSyncFailure, StackSyncOrchestrator, StackSyncOutcome,
     };
+    use crate::providers::{FanartClient, OmdbClient, TmdbClient, TvdbClient};
     use crate::stack::{
         PlexClient, PlexLibraryItem, RadarrClient, RadarrMovie, SonarrClient, SonarrSeries,
     };
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn enriches_stack_batch_with_provider_metadata() {
+        let (base_url, server) = provider_mock_server(false, 3).await;
+        let tmdb = TmdbClient::with_base_url(&base_url, "tmdb-key");
+        let tvdb = TvdbClient::with_base_url(&base_url, "tvdb-key");
+        let omdb = OmdbClient::with_base_url(&base_url, "omdb-key");
+        let fanart = FanartClient::with_base_url(&base_url, "fanart-key");
+        let movies: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let mut record = ContentSyncRecord::from_radarr(&movies[0]).unwrap();
+        record.external_id = Some("603".to_owned());
+        let batch = ContentSyncBatch::from_records([record]);
+        let outcome = StackSyncOutcome {
+            batch,
+            failures: Vec::new(),
+        };
+        let mut cache = crate::enrichment::MetadataCache::default();
+        let result = super::ProviderEnrichmentOrchestrator::new(
+            &tmdb,
+            &tvdb,
+            &omdb,
+            &fanart,
+            &mut cache,
+            3600,
+            std::collections::BTreeMap::from([(
+                "dream".to_owned(),
+                "Science Fiction".to_owned(),
+            )]),
+        )
+        .enrich(outcome, 100)
+        .await;
+
+        assert!(result.stack_failures.is_empty());
+        assert!(result.provider_failures.is_empty());
+        let group = result.batch.groups().next().unwrap();
+        let record = group.records.values().next().unwrap();
+        assert_eq!(record.external_id.as_deref(), Some("603"));
+        assert_eq!(record.rating_source.as_deref(), Some("tmdb"));
+        assert!(record.genres.iter().any(|genre| genre == "Science Fiction"));
+        assert_eq!(record.sub_genres, vec!["dream"]);
+        assert_eq!(record.poster_url.as_deref(), Some("https://assets.example/poster.jpg"));
+        assert_eq!(cache.len(), 3);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_failure_preserves_stack_batch_and_records_failure() {
+        let (base_url, server) = provider_mock_server(true, 5).await;
+        let tmdb = TmdbClient::with_base_url(&base_url, "tmdb-key");
+        let tvdb = TvdbClient::with_base_url(&base_url, "tvdb-key");
+        let omdb = OmdbClient::with_base_url(&base_url, "omdb-key");
+        let fanart = FanartClient::with_base_url(&base_url, "fanart-key");
+        let movies: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let mut record = ContentSyncRecord::from_radarr(&movies[0]).unwrap();
+        record.external_id = Some("603".to_owned());
+        let identity = record.identity_key();
+        let mut cache = crate::enrichment::MetadataCache::default();
+        let result = super::ProviderEnrichmentOrchestrator::new(
+            &tmdb,
+            &tvdb,
+            &omdb,
+            &fanart,
+            &mut cache,
+            3600,
+            std::collections::BTreeMap::new(),
+        )
+        .enrich(
+            StackSyncOutcome {
+                batch: ContentSyncBatch::from_records([record]),
+                failures: vec![StackSyncFailure {
+                    source: ContentSource::Plex,
+                    operation: "fixture".to_owned(),
+                    error: "prior stack warning".to_owned(),
+                }],
+            },
+            100,
+        )
+        .await;
+
+        assert_eq!(result.stack_failures.len(), 1);
+        assert!(result.provider_failures.iter().any(|failure| {
+            failure.identity == identity
+                && failure.failure.provider == "tmdb"
+                && failure.failure.http_status == Some(503)
+        }));
+        assert!(result.batch.groups().next().unwrap().records.len() == 1);
+        assert!(result.batch.groups().next().unwrap().records.values().next().unwrap().provider_metadata.is_object());
+        server.await.unwrap();
+    }
+
+    async fn provider_mock_server(
+        tmdb_failure: bool,
+        expected_requests: usize,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 8192];
+                let bytes_read = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                let (status, body) = if request.contains("/movie/603") {
+                    if tmdb_failure {
+                        (503, "temporary")
+                    } else {
+                        (200, include_str!("../fixtures/tmdb_movie.json"))
+                    }
+                } else if request.contains("/movies/603") {
+                    (200, include_str!("../fixtures/fanart_movie.json"))
+                } else if request.contains("/api/v3") || request.contains("/?") {
+                    (200, include_str!("../fixtures/omdb_movie.json"))
+                } else {
+                    (404, "not found")
+                };
+                let reason = if status == 200 { "OK" } else { "Error" };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    reason,
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{}", address), server)
+    }
 
     #[tokio::test]
     async fn orchestrates_healthy_stack_sources_into_a_batch() {
@@ -1068,6 +1219,8 @@ mod tests {
         assert_eq!(series_record.external_id_type.as_deref(), Some("tmdb"));
         assert_eq!(series_record.content_type, ContentType::Series);
         assert_eq!(series_record.metadata_blob["status"], json!("continuing"));
+        assert_eq!(series_record.metadata_blob["tvdbId"], json!(67890));
+        assert_eq!(series_record.metadata_blob["tmdbId"], json!(12345));
 
         let movies: Vec<RadarrMovie> =
             serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
@@ -1077,6 +1230,7 @@ mod tests {
         assert_eq!(movie_record.external_id.as_deref(), Some("591275"));
         assert_eq!(movie_record.external_id_type.as_deref(), Some("tmdb"));
         assert_eq!(movie_record.content_type, ContentType::Movie);
+        assert_eq!(movie_record.metadata_blob["imdbId"], json!("tt1234567"));
         assert_eq!(movie_record.rating, Some(7.5));
         assert_eq!(movie_record.rating_source.as_deref(), Some("radarr_tmdb"));
     }
