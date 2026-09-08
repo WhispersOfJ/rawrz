@@ -72,6 +72,11 @@ impl MetadataCache {
         self.entries.values()
     }
 
+    /// Restore a persisted cache entry when rebuilding the in-memory cache at startup.
+    pub fn restore(&mut self, entry: ProviderCacheEntry) {
+        self.entries.insert(entry.key.clone(), entry);
+    }
+
     fn fresh(&self, key: &ProviderCacheKey, now: u64) -> Option<ProviderCacheEntry> {
         let entry = self.entries.get(key)?;
         let expires_at = entry.expires_at?;
