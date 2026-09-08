@@ -1,3 +1,4 @@
+use crate::normalization::NormalizedMetadata;
 use crate::stack::{PlexLibraryItem, RadarrMovie, SonarrSeries};
 use crate::{ProbeError, Result};
 use serde::Serialize;
@@ -76,6 +77,7 @@ pub struct ContentSyncRecord {
     pub section_key: Option<String>,
     pub section_title: Option<String>,
     pub genres: Vec<String>,
+    pub sub_genres: Vec<String>,
     pub metadata_blob: Value,
     pub provider_metadata: Value,
 }
@@ -154,6 +156,7 @@ impl ContentSyncRecord {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             genres: item.genres.clone(),
+            sub_genres: Vec::new(),
             metadata_blob: Value::Object(attrs),
             provider_metadata: json!({}),
         })
@@ -196,6 +199,7 @@ impl ContentSyncRecord {
             section_key: None,
             section_title: None,
             genres: json_string_array(&series.raw, "genres"),
+            sub_genres: Vec::new(),
             metadata_blob: Value::Object(series.raw.clone()),
             provider_metadata: json!({}),
         })
@@ -229,9 +233,44 @@ impl ContentSyncRecord {
             section_key: None,
             section_title: None,
             genres: json_string_array(&movie.raw, "genres"),
+            sub_genres: Vec::new(),
             metadata_blob: Value::Object(movie.raw.clone()),
             provider_metadata: json!({}),
         })
+    }
+
+    pub fn attach_normalized_metadata(&mut self, metadata: &NormalizedMetadata) -> Result<()> {
+        if let Some(tmdb_id) = metadata.tmdb_id {
+            self.external_id = Some(tmdb_id.to_string());
+            self.external_id_type = Some("tmdb".to_owned());
+        } else if self.external_id.is_none() {
+            if let Some(tvdb_id) = metadata.tvdb_id {
+                self.external_id = Some(tvdb_id.to_string());
+                self.external_id_type = Some("tvdb".to_owned());
+            }
+        }
+
+        if !metadata.genres.is_empty() {
+            self.genres = tag_names(&metadata.genres);
+        }
+        self.sub_genres = tag_names(&metadata.sub_genres);
+
+        if let Some(score) = &metadata.featured_score {
+            self.rating = Some(score.value);
+            self.rating_source = Some(score.provider.clone());
+        }
+
+        if let Some(url) = artwork_url(&metadata.artwork, |kind| kind.contains("poster")) {
+            self.poster_url = Some(url);
+        }
+        if let Some(url) = artwork_url(&metadata.artwork, |kind| {
+            kind.contains("background") || kind.contains("backdrop") || kind.contains("fanart")
+        }) {
+            self.fanart_url = Some(url);
+        }
+
+        self.provider_metadata = serde_json::to_value(metadata)?;
+        Ok(())
     }
 
     pub fn deduplicate(records: impl IntoIterator<Item = Self>) -> BTreeMap<ContentUpsertKey, Self> {
@@ -240,6 +279,23 @@ impl ContentSyncRecord {
             .map(|record| (record.key.clone(), record))
             .collect()
     }
+}
+
+fn tag_names(tags: &[crate::normalization::NormalizedTag]) -> Vec<String> {
+    let mut names = tags.iter().map(|tag| tag.name.clone()).collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn artwork_url(
+    artwork: &[crate::normalization::Artwork],
+    matches_kind: impl Fn(&str) -> bool,
+) -> Option<String> {
+    artwork
+        .iter()
+        .find(|image| matches_kind(&image.kind))
+        .map(|image| image.url.clone())
 }
 
 fn required<T>(value: Option<T>, field: &str) -> Result<T> {
@@ -356,6 +412,61 @@ mod tests {
     }
 
     #[test]
+    fn attaches_normalized_provider_fields_for_gameplay_and_audit() {
+        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+            .unwrap();
+        let radarr: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let tmdb = crate::providers::parse_tmdb_details(include_str!("../fixtures/tmdb_movie.json"))
+            .unwrap();
+        let omdb = crate::providers::parse_omdb_response(include_str!("../fixtures/omdb_movie.json"))
+            .unwrap();
+        let fanart = crate::providers::parse_fanart_payload(
+            include_str!("../fixtures/fanart_movie.json"),
+        )
+        .unwrap();
+        let metadata = crate::normalization::NormalizedMetadata::from_sources(
+            Some(&plex[0]),
+            None,
+            Some(&radarr[0]),
+            Some(&tmdb),
+            Some(&omdb),
+            None,
+            Some(&fanart),
+            &std::collections::BTreeMap::from([(
+                "dream".to_owned(),
+                "Science Fiction".to_owned(),
+            )]),
+        );
+        let mut record = ContentSyncRecord::from_radarr(&radarr[0]).unwrap();
+        record.attach_normalized_metadata(&metadata).unwrap();
+
+        assert_eq!(record.external_id.as_deref(), Some("603"));
+        assert_eq!(record.external_id_type.as_deref(), Some("tmdb"));
+        assert_eq!(
+            record.genres,
+            vec![
+                "Action",
+                "Drama",
+                "Horror",
+                "Mystery",
+                "Science Fiction"
+            ]
+        );
+        assert_eq!(record.sub_genres, vec!["dream"]);
+        assert_eq!(record.rating, Some(8.2));
+        assert_eq!(record.rating_source.as_deref(), Some("tmdb"));
+        assert_eq!(record.poster_url.as_deref(), Some("https://assets.example/poster.jpg"));
+        assert_eq!(record.fanart_url.as_deref(), Some("https://assets.example/background.jpg"));
+        assert_eq!(record.provider_metadata["tmdb_id"], json!(603));
+        assert!(record.provider_metadata["provenance"]["dream"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "tmdb"));
+    }
+
+    #[test]
     fn deduplicates_by_source_and_source_id_without_collapsing_cross_source_rows() {
         let records = vec![
             ContentSyncRecord {
@@ -380,6 +491,7 @@ mod tests {
                 section_key: None,
                 section_title: None,
                 genres: Vec::new(),
+                sub_genres: Vec::new(),
                 metadata_blob: json!({"revision": 1}),
                 provider_metadata: json!({}),
             },
@@ -405,6 +517,7 @@ mod tests {
                 section_key: None,
                 section_title: None,
                 genres: Vec::new(),
+                sub_genres: Vec::new(),
                 metadata_blob: json!({"revision": 2}),
                 provider_metadata: json!({}),
             },
@@ -430,6 +543,7 @@ mod tests {
                 section_key: None,
                 section_title: None,
                 genres: Vec::new(),
+                sub_genres: Vec::new(),
                 metadata_blob: json!({}),
                 provider_metadata: json!({}),
             },
