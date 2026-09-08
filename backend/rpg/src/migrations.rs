@@ -11,6 +11,8 @@ pub const GENRES_MIGRATION: &str = include_str!("../migrations/0004_genres.sql")
 pub const CHARACTER_STATE_VERSION: &str = "0005_character_state";
 pub const CHARACTER_STATE_MIGRATION: &str =
     include_str!("../migrations/0005_character_state.sql");
+pub const SETTINGS_VERSION: &str = "0006_settings";
+pub const SETTINGS_MIGRATION: &str = include_str!("../migrations/0006_settings.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -24,13 +26,15 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ),
     (GENRES_VERSION, GENRES_MIGRATION),
     (CHARACTER_STATE_VERSION, CHARACTER_STATE_MIGRATION),
+    (SETTINGS_VERSION, SETTINGS_MIGRATION),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::{
         ACCOUNTS_CHARACTERS_MIGRATION, CHARACTER_STATE_MIGRATION, GENRES_MIGRATION,
-        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
+        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
+        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -56,14 +60,16 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 5);
+        assert_eq!(MIGRATIONS.len(), 6);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
         assert_eq!(MIGRATIONS[3].0, super::GENRES_VERSION);
         assert_eq!(MIGRATIONS[4].0, super::CHARACTER_STATE_VERSION);
+        assert_eq!(MIGRATIONS[5].0, super::SETTINGS_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
+        assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -231,6 +237,23 @@ mod tests {
             assert!(
                 contains_sql(statement, field),
                 "character_state table is missing {field:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn creates_settings_key_value_table_for_character_scoped_config() {
+        let statement =
+            statement_containing(SETTINGS_MIGRATION, "CREATE TABLE settings (");
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "key text NOT NULL",
+            "value text NOT NULL",
+            "PRIMARY KEY (character_id, key)",
+        ] {
+            assert!(
+                contains_sql(statement, field),
+                "settings table is missing {field:?}"
             );
         }
     }

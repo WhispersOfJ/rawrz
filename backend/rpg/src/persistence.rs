@@ -29,6 +29,52 @@ fn migration_summary(applied: usize, already_applied: usize) -> MigrationSummary
     }
 }
 
+fn bootstrap_summary(
+    character_state_seeded: usize,
+    genre_access_seeded: usize,
+    settings_seeded: usize,
+) -> BootstrapSummary {
+    BootstrapSummary {
+        character_state_seeded,
+        genre_access_seeded,
+        settings_seeded,
+    }
+}
+
+/// Shared seeding body used by both the standalone bootstrap and the
+/// set-PIN flow (spec §6.4.11): seeds the singleton `character_state` row,
+/// the opening-genre `genre_access` row, and any missing `settings` V1
+/// defaults for `character_id`. Every insert is idempotent.
+async fn seed_rows_for(
+    transaction: &tokio_postgres::Transaction<'_>,
+    character_id: i64,
+) -> Result<BootstrapSummary> {
+    let character_state_seeded = transaction
+        .execute(CHARACTER_STATE_SEED_SQL, &[&character_id])
+        .await?;
+    let genre_access_seeded = transaction
+        .execute(GENRE_ACCESS_SEED_SQL, &[&character_id])
+        .await?;
+
+    let keys: Vec<&str> = SETTINGS_V1_DEFAULTS
+        .iter()
+        .map(|(key, _)| *key)
+        .collect();
+    let values: Vec<&str> = SETTINGS_V1_DEFAULTS
+        .iter()
+        .map(|(_, value)| *value)
+        .collect();
+    let settings_seeded = transaction
+        .execute(SETTINGS_SEED_SQL, &[&character_id, &keys, &values])
+        .await?;
+
+    Ok(bootstrap_summary(
+        character_state_seeded as usize,
+        genre_access_seeded as usize,
+        settings_seeded as usize,
+    ))
+}
+
 pub const CONTENT_UPSERT_SQL: &str = r#"
 INSERT INTO content (
   source, source_id, external_id, external_id_type, title, year, content_type,
@@ -115,6 +161,57 @@ SELECT
 FROM content_provider_cache AS cache
 JOIN content ON content.id = cache.content_id
 ORDER BY cache.id;
+"#;
+
+// Character-creation bootstrap (spec §6.4.11): V1 is a single account with a
+// single investigator, so bootstrap resolves that character by account. All
+// inserts are idempotent so re-running bootstrap is a no-op. The PIN-set flow
+// calls this after account creation; with no account row, bootstrap is a
+// no-op (§16 probe: Postgres not yet provisioned on the host).
+pub const SINGLE_CHARACTER_ID_SQL: &str = r#"
+SELECT characters.id
+FROM characters
+JOIN accounts ON accounts.id = characters.account_id
+ORDER BY characters.id
+LIMIT 1
+"#;
+
+pub const CHARACTER_STATE_SEED_SQL: &str = r#"
+INSERT INTO character_state (character_id)
+VALUES ($1)
+ON CONFLICT (character_id) DO NOTHING
+"#;
+
+pub const GENRE_ACCESS_SEED_SQL: &str = r#"
+INSERT INTO genre_access (character_id, genre_id)
+SELECT $1, genres.id
+FROM genres
+WHERE genres.is_opening
+ON CONFLICT (character_id, genre_id) DO NOTHING
+"#;pub const SETTINGS_SEED_SQL: &str = r#"
+INSERT INTO settings (character_id, key, value)
+SELECT $1, key, value
+FROM unnest($2::text[], $3::text[]) AS seed(key, value)
+WHERE NOT EXISTS (
+  SELECT 1 FROM settings
+  WHERE settings.character_id = $1 AND settings.key = seed.key
+)
+"#;
+
+// PIN gate account flows (spec §6.4.1 / §7.3): set-PIN creates the single
+// account exactly once; verify reads the single account's PHC pin_hash.
+pub const ACCOUNT_EXISTS_SQL: &str = "SELECT EXISTS (SELECT 1 FROM accounts)";
+
+pub const ACCOUNT_INSERT_SQL: &str = r#"
+INSERT INTO accounts (pin_hash, pin_salts)
+VALUES ($1, $2)
+RETURNING id
+"#;
+
+pub const SINGLE_ACCOUNT_PIN_SQL: &str = r#"
+SELECT pin_hash FROM accounts
+ORDER BY id
+LIMIT 1
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -386,6 +483,36 @@ pub struct PostgresContentStore {
     client: Client,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BootstrapSummary {
+    pub character_state_seeded: usize,
+    pub genre_access_seeded: usize,
+    pub settings_seeded: usize,
+}
+
+/// V1 settings defaults (§6.4.10), verbatim. Missing keys are seeded at
+/// character-creation bootstrap; existing values are never overwritten.
+pub const SETTINGS_V1_DEFAULTS: &[(&str, &str)] = &[
+    ("near_end_threshold_pct", "95"),
+    ("new_arrival_window_hours", "48"),
+    ("poll_interval_seconds", "300"),
+    ("provider_cache_ttl_seconds", "86400"),
+    ("provider_max_concurrency", "2"),
+    (
+        "genre_list_order",
+        "[\"Horror\",\"Thriller\",\"Mystery\",\"Sci-Fi\",\"Fantasy\",\"Documentary\",\"Comedy\",\"Drama\",\"Romance\",\"Animation\"]",
+    ),
+    ("sub_genre_purchase_xp_threshold", "100"),
+    (
+        "holiday_windows",
+        "[{\"name\":\"halloween\",\"start\":\"10-01\",\"end\":\"10-31\",\"genres\":[\"Horror\"],\"multiplier\":1.5},{\"name\":\"winter_holiday\",\"start\":\"12-01\",\"end\":\"12-31\",\"genres\":[\"Comedy\",\"Drama\"],\"multiplier\":1.5}]",
+    ),
+    ("perks_unlocked", "[]"),
+    ("daily_budget_enabled", "false"),
+    ("daily_budget_actions", "3"),
+    ("featured_selection_mode", "all_time_ranking"),
+    ("fame_enabled", "false"),
+];
 impl PostgresContentStore {
     pub fn validate_database_url(database_url: &str) -> Result<()> {
         if database_url.trim().is_empty() {
@@ -429,6 +556,28 @@ impl PostgresContentStore {
 
         transaction.commit().await?;
         Ok(migration_summary(applied, already_applied))
+    }
+
+    /// Character-creation bootstrap (§6.4.11): seeds the singleton
+    /// `character_state` row, the opening-genre `genre_access` row, and any
+    /// missing V1 `settings` defaults for the account's single character —
+    /// all in one transaction, idempotently. A no-op when no account exists
+    /// yet (the PIN-set flow calls this after account creation).
+    pub async fn bootstrap_single_character(&mut self) -> Result<BootstrapSummary> {
+        let transaction = self.client.transaction().await?;
+
+        let Some(character_id) = transaction
+            .query_opt(SINGLE_CHARACTER_ID_SQL, &[])
+            .await?
+            .map(|row| row.get::<_, i64>(0))
+        else {
+            transaction.rollback().await?;
+            return Ok(bootstrap_summary(0, 0, 0));
+        };
+
+        let summary = seed_rows_for(&transaction, character_id).await?;
+        transaction.commit().await?;
+        Ok(summary)
     }
 
     pub async fn hydrate_cache(
@@ -535,10 +684,13 @@ impl PostgresContentStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        migration_summary, provider_cache_entry_from_fields, ContentPersistencePlan,
-        ContentUpsertParams, MigrationSummary, PersistedProviderCacheFields,
-        PostgresContentStore, CONTENT_UPSERT_SQL, MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL,
-        PROVIDER_CACHE_HYDRATE_SQL, PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL,
+        bootstrap_summary, migration_summary, provider_cache_entry_from_fields,
+        BootstrapSummary, ContentPersistencePlan, ContentUpsertParams, MigrationSummary,
+        PersistedProviderCacheFields, PostgresContentStore, SETTINGS_V1_DEFAULTS,
+        CHARACTER_STATE_SEED_SQL, CONTENT_UPSERT_SQL, GENRE_ACCESS_SEED_SQL,
+        MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL, PROVIDER_CACHE_HYDRATE_SQL,
+        PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
+        SINGLE_CHARACTER_ID_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -555,12 +707,13 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 5);
+        assert_eq!(MIGRATIONS.len(), 6);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
         assert_eq!(MIGRATIONS[3].0, "0004_genres");
         assert_eq!(MIGRATIONS[4].0, "0005_character_state");
+        assert_eq!(MIGRATIONS[5].0, "0006_settings");
 
         assert_eq!(
             migration_summary(0, 1),
@@ -574,6 +727,90 @@ mod tests {
             MigrationSummary {
                 applied: 1,
                 already_applied: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn settings_defaults_cover_the_spec_v1_surface() {
+        let defaults: std::collections::BTreeMap<&str, &str> = SETTINGS_V1_DEFAULTS
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(defaults.len(), SETTINGS_V1_DEFAULTS.len(), "duplicate setting keys");
+
+        for (key, value) in [
+            ("near_end_threshold_pct", "95"),
+            ("new_arrival_window_hours", "48"),
+            ("poll_interval_seconds", "300"),
+            ("provider_cache_ttl_seconds", "86400"),
+            ("provider_max_concurrency", "2"),
+            ("sub_genre_purchase_xp_threshold", "100"),
+            ("perks_unlocked", "[]"),
+            ("daily_budget_enabled", "false"),
+            ("daily_budget_actions", "3"),
+            ("featured_selection_mode", "all_time_ranking"),
+            ("fame_enabled", "false"),
+        ] {
+            assert_eq!(
+                defaults.get(key).copied(),
+                Some(value),
+                "setting {key:?} has the wrong V1 default"
+            );
+        }
+
+        // genre_list_order mirrors the finalized §5.2 cascade seeded by 0004.
+        let genre_list: Vec<String> = serde_json::from_str(defaults["genre_list_order"])
+            .expect("genre_list_order must be a JSON array");
+        assert_eq!(genre_list.len(), 10);
+        assert_eq!(genre_list[0], "Horror");
+        assert_eq!(genre_list[9], "Animation");
+
+        // holiday_windows: Halloween (Horror) + winter (Comedy, Drama) starters.
+        let windows: Vec<serde_json::Value> =
+            serde_json::from_str(defaults["holiday_windows"]).expect("holiday_windows must be JSON");
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0]["name"], "halloween");
+        assert_eq!(windows[0]["multiplier"], 1.5);
+        assert_eq!(windows[1]["genres"], serde_json::json!(["Comedy", "Drama"]));
+    }
+
+    #[test]
+    fn bootstrap_statements_resolve_the_single_character_and_seed_idempotently() {
+        assert!(SINGLE_CHARACTER_ID_SQL.contains("JOIN accounts ON accounts.id = characters.account_id"));
+        assert!(SINGLE_CHARACTER_ID_SQL.contains("ORDER BY characters.id"));
+        assert!(SINGLE_CHARACTER_ID_SQL.contains("LIMIT 1"));
+
+        assert!(CHARACTER_STATE_SEED_SQL.contains("INSERT INTO character_state (character_id)"));
+        assert!(CHARACTER_STATE_SEED_SQL.contains("ON CONFLICT (character_id) DO NOTHING"));
+
+        assert!(GENRE_ACCESS_SEED_SQL.contains("INSERT INTO genre_access (character_id, genre_id)"));
+        assert!(GENRE_ACCESS_SEED_SQL.contains("FROM genres"));
+        assert!(GENRE_ACCESS_SEED_SQL.contains("WHERE genres.is_opening"));
+        assert!(GENRE_ACCESS_SEED_SQL.contains("ON CONFLICT (character_id, genre_id) DO NOTHING"));
+
+        assert!(SETTINGS_SEED_SQL.contains("INSERT INTO settings (character_id, key, value)"));
+        assert!(SETTINGS_SEED_SQL.contains("FROM unnest($2::text[], $3::text[]) AS seed(key, value)"));
+        assert!(SETTINGS_SEED_SQL.contains("WHERE NOT EXISTS ("));
+        assert!(SETTINGS_SEED_SQL.contains("settings.character_id = $1 AND settings.key = seed.key"));
+    }
+
+    #[test]
+    fn bootstrap_summary_counts_seed_rows() {
+        assert_eq!(
+            bootstrap_summary(1, 1, 13),
+            BootstrapSummary {
+                character_state_seeded: 1,
+                genre_access_seeded: 1,
+                settings_seeded: 13,
+            }
+        );
+        assert_eq!(
+            bootstrap_summary(0, 0, 0),
+            BootstrapSummary {
+                character_state_seeded: 0,
+                genre_access_seeded: 0,
+                settings_seeded: 0,
             }
         );
     }
