@@ -5,19 +5,19 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmdbGenre {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmdbKeyword {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmdbDetails {
     pub id: i64,
     pub title: Option<String>,
@@ -36,7 +36,7 @@ pub struct TmdbDetails {
     pub raw: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TmdbKeywords {
     #[serde(default)]
     pub keywords: Vec<TmdbKeyword>,
@@ -54,7 +54,7 @@ impl TmdbDetails {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OmdbRating {
     #[serde(rename = "Source")]
     pub source: String,
@@ -62,7 +62,7 @@ pub struct OmdbRating {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OmdbResponse {
     #[serde(rename = "Title")]
     pub title: Option<String>,
@@ -93,14 +93,14 @@ impl OmdbResponse {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FanartImage {
     pub url: Option<String>,
     pub lang: Option<String>,
     pub likes: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FanartPayload {
     #[serde(flatten)]
     pub images: BTreeMap<String, Vec<FanartImage>>,
@@ -298,6 +298,18 @@ impl TvdbClient {
             api_key: api_key.into(),
             token: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn ensure_login(&self) -> Result<()> {
+        if self
+            .token
+            .lock()
+            .expect("TVDB token mutex poisoned")
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.login().await.map(|_| ())
     }
 
     pub async fn login(&self) -> Result<String> {

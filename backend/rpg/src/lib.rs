@@ -1,4 +1,5 @@
 pub mod config;
+pub mod enrichment;
 pub mod normalization;
 pub mod providers;
 pub mod stack;
