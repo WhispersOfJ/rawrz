@@ -1,0 +1,1079 @@
+# Movie / TV RPG — Specification
+
+> **Status:** Draft v1.0 — gathered from user interview; reviewed 2026-09-08. Open questions in §12 are all designated "decide during implementation" (none are pre-V1 blockers).
+> **Related:** The Bear Cave stack at `~/Cave` (8-service Usenet media stack: Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr). This RPG is *linked with* the stack but *not a part of it*.
+
+---
+
+## 1. Overview
+
+A web-based RPG where watching movies and TV shows is the core mechanic. Points are earned by watching content served from the Bear Cave stack (Plex + Sonarr + Radarr). The RPG uses a **detective / investigation** theme: watching content is your "investigation work," and progress unfolds through cases, evidence, and genre-based territory.
+
+**Relationship to the stack (explicit):**
+
+- **Linked with** the stack: reads Plex, Sonarr, and Radarr APIs over the LAN. Consumes the same `.env` secrets / API keys the stack uses.
+- **Not a part of** the stack: no new container in `docker-compose.yml`. Separate deployment, separate lifecycle. Does not join the `bearcave` network as a Compose service.
+- **Deployment model (decided):** Extend the existing Rust backend in `~/Cave/backend/`, adding a new crate alongside the existing (incomplete) stack-management crate. Same directory, loose coupling inside `backend/`. The backend serves the RPG web UI and logic.
+- **Database (decided):** PostgreSQL, introduced as a *shared metadata store* that the RPG uses but that can also serve other stack-adjacent tooling over time. Not a new container in compose, but a host-side or otherwise-available Postgres instance. Existing *arr services keep their SQLite.
+
+---
+
+## 2. Theme & Framing
+
+- **Genre:** Modern detective / investigation.
+- **Metaphor:** Watching = doing casework. Your character is an investigator whose "office" is the media stack.
+- **Tone:** Light, playful, personal — not gritty. Think "case log" and "evidence board," not "crime thriller."
+- **Positions watching as:**
+  - **Movies** = self-contained *cases* (one-off investigations).
+  - **TV shows** = *campaigns* / *series investigations* (multi-episode, ongoing).
+- **Newly arrived content** (from Sonarr/Radarr imports) is the engine of new casework — but the player *chooses* which cases to take on.
+
+---
+
+## 3. Core Loop
+
+1. **Something arrives** on the stack (Sonarr/Radarr import, or already-in-library content).
+2. **The RPG surfaces it as a case/assignment** the player can review (player-driven — you pick).
+3. **Player watches** the content via Plex (normal Plex playback; nothing special required).
+4. **Plex records the watch.** The RPG polls Plex (every few minutes) and picks up the completed watch.
+5. **Points/XP awarded** based on completion (episode, season, series) and any applicable bonuses.
+6. **Progression:** XP → level → unlocks (new genres/tools). Map/territory updates.
+7. **Repeat.**
+
+The app doesn't change how you watch. You keep using Plex as normal. The RPG reads behind the scenes.
+
+---
+
+## 4. Data Sources
+
+### 4.1 Plex (primary)
+
+**Why:** Plex has the authoritative playback record — what was watched, when, how much, sessions.
+
+**Endpoints used (Plex Media Server URL API, `X-Plex-Token` auth):**
+
+- `GET /library/sections` — discover library sections (Movies, Shows).
+- `GET /library/sections/{key}/all` — library items (movies and shows), with metadata.
+- `GET /library/sections/{key}/episodes` — TV episodes (for TV "campaign" tracking).
+- `GET /status/sessions` — active playback sessions (informational/optional).
+- `GET /library/sections/{key}/recentlyAdded` — recently added items.
+- `GET /library/sections/{key}/unwatched` — unwatched items (for case generation).
+- `GET /library/metadata/{ratingKey}/progress` or episode progress endpoints — watch Progress / percent viewed.
+- Playback state / watched state per item and per episode.
+
+**Auth:** `PLEX_TOKEN` from `.env` (same token the stack scripts use). `PLEX_URL` = `http://HOST_IP:32400`.
+
+**What Plex provides to the RPG:**
+
+- Watch events (item/episode marked as watched, watch progress).
+- Library contents (title, year, genres, rating, summary, TMDb/TVDb ids where available).
+- Section structure (Movies vs Shows distinction).
+- Recently added / unwatched lists (for case generation).
+
+### 4.2 Sonarr (TV)
+
+**Why:** TV-specific metadata and history that Plex may not fully expose — series/episode structure, import history (what was newly added), episode file state, statistics.
+
+**Endpoints used (Sonarr `/api/v3`, `X-Api-Key` auth):**
+
+- `GET /series?includeStatistics=true` — series list with stats.
+- `GET /series/{id}` — single series detail.
+- `GET /episode?seriesId={id}` — episodes for a series.
+- `GET /history?seriesId={id}&eventType=downloadFolderImported&pageSize=1` — recent import (arrival) events.
+- `GET /queue` — current queue (optional, informational).
+- Series/episode metadata: titles, season/episode numbers, status, genres, TMDb/TVDb IDs.
+
+**Auth:** `SONARR_API_KEY` from `.env`. `SONARR_URL` = `http://HOST_IP:8989`.
+
+### 4.3 Radarr (Movies)
+
+**Why:** Movie metadata and import history.
+
+**Endpoints used (Radarr `/api/v3`, `X-Api-Key` auth):**
+
+- `GET /movie?tmdbId={id}` or list movies — movie metadata.
+- `GET /history?movieId={id}&eventType=downloadFolderImported&pageSize=1` — recent import (arrival) events.
+- Movie metadata: title, year, genres, rating, TMDb ID, etc.
+
+**Auth:** `RADARR_API_KEY` from `.env`. `RADARR_URL` = `http://HOST_IP:7878`.
+
+### 4.4 Data flow decision
+
+- The RPG **reads** Plex/Sonarr/Radarr via their LAN APIs (polling; see §9).
+- The RPG stores what it learns in its **own Postgres schema** (see §6). This is a read-only mirror from the stack's perspective — the RPG never writes back to Plex/Sonarr/Radarr.
+- The stack's existing services are **not modified** to connect to Postgres by this spec. The "shared metadata store" framing means the RPG's Postgres *could* be reused by future stack-adjacent tooling, but V1 is RPG-only consumers of it.
+
+### 4.5 Metadata mirror — mirror everything (resolved §12 Q13)
+
+**Mirror from Plex / Sonarr / Radarr on each poll (incremental, keyed by IDs + last-sync markers): mirror everything the APIs expose, not a trimmed subset.** The RPG stores the full metadata it can get from Plex/Sonarr/Radarr — titles, year, TMDb/TVDb IDs, genres (including sub-genres where the source exposes them), ratings (MPAA/RR/score and any external rating reachable), run time, summaries/plots, poster paths/URLs, fanart/extra artwork where exposed, library section/key, release/air dates, status (continuing/ended), episode-level data (season/episode numbers, titles, air dates, runtimes, watched state per episode from Plex, file state from Sonarr), series/movie file metadata and MediaInfo blobs where the *arr APIs return them, credits/extras/indexer metadata where exposed, and any other fields the APIs provide.
+
+- **Sync keys:** use stable external IDs (TMDb for movies, TMDb/TVDb for series/episodes) plus Plex `ratingKey` where needed for watch-state. Incremental sync is keyed on these IDs + last-sync timestamps so a poll only fetches what changed.
+- **Watch state (authoritative source for completion):** Plex is the ground truth for watched/unwatched and watch progress. Sonarr/Radarr contribute import/arrival events and episode file state, not watch state. (This matches §5.1's completion-based model: the RPG awards points when Plex reports a near-complete watch.)
+- **Ratings source hierarchy (for featured-case ranking — see §5.4):** prefer **TMDb/TVDb** IDs as the stable key across Plex/Sonarr/Radarr, then enrich rating from the best available source per title (IMDb / TMDB vote average / TVDb rating / Rotten Tomatoes where reachable). **Which rating source for the "all-time ranking" featured case is a finalize-during-implementation detail** — the spec commits to "aggregate external rating (TMDb/IMDb/TVDb/Rotten Tomatoes as available) for ranking; pick primary source during implementation."
+
+**Why mirror everything:** the user wants the full picture available, and the library is brand new (small), so there's no scaling pressure to trim for V1. Storing the full mirror keeps options open for the UI (case board, character sheet, genre map, achievement context, sub-genre filtering for the unlock model §5.2/Q6, featured-case ranking §5.4/Q7) without a later "add back what we skipped" pass. The stack remains the source of truth; the RPG's Postgres is a read-only mirror.
+
+---
+
+## 5. RPG Mechanics
+
+### 5.1 Points & XP model — completion-based (concrete V1 values)
+
+**Core principle:** You earn points by *completing* watches, not merely by time elapsed. Partial watches yield little or nothing.
+
+**Completion trigger (resolved §12 Q4):** A watch counts as "completed" if Plex shows the episode/movie was played to **≥95%** of its duration. Below 95% = no completion credit. The threshold is **configurable** (RPG config value; 95% default). Implementation reads Plex watch-progress / viewed state per item and episode.
+
+**Granularity — concrete V1 values (resolved §12 Q5):**
+
+| Unit | Trigger | XP (V1 concrete) |
+|------|---------|--------|
+| Episode (TV) | Episode marked watched to ≥95% | **base episode XP = 10** |
+| Movie | Movie marked watched to ≥95% | **base movie XP = 20** (≈2× episode; reflects movie-length commitment) |
+| TV season | All episodes of one season watched (every episode in that season at ≥95%) | **season completion bonus = 10 × (number of episodes in that season)**. E.g. a 10-episode season → +100 XP on the final episode that completes the season. Awarded once per season, on the episode that completes it. |
+| TV series | All episodes across all seasons watched (every episode of every season at ≥95%) | **series completion bonus = season-completion-bonus style scaled up: 25 × (total episode count of the series)**. E.g. a 20-episode series → +500 XP when the last episode completes the series. Awarded once per series, on the episode that completes it. |
+| First-completion bonus | First time you complete a given movie or series (one-time) | **+10 XP** on the completion that is the first completion of that title (movie or series). One-time per title. E.g. first time you finish a series, the series-completion XP includes the normal series bonus plus this +10. |
+| New-arrival bonus | Complete a movie/episode within its **new-arrival window** (see below) after its Sonarr/Radarr import | **+5 XP** per qualifying completion. See new-arrival window definition below. |
+| Featured case bonus | Complete a featured case (any selection mode) | **+10 XP** per featured-case completion, on top of the normal episode/movie XP for that watch. |
+| Streak bonus | See §5.1.1 (concrete streak table) | escalating per-day streak bonus, paid at end of each day that extends the streak |
+| Genre variety bonus | Complete watches in multiple genres in the same real day (see §5.1.2) | small per-day breadth bonus, paid once per day |
+
+**New-arrival window (concrete):** a title is "new arrival" eligible for **48 hours** after its Sonarr/Radarr import (import timestamp from Sonarr/Radarr history). Within that 48h window, completing the title gives the +5 new-arrival bonus. The 48h window is **configurable** (RPG config; 48h default). The RPG detects the import via Sonarr/Radarr history polling (§9.1) and records the arrival timestamp in the content/case state; the bonus is awarded when a ≥95% completion is detected within the window.
+
+**Streak definition (concrete):** a **day-streak** = at least one completed watch (episode or movie, ≥95%) on each of N consecutive **real calendar days** (local date, based on the host's `TZ` from `.env`). A watch counts toward the day's streak if its completion is detected on that calendar day (i.e., the poll that detects it runs on that day). A day with no detected completion breaks the streak. (Episode-vs-movie, sub-genre, etc. don't matter for the streak — any completion counts.)
+
+**Point sinks / spending (future, V2):** Not for V1. V1 is earn-and-progress. No inventory/economy to spend points on yet. Mentioned for completeness.
+
+#### 5.1.1 Streak bonus table (concrete)
+
+| Streak length (consecutive days with ≥1 completion) | Streak bonus (paid once, when the streak reaches that length) |
+|---|---|
+| 2 days | +5 XP |
+| 3 days | +10 XP |
+| 5 days | +25 XP |
+| 7 days | +50 XP |
+| 10 days | +100 XP |
+| 14 days | +200 XP |
+| 21 days | +400 XP |
+| 30 days | +800 XP |
+| 60 days | +1600 XP |
+
+- Streak bonuses are **cumulative milestones**: each milestone in the table pays when the streak first reaches that length. E.g. reaching a 7-day streak pays +5 (2-day) +10 (3-day) +25 (5-day) +50 (7-day) = +90 XP total for the 7-day milestone event, awarded in one batch when the 7th day completes.
+- If the streak breaks (a day with no completion), all streak milestone progress resets; the next completion starts a new 1-day streak. No partial credit for a broken streak.
+- Streak bonus is **in addition to** the normal episode/movie XP for the watches that day — it's a bonus on top.
+
+#### 5.1.2 Genre variety bonus (concrete)
+
+- If, in a single real day, you complete watches in **3 or more different genres**, you earn a **genre variety bonus of +5 XP** for that day (paid once per day, at end of day / when the third-distinct-genre completion is detected).
+- If you complete watches in **5 or more different genres** in the same real day, the bonus is **+15 XP** for that day (replaces the +5; i.e. 3+ genres → +5, 5+ genres → +15).
+- "Different genres" = different parent genres (the genre bucket, not sub-genre). Sub-genre XP accumulation (§5.2) is separate from this variety bonus.
+- Variety bonus is **in addition to** normal XP + streak bonus (if any) for the day.
+
+### 5.2 Character & progression (concrete V1 values)
+
+**Character:** Single investigator character (V1, single-player).
+
+**Level thresholds (concrete):** XP accumulates → level up at thresholds. **V1 level table:**
+
+| Level | Cumulative XP to reach (from level 1) |
+|---|---|
+| 1 | 0 (starting level) |
+| 2 | 100 |
+| 3 | 250 |
+| 4 | 500 |
+| 5 | 900 |
+| 6 | 1400 |
+| 7 | 2000 |
+| 8 | 2700 |
+| 9 | 3500 |
+| 10 | 4400 |
+
+- XP is **cumulative**: you level up when your total XP crosses the threshold for the next level. Level 1 → level 2 at 100 XP total (≈10 episodes, or ≈5 movies, or a mix). The base episode XP = 10 / movie XP = 20 anchors mean ~10 episodes or ~5 movies to level 2 as a rough pace.
+- On level-up, the character's level field updates and any **level-triggered unlocks** fire (genre-access broadening — see below — and perk eligibility). Level-up is evaluated during the poll/sync when XP is awarded.
+- **Titles / ranks (optional flavor):** soft narrative titles at milestone levels — e.g. level 1–2 "Junior Investigator", level 3–4 "Investigator", level 5–6 "Detective", level 7–8 "Senior Detective", level 9–10 "Lead Investigator" — mostly cosmetic/flavor, displayed on the character sheet. Final titles/descriptions finalize during implementation.
+
+**What leveling unlocks (decided: unlock new investigation tools/genres, with Q6 resolution + concrete thresholds):**
+
+- **Genre unlock model (resolved §12 Q6, concrete):**
+  - **Horror is the opening unlocked genre** — the investigator starts qualified for horror cases at level 1. All other genres start **locked**.
+  - **Level-broadens-genre-access (concrete):** at each level, the set of genres you can **earn full XP from** broadens. Concretely:
+    - **Level 1:** only horror is fully unlocked (earn full XP from horror watches).
+    - **Level 2:** one additional genre becomes accessible (player's choice of the next available genre — see purchase model below; the "next available" is the next genre in the cascade, §5.2). At level 2, the player can also start **accumulating sub-genre XP** toward buying the next genre.
+    - **Level 3:** a second additional genre becomes accessible, etc.
+    - In general: **each level unlocks access to one more genre** (beyond horror). So at level N (N≥1), the player has access to N genres total (horror + (N−1) purchased/accessed genres). This is the "level = gate to next genre purchase" mapping.
+    - "Access" means: you can earn **full XP** from watches in an accessed genre. For a genre that is **not yet accessed** (not unlocked, beyond your current level's allowance), watches still **accumulate sub-genre XP toward buying it** but **do not grant full XP** (or grant reduced XP) until you buy it / until your level broadens access to include it. Exact reduced-XP rule for non-accessed genres: **0 XP** from non-accessed genres until purchased/accessed (cleanest gate), or a small "exploration" XP (TBD — finalize during implementation; the spec's default assumption is 0 XP from non-accessed genres, full XP once accessed). The sub-genre XP that accumulates toward purchase still accumulates regardless of access (so you can "save up" sub-genre XP for a genre before you're high-level enough to access it — the purchase itself is gated by access, but the savings accumulate).
+    - This means: **level gives you the right to buy/access the next genre; sub-genre XP gives you the cost to buy it once you have the right.** Both are gates; both are needed.
+  - **Unlock purchase via sub-genre XP (concrete):** each genre has sub-genres (from the library, filtered by sub-genre metadata, §4.5). Watching movies/episodes in a sub-genre accumulates **sub-genre XP** toward that sub-genre. When a sub-genre's accumulated sub-genre XP reaches a **purchase threshold**, the player can **"buy" that sub-genre unlock** by spending the accumulated sub-genre XP. Buying a sub-genre:
+    - Marks that sub-genre as **owned/unlocked** for the character.
+    - Counts as **accessing the parent genre** (if that genre wasn't already accessed) — i.e., buying the first sub-genre of a parent genre = unlocking that genre for full XP.
+    - Costs the accumulated sub-genre XP (spent on purchase).
+  - **Sub-genre XP purchase threshold (concrete):** **buy a sub-genre at 100 sub-genre XP accumulated in that sub-genre.** I.e. watch enough content in a sub-genre to accumulate 100 sub-genre XP toward it, then spend it to buy the sub-genre. The sub-genre XP accumulation rate: **each completed watch (episode or movie, ≥95%) in a sub-genre adds sub-genre XP equal to the normal XP for that watch** (episode → +10 sub-genre XP, movie → +20 sub-genre XP) **toward that sub-genre's purchase progress.** So a 100-sub-genre-XP purchase threshold ≈ 10 episode-watches or 5 movie-watches in that sub-genre to buy it.
+    - Sub-genre XP is **per sub-genre per character** (not global). Each sub-genre has its own accumulation bucket.
+    - Sub-genre XP is **spent on purchase** (not retained as general XP). It's a sink specifically for genre unlocking.
+    - **Example:** horror is open at level 1. Say the library has horror sub-genres "slasher", "supernatural", "psychological". Watching horror movies/episodes accumulates sub-genre XP in each horror sub-genre you watch. Once you've accumulated 100 sub-genre XP in, say, "supernatural", you can buy the "supernatural" sub-genre — which unlocks the "supernatural horror" access (horror already open, so this is more about sub-genre coverage / suggested-title targeting / map detail, and about progress toward the genre-unlock cascade). Wait — refinement: horror is already the opened genre, so buying horror sub-genres doesn't "unlock the genre" (it's already unlocked). The purchase model's genre-unlock gating applies to **non-horror genres**: to unlock, say, "sci-fi", you buy a sci-fi sub-genre (e.g. "space opera" or "cyberpunk") once you've accumulated 100 sub-genre XP in it **and** your level gives you access to buy the next genre. The first sub-genre purchased in a non-horror parent genre = that genre becomes accessed (full XP from that genre).
+    - **Cascade (concrete):** the order of genres available to purchase is a **fixed genre list order** (finalize during implementation — e.g. horror → thriller → mystery → sci-fi → fantasy → documentary → comedy → drama → romance → animation → ... or whatever the list is). At level 2, the player can buy the **first non-horror genre in the list** (the next one after horror) by purchasing any of its sub-genres (100 sub-genre XP in one of its sub-genres). At level 3, the **second** non-horror genre in the list becomes purchasable, etc. So level unlocks the right to buy the next genre in the list; sub-genre XP pays for it. One genre at a time, in list order, player chooses when to buy. (The list order and which genres are in it finalize during implementation — the spec commits to "fixed ordered genre list, horror first, one new genre accessible per level, buy via 100 sub-genre XP in any of its sub-genres.")
+  - **Suggested titles per sub-genre (concrete):** when a sub-genre is **in progress** (sub-genre XP accumulated but not yet bought) or **just bought** or **available to pursue** (the next genre in the list is accessible at current level), the case board / genre map suggests actual titles from the stack library filtered to that sub-genre (from the content mirror, §4.5), so the player knows what to watch to accumulate sub-genre XP toward buying it. Suggested-title lists are derived from the content mirror on each poll (filter content by sub-genre tags).
+  - **Genre "hardness":** horror starts unlocked (the investigator's home ground). Other genres are locked until bought via sub-genre XP + level access. The "harder" genres are simply those later in the list / not yet bought — there is no separate difficulty rating; the unlock cost (100 sub-genre XP) + the level gate is what gates them.
+  - **Holiday / date-appropriate bonuses (resolved §12 Q6, concrete):** the app **detects the current date and applies date-appropriate bonuses** via a **holiday window calendar** (fixed calendar mapping, finalize during implementation). Example windows:
+    - **Halloween window:** Oct 1 – Oct 31. Horror-content watches (≥95% completion) during this window get **+50% XP** (i.e. episode → +15 XP, movie → +30 XP) in addition to normal XP. (Horror is the natural Halloween genre, but the window could also apply to horror-adjacent sub-genres. Finalize which sub-genres/ genres the Halloween window applies to during implementation.)
+    - **Winter holiday window:** Dec 1 – Dec 31. Cozy/holiday-adjacent content (finalize which genres/sub-genres qualify during implementation) gets **+50% XP** during the window.
+    - **Other seasonal windows:** TBD — e.g. summer blockbuster window (Jun–Aug, action/movies), Valentine's romance window (Feb, romance), spring documentary window, etc. The spec commits to "a fixed holiday-window calendar, each window = date range + genre/sub-genre filter + bonus multiplier (≥95% completion in-window → bonus XP)." The Halloween + winter examples are concrete starters.
+    - **Bonus type:** V1 = **bonus XP** (multiplier on the normal XP for qualifying watches in the window). **Items/perks** as the bonus are noted as a V1-possible extension (finalize during implementation — the spec's default is bonus XP only for V1; items are optional and deferred unless decided otherwise).
+    - Holiday windows are **implemented as date-gated feature modules** (§15.4/§15.5 inspiration from LoGD's holiday text modules): each window = a small feature with a start date, end date, genre/sub-genre filter, and bonus multiplier. New windows can be added by adding a new window record/module without touching core.
+- **Perks / tools (concrete starter list — finalize during implementation):** level-up unlocks small passive bonuses. Starter perk ideas (each perk is a level-gated unlock, one per level or selective):
+  - **Level 2 perk (choice):** +10% XP for horror (your home genre) OR widen the new-arrival window from 48h to 72h (once). (Example — finalize during implementation.)
+  - **Level 3 perk:** +5% XP for a genre of your choice (one genre, permanent once chosen).
+  - **Level 5 perk:** streak milestone bonus multiplier +10% (i.e. streak bonuses in §5.1.1 are multiplied by 1.1).
+  - **Level 7 perk:** featured-case bonus +5 XP (on top of the +10 featured bonus).
+  - **Level 10 perk:** +10% XP for all watched content (global small boost).
+  - Perks are **persistent** once unlocked/claimed. Some perks are "choose one of N" at the level; some are automatic. Final perk list, level gating, and choice mechanics finalize during implementation. Perks are **separate from genre purchases** (a perk doesn't cost sub-genre XP; it's a level unlock). Interaction with holiday items: if holiday bonuses ever include items/perks, those are separate from level perks — finalize during implementation.
+- **Titles / ranks (optional):** soft narrative flavor — "Junior Investigator" → "Investigator" → "Detective" → "Senior Detective" → "Lead Investigator" at milestone levels. Mostly cosmetic/flavor, on the character sheet.
+
+**Stats (V1):** XP (total), level, watch count (total completions), episode count, movie count, genres accessed, sub-genres owned, current streak (days), best streak, completed cases/campaigns (series completed, movies completed, featured cases completed), sub-genre XP per sub-genre (for purchase progress), holiday-window bonus count, achievement count (unlocked / total). Displayed on the character sheet.
+
+### 5.2 Character & progression
+
+**Character:** Single investigator character (V1, single-player).
+
+**Levels (resolved §12 Q5, rough):** XP accumulates → level up at thresholds. **Starting scheme (rough, finalize during implementation):** level 1 → level 2 at **100 XP**, with higher thresholds to be designed (e.g., 250 / 500 / 1000 XP for levels 3/4/5, or a scaling formula). The base episode XP = 10 anchor means ~10 episodes to level 2 as a rough sense of pace.
+
+**What leveling unlocks (decided: unlock new investigation tools/genres, with Q6 resolution):**
+
+- **Genre unlock model (resolved §12 Q6):**
+  - **Horror is the opening unlocked genre** — the investigator starts qualified for horror cases. All other genres start **locked**.
+  - **Unlock purchase via sub-genre XP:** each genre has sub-genres (from the library, filtered by sub-genre metadata). Watching movies/episodes in a sub-genre accumulates XP toward that sub-genre; when a **certain amount of watched content in a sub-genre** adds up to **X XP**, the player can **"buy" that sub-genre unlock** (spend the accumulated sub-genre XP). Unlocking a sub-genre unlocks its parent genre's access in the map/coverage sense.
+  - **Cascade:** unlocking one genre (via its sub-genre XP) opens the door to the next genre becoming available to pursue — one genre at a time, sub-genres within it, accumulate XP, buy the next. The player **chooses** when to buy, not auto-at-level.
+  - **Suggested titles per sub-genre:** when a sub-genre becomes available (or is in progress), the case board / genre map suggests actual titles from the stack library filtered to that sub-genre, so the player knows what to watch to accumulate sub-genre XP.
+  - **Genre "hardness":** horror starts unlocked (the investigator's home ground). Other genres are locked until bought via sub-genre XP. The "harder" genres are simply those the player hasn't bought yet — there is no separate difficulty rating; the unlock cost / sub-genre XP threshold is what gates them.
+  - **Holiday / date-appropriate bonuses (resolved §12 Q6):** the app **detects the current date and applies date-appropriate bonuses** — e.g., horror around Halloween, holiday/slasher/cozy-content around winter holidays, summer blockbuster-ish genres in summer, etc. The app picks the relevant holiday from the date (fixed calendar mapping, e.g. Oct = Halloween horror window, Dec = winter holiday window). During the window, watching relevant content gives **bonus XP** (and optionally a transient "item"/perk effect — TBD whether V1 includes items or just bonus XP; items are noted as a V1-possible extension, finalize during implementation).
+- **Perks / tools:** Level-up unlocks small passive bonuses (e.g., +X% XP for a genre, streak multiplier increase, wider new-arrival window). These are "tools" in the detective metaphor — better equipment for the job. (Interaction with the genre-buy model TBD: perks are separate from genre purchases, or perks can be the "item" side of holiday bonuses — finalize during implementation.)
+- **Titles / ranks (optional):** Soft narrative flavor — "Junior Investigator" → "Detective" → etc. at milestone levels. Mostly cosmetic/flavor.
+
+**Stats (V1):** XP, level, watch count, genre coverage, streak, completed cases/campaigns. Displayed on the character sheet.
+
+### 5.3 Movies vs TV — distinct roles
+
+| Aspect | Movies | TV Shows |
+|--------|--------|----------|
+| RPG framing | One-off *cases* | Multi-episode *campaigns* / *series investigations* |
+| Completion unit | Whole movie | Episode → Season → Series |
+| Bonus structure | Movie completion + new-arrival + first-completion | Episode XP + season bonus + series bonus + streak |
+| Case generation | A movie = a case card you can pick up | A show = an ongoing investigation; episodes are "evidence" you collect |
+
+Both feed the same XP/level system. They differ in *granularity and framing*, not in fundamentals.
+
+### 5.4 New arrivals & featured cases
+
+**New arrivals:** When Sonarr/Radarr records a new import (or a new item appears in the library), the RPG can generate a *case card* for it. The case card represents "there's something new to investigate." It is **not assigned** — the player sees it on the case board and chooses whether to take it on.
+
+**Featured cases:** A smaller set of cases that are highlighted each period (e.g., weekly). Selected algorithmically or by simple rules from available content (e.g., "high-rated thriller that arrived this week"). Featured cases give bonus XP when completed. The selection logic is intentionally simple at first (TBD — could be "top-rated new arrival in an unlocked genre" or similar).
+
+**Player-driven case picking:** The player sees a board of available cases (new arrivals + existing library unwatched + featured) and *chooses* which to take. The RPG doesn't auto-assign. This preserves autonomy — you watch what you want; the RPG just frames it.
+
+### 5.5 Achievements & badges
+
+**Hybrid model (decided, Q8 resolved — massive list):** a large/extensive achievement list across five categories, split into **visible** (player can see and work toward) and **hidden** (revealed only when unlocked). Specific items below are the first cut; the list is meant to be extensive and can grow during implementation. Categories match §5.5's category model: completion milestones, genre coverage, time/streak, novelty, themed/quirky.
+
+**How achievements award:** each achievement has a trigger condition evaluated during the poll/sync (§9) and/or on case completion. On unlock, the achievement is recorded in `character_achievements` (unlocked-at, source) and shown on the badge wall / character sheet. Hidden achievements reveal their name + description on unlock; visible achievements show progress toward them.
+
+#### 5.5.1 Completion milestones (visible)
+
+- **First Blood:** Complete your first episode (any show). ✔ visible
+- **Case Closed:** Complete your first movie. ✔ visible
+- **Double Feature:** Complete 2 movies in the same real day. ✔ visible
+- **Episode 10:** Complete 10 episodes total. ✔ visible
+- **Episode 50:** Complete 50 episodes total. ✔ visible
+- **Episode 100:** Complete 100 episodes total. ✔ visible
+- **Silver Screen Novice:** Complete 10 movies total. ✔ visible
+- **Silver Screen Devotee:** Complete 50 movies total. ✔ visible
+- **One Season Under Your Belt:** Complete all episodes of one season of any show. ✔ visible
+- **Two Seasons:** Complete all episodes of two seasons (same or different shows). ✔ visible
+- **Series Completed:** Finish every episode of an entire series (all seasons). ✔ visible
+- **Collector:** Complete 5 different series. ✔ visible
+- **Completist:** Complete 10 different series. ✔ visible
+- **Backlog Burner:** Complete a series where at least 3 episodes were already marked watched before you took the case (i.e., you backtracked into completion). ✔ visible
+- **Full Slate:** Complete at least one episode and one movie in the same real day. ✔ visible
+
+#### 5.5.2 Completion milestones (hidden)
+
+- **The Quiet 100:** Complete 100 episodes without ever manually refreshing the case board (all discoveries via poll). ✔ hidden
+- **Ghost Completer:** Complete a series where no episode was watched live via Plex during your case — i.e., the whole series was already in your watched history when you claimed it. ✔ hidden
+- **One-Click Wonder:** Complete a featured case on the same day you first saw it appear. ✔ hidden
+- **Twice in a Day:** Complete two different series' final episodes in the same real day. ✔ hidden
+- **Slow Burn:** Complete a 10+ season series (or equivalent long campaign). ✔ hidden
+
+#### 5.5.3 Genre coverage (visible)
+
+- **First Genre Explored:** Complete at least one watch in your first unlocked genre (horror, the opening genre). ✔ visible
+- **Genre Explorer:** Complete at least one watch in 3 different genres. ✔ visible
+- **Genre Explorer:** Complete at least one watch in 5 different genres. ✔ visible
+- **Genre Explorer:** Complete at least one watch in 8 different genres. ✔ visible
+- **Genre Explorer:** Complete at least one watch in 10 different genres. ✔ visible
+- **Horror Homeground:** Complete 10 horror watches (the opening genre). ✔ visible
+- **Horror Homeground:** Complete 25 horror watches. ✔ visible
+- **Genre Purchase:** Buy your first sub-genre unlock with sub-genre XP (the first purchased genre beyond horror). ✔ visible
+- **Genre Purchase:** Buy 3 sub-genres via sub-genre XP. ✔ visible
+- **Genre Purchase:** Buy 5 sub-genres via sub-genre XP. ✔ visible
+- **Genre Fiesta:** Complete at least one watch in a sub-genre you just bought (same poll cycle or next). ✔ visible
+- **Variety Player:** Complete watches in at least one sub-genre for 5 different parent genres. ✔ visible
+- **Broad Coverage:** Complete at least one watch in sub-genres across 3 different parent genres in the same real day. ✔ visible
+
+#### 5.5.4 Genre coverage (hidden)
+
+- **Horror Native:** Complete 50 horror watches before buying any other genre. ✔ hidden
+- **Sub-genre Hoarder:** Buy 10 sub-genres via sub-genre XP. ✔ hidden
+- **Full Catalog:** Unlock every sub-genre the library exposes (within the current library's genre set). ✔ hidden
+- **Peerless Variety:** Complete watches in 15 different genres. ✔ hidden
+- **Depth & Breadth:** Complete both a 10+ season series and watches in 10+ genres. ✔ hidden
+
+#### 5.5.5 Time / streak (visible)
+
+- **Back-to-Back:** Complete watches on 2 consecutive real days. ✔ visible
+- **Streak Starter:** Maintain a 3-day watch streak (a completed watch on each of 3 consecutive real days). ✔ visible
+- **Streak Builder:** Maintain a 5-day watch streak. ✔ visible
+- **Streak Keeper:** Maintain a 7-day watch streak. ✔ visible
+- **Streak Veteran:** Maintain a 14-day watch streak. ✔ visible
+- **Streak Legend:** Maintain a 30-day watch streak. ✔ visible
+- **No Gap:** Maintain a 7-day streak where each day also included a new-arrival bonus watch (watched something within its new-arrival window). ✔ visible
+- **Weekend Warrior:** Complete at least one watch on each of 4 weekends in a row (Saturday or Sunday). ✔ visible
+- **Holiday Heat:** Complete a watch during a detected holiday window (e.g., Halloween horror window) and earn the holiday bonus for that window. ✔ visible
+- **Holiday Heat:** Earn the holiday bonus in 3 different holiday windows (e.g., Halloween, winter holidays, etc.). ✔ visible
+
+#### 5.5.6 Time / streak (hidden)
+
+- **Iron Streak:** Maintain a 60-day watch streak. ✔ hidden
+- **Unbroken:** Maintain a 30-day streak without a single day relying solely on a re-watch (every day had a new completion). ✔ hidden
+- **Holiday Sprinter:** Complete 3 watches across 3 different holiday windows within their respective windows. ✔ hidden
+- **Marathon:** Reach level 5 (or whatever the level-5 threshold ends up being) while maintaining a 14-day streak through the level-up. ✔ hidden
+- **Seasonal Veteran:** Earn holiday bonuses in all holiday windows the current calendar year exposes. ✔ hidden
+
+#### 5.5.7 Novelty / firsts (visible)
+
+- **First Featured Case:** Complete your first featured case (any selection mode). ✔ visible
+- **Featured Fan:** Complete 5 featured cases. ✔ visible
+- **Featured Master:** Complete 10 featured cases. ✔ visible
+- **First New-Arrival Bonus:** Earn a new-arrival bonus (watched something within its new-arrival window). ✔ visible
+- **New-Arrival Habit:** Earn new-arrival bonuses on 5 different titles. ✔ visible
+- **Speed Demon:** Complete a new arrival within 48 hours of its arrival on the stack (Sonarr/Radarr import). ✔ visible
+- **Speed Demon:** Complete a new arrival within 24 hours of arrival. ✔ visible
+- **First Purchase:** Buy your first sub-genre unlock (first genre purchase beyond horror). ✔ visible
+- **Level Up:** Reach level 2. ✔ visible
+- **Level Up:** Reach level 3. ✔ visible
+- **Level Up:** Reach level 5. ✔ visible
+- **Level Up:** Reach level 10. ✔ visible
+- **First Banked Day:** (if daily budget is enabled) use a daily investigation budget for the first time. ✔ visible
+- **First Fame Tick:** (if fame is enabled) earn your first fame/renown increment. ✔ visible
+
+#### 5.5.8 Novelty / firsts (hidden)
+
+- **Instant Case:** Take a case from the board and complete it within the same poll cycle (i.e., you watched it between polls after taking it). ✔ hidden
+- **Double Speed:** Complete two different new arrivals within 24 hours of each of their arrivals. ✔ hidden
+- **Featured Streak:** Complete 3 featured cases in a row (3 consecutive featured cases completed, one after another). ✔ hidden
+- **First-Day Fighter:** On your very first day in the RPG, complete both a movie and an episode. ✔ hidden
+- **New-Old Hybrid:** Complete a new-arrival bonus on a title that was also a featured case. ✔ hidden
+
+#### 5.5.9 Themed / quirky (visible)
+
+- **Double Feature Special:** Watch two movies from the same franchise/franchise-indicated pair (same series/franchise metadata) in the same real day. ✔ visible
+- **Director's Cut:** Complete two movies by the same director (director metadata, where available) within 7 days. ✔ visible
+- **Themed Night:** Complete 3 movies/episodes in the same genre in the same real day. ✔ visible
+- **Binge Builder:** Complete 5 episodes of the same series within 48 hours. ✔ visible
+- **Weekend Binge:** Complete 5 episodes of the same series over a single weekend. ✔ visible
+- **Marathon:** Complete an entire season's worth of episodes within 7 days of starting it. ✔ visible
+- **Holiday Haunter:** Complete a horror watch during the Halloween window (holiday bonus earned). ✔ visible
+- **Holiday Warmth:** Complete a cozy/winter-holiday-adjacent watch during the winter holiday window (holiday bonus earned). ✔ visible
+
+#### 5.5.10 Themed / quirky (hidden)
+
+- **Spooky Season:** Complete 10 horror watches during the Halloween window (cumulative across years, or current year — finalize during implementation). ✔ hidden
+- **Franchise Head:** Complete the first movie of 5 different franchises (first installment of 5 franchises). ✔ hidden
+- **Director's Passport:** Complete movies by 5 different directors (where director metadata is available). ✔ hidden
+- **Actor's Playground:** (if cast metadata is mirrored) complete two movies/episodes sharing a lead actor (where lead-actor metadata is available) — hidden, finalize during implementation based on what metadata is actually mirrored. ✔ hidden
+- **The Oldie:** Complete a movie/episode whose release/air date is more than 20 years before the current date. ✔ hidden
+- **The Newcomer:** Complete a movie/episode whose release/air date is within the last 30 days. ✔ hidden
+- **Tuesday Thriller:** Complete a thriller/mystery watch on a Tuesday (day-of-week + genre quirk). ✔ hidden
+- **Friday Night Film:** Complete a movie on a Friday night (evening local time). ✔ hidden
+- **Dawn Watcher:** Complete a watch that started before 6:00 local time. ✔ hidden
+- **Night Owl:** Complete a watch that started after 22:00 local time. ✔ hidden
+- **Rainy Day (metadata-dependent):** (if weather/date info is available on the host) complete a watch on a date that matches a library holiday/seasonal theme not yet earned a bonus for. ✔ hidden — finalize during implementation.
+
+#### 5.5.11 Cross-category combo achievements (visible)
+
+- **Well-Rounded:** Complete at least one movie and at least one episode, and earn at least one new-arrival bonus, all in the same real day. ✔ visible
+- **Streak Collector:** Maintain a 7-day streak while also completing a full series during that streak. ✔ visible
+- **Genre + Streak:** Maintain a 7-day streak where each day included a watch in a different genre. ✔ visible
+- **Featured + New:** Complete a featured case that was also a new arrival (within its new-arrival window). ✔ visible
+- **Horror + Holiday:** Complete the Halloween holiday bonus and also complete 5 horror watches in the same window. ✔ visible
+- **First 100 + Streak:** Reach 100 total completed episodes while maintaining a 7-day streak. ✔ visible
+
+#### 5.5.12 Cross-category combo achievements (hidden)
+
+- **Perfect Day:** In a single real day: at least one movie, at least one episode, at least one new-arrival bonus, at least one featured case, and at least one holiday-window bonus — all in the same day. ✔ hidden
+- **Silent Completer:** Reach 100 total episodes completed without ever having a watch logged via manual refresh (all via poll), and without ever missing a day in a 30-day streak that overlaps the 100th episode. ✔ hidden
+- **Genre Omnivore:** Unlock and complete at least one watch in every sub-genre the library exposes, plus complete 3 full series, plus maintain a 14-day streak. ✔ hidden
+- **Holiday Sweep:** Earn holiday bonuses in all holiday windows for the current year, and complete a series in each of 3 different genres during those windows. ✔ hidden
+
+#### 5.5.13 Badge rendering (decided)
+
+- Badges/achievements appear on the **character sheet** and/or a **badge wall** view.
+- **Visible achievements:** show name + description + progress (e.g. "5/10", "3/5", "not started", or a progress bar) on the badge wall.
+- **Hidden achievements:** show as locked/unknown until unlocked; on unlock, reveal name + description + the unlock date, and add to the badge wall.
+- Recently unlocked achievements get a "just unlocked" emphasis (e.g. pinned at top of badge wall for a short time).
+- Some achievements could render as small icons/badges on the character sheet (e.g. "Horror Native" badge near the horror genre region on the map, or a streak badge near the streak stat).
+- Badge artwork is an implementation detail (simple icons / emoji / generated SVGs to start; polished art later).
+
+### 5.6 Shared quests — V2 only
+
+**V1 = single-player only.** The opt-in shared quest concept (post a shared case, another accepts, co-op bonus) is noted as a V2 extension. Not built in V1. Documented in the spec for future reference.
+
+---
+
+## 6. Data Model (PostgreSQL)
+
+### 6.1 Rationale
+
+PostgreSQL is introduced as a **shared metadata store** — the RPG uses it as its primary DB, and the expectation is that other stack-adjacent tooling could reuse it over time (e.g., richer activity feeds, discovery tooling, cross-service views). Existing *arr/Plex services keep their own SQLite and are not modified.
+
+### 6.2 Schema (initial, TBD in detail during implementation)
+
+**Core tables (conceptual):**
+
+- `characters` — player characters (V1 = one row; multi-player future).
+- `character_stats` / `character_xp` — XP, level, per-genre unlock state, perks.
+- `watches` — records of watches earned: character, content id (TMDb/TVDb), content type (movie/episode/series), watched-at, watched-via (plex/manual-flag for V2), points awarded, source metadata.
+- `content` — enriched content catalog the RPG knows about: movies and series/episodes, pulled from Plex/Sonarr/Radarr. Includes metadata (title, year, genres, ratings, IDs, section/path). Incremental sync, not a full rebuild each poll.
+- `cases` — case cards: content reference, case type (movie-case / series-campaign / featured), status (available / taken / in-progress / completed), taken-at, completed-at, bonus flags.
+- `featured_cases` — periodic featured case assignments (period, content ref, bonus).
+- `achievements` — achievement definitions (id, name, description, category, visible/hidden, trigger condition).
+- `character_achievements` — which character unlocked which achievement and when.
+- `genre_unlocks` / `genre_progress` — which genres are unlocked at current level, coverage counts.
+- `sync_state` — poll cursors / last-sync markers for Plex/Sonarr/Radarr incremental syncs.
+
+**Sync pattern:** The RPG maintains a curated content table by periodically syncing from Plex/Sonarr/Radarr (incremental, keyed by IDs and last-sync markers). Watches flow from Plex watch-state changes into the `watches` table when detected by polling.
+
+**Design principle:** The content table is a *read-only mirror* of stack library metadata. The watches table is the RPG's own record of what it awarded points for. Both are in Postgres.
+
+### 6.3 Connection & deployment of Postgres
+
+- **Not a new Compose container.** Postgres is expected to be available on the host network.
+- **Hosting mode (resolved §12 Q1):** **host-side Postgres install** — a Postgres instance running directly on the stack host (not a container, not in `docker-compose.yml`). The RPG backend connects to it via a connection string from `.env`. Concrete provisioning (install method, version, data directory, service management) is an implementation detail; the spec only commits to "host install, available on host network, not a new compose container."
+- **Auth/config:** `RPG_DB_URL` (Postgres connection string, e.g. `postgresql://user:pass@localhost:5432/rpg`) in `.env`/`.env.template`. Not committed. The account/password for the RPG login (§7.3/Q10) is stored in Postgres, not in `.env`.
+- **Migration approach:** A migration layer (e.g., SQLx migrations, or a lightweight migration table) to manage schema versioning.
+
+---
+
+## 7. Backend — Rust, extending `~/Cave/backend/`
+
+### 7.1 Current state of `backend/`
+
+As of now, `backend/src/` contains a partial Rust/Axum codebase:
+
+- `routes.rs` — full route tree for a **stack-management dashboard** (containers, stick/queue, nzbdav, plex, credentials, env editor, catalog, host overview, notifications, library, jobs). Many handlers are `todo!()` placeholders pending later milestones.
+- `config.rs` — project-root resolution, `.env` path, script/config path helpers.
+- `docker.rs` — thin `bollard` Docker helpers.
+- `executor.rs`, `jobs.rs` — executor and job scaffolding (partial).
+
+There is **no `Cargo.toml`**, no `main.rs`, and no complete runtime yet — the backend is early/incomplete.
+
+### 7.2 Decision: new crate alongside, same `backend/` directory
+
+- The RPG is a **separate crate** in `backend/` (e.g., `backend/rpg/` with its own `Cargo.toml`), alongside the existing stack-management crate.
+- **Rationale:** Loose coupling. The stack-management routes are a different product (stack ops dashboard) from the RPG (personal RPG UI). Keeping them as separate crates in the same directory avoids mixing concerns while staying colocated.
+- **Shared modules (resolved §12 Q11):** **common libs are fine** — both crates may share a common `backend/` library crate (e.g., shared `.env` loading/config resolution, shared HTTP helper patterns, shared auth/secret patterns) where it reduces duplication. The existing `routes.rs` and stack-management code is **not** the RPG. The RPG gets its own router, its own modules (rpg logic, rpg db, rpg probes for Plex/Sonarr/Radarr), and its own handlers. Whether to extract a shared lib is fine to decide during implementation; the spec permits it and expects minimal, non-coupling sharing (no shared RPG state in the common lib).
+- The existing `routes.rs` and stack-management code is **not** the RPG. The RPG gets its own router, its own modules (rpg logic, rpg db, rpg probes for Plex/Sonarr/Radarr), and its own handlers.
+
+### 7.3 RPG backend surface (decided)
+
+- **Rust + Axum** (consistent with existing `backend/`).
+- **New router:** e.g., `/rpg/*` or a top-level RPG route tree — TBD.
+- **RPG-specific modules:**
+  - DB layer (SQLx or similar) connecting to Postgres.
+  - Plex/Sonarr/Radarr probe layer (HTTP clients, auth from `.env`).
+  - RPG logic: XP/level calculation, achievement evaluation, case generation, genre unlock logic.
+  - Polling/sync scheduler: periodic sync of content from Plex/Sonarr/Radarr, periodic check for new watches.
+- **Auth (resolved §12 Q10):** **set-a-pin gate** — a simple PIN-based authentication gate on the RPG frontend/backend (not a full username/password account system). V1 scope: a single PIN stored in Postgres (hashed), one character/account behind the pin for the single-player V1 use; a wrong PIN is rejected at the gate. Exact mechanism (PIN hashing crate, session cookie vs token after PIN entry, session lifetime, PIN change flow) is an implementation detail; the spec commits to "PIN gate, PIN stored in Postgres, V1 single-user, no full account system."
+
+### 7.4 What the backend serves
+
+- **API endpoints** for the frontend: character state, watches, cases, achievements, stats, content/case board, sync status. Auth-gated where appropriate (character/account data behind login).
+- **Frontend serving:** Svelte assets (see §8.4), served by the Axum backend (or a separate dev server during development).
+
+---
+
+## 8. Frontend — game-like UI
+
+### 8.1 Aesthetic
+
+**Detective / investigation** game-like feel:
+
+- Character sheet (stats, level, XP bar, perks, genre unlocks).
+- Quest log / case board (available cases, taken cases, completed cases).
+- Achievement/badge wall (visible achievements + recently unlocked hidden ones).
+- **Genre/watching map** (see §8.2).
+- Case cards / evidence aesthetic for individual watches and cases.
+
+### 8.2 The map — genre/watching map
+
+**Decided:** A map that represents your watching coverage across genres.
+
+- Genres or genre-groups are "regions" on the map.
+- Watching content in a genre "explores" or "lights up" that region.
+- Coverage level in a genre (e.g., episodes watched, variety) determines how explored it looks.
+- Locked genres (not yet unlocked at current level) appear as uncharted/locked regions.
+- The map is a visual progress/coverage artifact, not a literal navigable world. It ties the detective theme ("mapping the territory of what you've investigated") to the genre-unlock mechanic.
+
+**V1 scope:** A visual map component showing genre coverage and unlock state. Not a literal RPG world map with movement. If a more literal "world map" metaphor is desired later, that's V2.
+
+### 8.3 Views / pages (V1)
+
+- **Character sheet** — stats, level, XP, perks, genre unlocks, streaks.
+- **Case board** — available cases (new arrivals + unwatched library + featured), taken/active cases, completed cases. Player picks cases from here.
+- **Watch log / evidence log** — history of awarded watches (content, when, points, via-plex flag).
+- **Achievement / badge wall** — visible achievements, recently unlocked hidden ones.
+- **Genre map** — the coverage map.
+- **Settings / sync status** — lightweight; sync state, last poll, maybe manual refresh.
+
+### 8.4 Frontend tech (resolved §12 Q2)
+
+**Frontend stack (resolved):** **Svelte** (likely SvelteKit, or Svelte + Vite for a SPA). The spec does not otherwise mandate React vs server-rendered HTML — Svelte is the chosen direction. The existing backend is Rust/Axum; the Svelte frontend can be served as static assets by the Axum backend, or as a separate dev server during development. Exact build setup (SvelteKit adapter, Vite config, asset serving from Axum) is an implementation detail.
+
+The UI remains **game-like** (character sheet, quest log, maps, case-board aesthetic) regardless of the Svelte-flavored implementation.
+
+---
+
+## 9. Polling & real-time
+
+### 9.1 Polling model (decided)
+
+- The RPG backend **polls** Plex/Sonarr/Radarr on a timer.
+- **Poll interval (resolved §12 Q3):** **5 minutes** between full poll cycles. On each poll:
+  - Sync content metadata incrementally from Plex/Sonarr/Radarr into the RPG's Postgres content table.
+  - Check Plex watch-state changes and award points for newly completed watches.
+  - Check Sonarr/Radarr import history for new arrivals → generate case cards as appropriate.
+- 5-minute polling is sufficient; near-real-time is not required. Exact timer implementation (tokio async timer, interval jitter, back-off on API errors) is an implementation detail.
+
+### 9.2 Why polling, not push/webhooks
+
+- Polling matches the existing stack's operational pattern (the stack's `stack-activity-feed` and `stack-arrival-notify` are timer-driven, not webhook listeners).
+- No open port, no webhook config, no missed events when the backend is briefly down.
+- Simpler and consistent with the stack's ethos.
+
+### 9.3 Backfill / first run (resolved §12 Q12)
+
+- **Library is brand new → backfill is not the starting scenario.** The spec does **not** assume a large existing library to backfill on first run. The first-run flow is therefore **faster, more frequent updates at first** rather than a big backfill blast.
+- **Faster updates at first:** early poll cycles can run more frequently (or do a more complete incremental sync) until the content table is populated to a stable state, then settle into the normal 5-minute poll (§9.1). This is a "catch-up then settle" pattern: while the library is small / the content mirror is still filling in, sync faster; once caught up, use the standard poll cadence.
+- **What "caught up" means (finalize during implementation):** e.g., the content mirror has current metadata for the library sections Plex/Sonarr/Radarr expose and the last poll found no new/changed items. The threshold for "settle to 5 minutes" is an implementation detail; the spec only commits to "no big backfill assumed; start faster, settle to the normal poll cadence once caught up."
+- **Existing watch state:** on first run the RPG can pull current Plex watched-state for the (small, new) library so the character doesn't start from zero if there's already watching history — but this is lightweight (the library is new), not a full historical backfill.
+
+---
+
+## 10. Deployment & access
+
+### 10.1 Deployment model (decided)
+
+- **Not a new container in `docker-compose.yml`.** The RPG is linked with the stack but not part of it.
+- The RPG runs as a **separate process** on the stack host — either a systemd user service, a background process, or similar. It is the Rust backend (the new RPG crate) plus its serving of the frontend.
+- It connects to the stack's services over the LAN (Plex `:32400`, Sonarr `:8989`, Radarr `:7878`) the same way existing stack scripts do.
+- It connects to Postgres via a connection string; Postgres is available on the host network but is **not** a new Compose container.
+
+### 10.2 Access (decided)
+
+- **LAN only, on the stack host.** The RPG is accessed from devices on the LAN (the host's browser, or other LAN devices).
+- No external exposure by default. Remote access (if ever wanted) is a future addition (e.g., Tailscale), not V1.
+- Port: a host port (TBD, e.g., a high port) that does not conflict with the stack's existing ports. Document the port clearly.
+
+### 10.3 Configuration & secrets
+
+- The RPG reuses the same `.env` secrets the stack uses: `PLEX_TOKEN`, `SONARR_API_KEY`, `RADARR_API_KEY`, `PLEX_URL`, `SONARR_URL`, `RADARR_URL`, `HOST_IP`, etc.
+- **Additional RPG env:** `RPG_DB_URL` (Postgres connection string), RPG poll interval, any RPG-specific config.
+- **`.env.template` update:** Add RPG-specific entries to `.env.template` (documented, not committed with real values).
+- **No new secrets infrastructure** — reuse the existing `.env` + Docker secrets pattern the stack already has.
+
+### 10.4 Lifecycle
+
+- The RPG has its own lifecycle: start/stop on the host, independent of `docker compose up -d` / `down`.
+- It does not restart when the stack restarts (unless you configure it to). It does not block stack operations.
+- Its own healthcheck concept (TBD — could be a `/healthz`-style endpoint the backend serves).
+
+---
+
+## 11. Out of scope (V1)
+
+- **Multi-player / shared quests** — V2.
+- **Manual watch claims** — V2 (V1 trusts Plex; manual claims deferred).
+- **Spending points / economy / inventory** — V1 is earn-and-progress only.
+- **A literal navigable world map** — V1 is a genre/watching coverage map.
+- **New container in the stack's Compose** — by design.
+- **Modifying existing *arr/Plex services** to connect to Postgres — by design; they keep their SQLite.
+- **Remote access** — LAN only for V1.
+- **Push/webhooks** — polling only for V1.
+- **Reverse proxy / Traefik** — none; matches the stack's no-reverse-proxy posture.
+
+---
+
+## 12. Open questions for implementation
+
+**Status (2026-09-08, after batch resolution): all 13 resolved.** None are pre-V1 blockers; all were either resolved in the interview or in the two resolution batches (2026-09-08). The list is kept for the record + change log; new open questions that arise during implementation get added here as they come up.
+
+1. **Postgres provisioning — RESOLVED (host install):** host-side Postgres install, available on host network, not a new compose container. (See §6.3.) ✔
+2. **Frontend tech — RESOLVED (Svelte):** Svelte (likely SvelteKit or Svelte+Vite SPA), served as static assets by the Axum backend (or separate dev server during dev). (See §8.4.) ✔
+3. **Poll interval — RESOLVED (5 minutes):** 5-minute poll cycle. (See §9.1.) ✔
+4. **Near-end threshold — RESOLVED (95%, configurable):** watch counts as completed at ≥95% viewed; configurable default. (See §5.1.) ✔
+5. **XP numbers & level thresholds — RESOLVED (rough anchors, finalize later):** base episode XP = 10; level 2 at 100 XP. Movie/season/series/streak values TBD (finalize during implementation). (See §5.1, §5.2.) ✔
+6. **Genre unlock thresholds & which genres are "harder":** — design during implementation.
+7. **Featured case selection logic — RESOLVED (new or all-time ranking by external rating):** featured cases are selected as either **(a) new arrivals** or **(b) all-time ranking** based on external ratings — Tomatometer/ImDb/TVDb/etc. (see §4.5 for the rating-source hierarchy). A featured case is chosen from the available content by ranking (e.g., highest-rated new arrival in an unlocked/sub-genre-available genre, or highest-rated all-time title in an unlocked genre), with the selection rule finalized during implementation (e.g., "top-rated new arrival this period" vs "top-rated all-time in an unlocked genre" — both modes exist; which is featured each period is implementor's choice or a simple rotation). ✔
+8. **Achievement list — RESOLVED (massive list, finalize the concrete items during implementation):** a **large/ extensive achievement list** is wanted. Categories are decided (§5.5): completion milestones, genre coverage, time/streak, novelty, themed/quirky (incl. hidden). The spec does **not** enumerate every achievement now — that's a "massive list" to be written as part of implementation (with visible + hidden split). The spec commits to "many achievements across the categories; finalize the list during implementation." ✔
+9. **RPG backend port — RESOLVED (86532):** the RPG backend binds to host port **86532** on the stack host (LAN-only access, §10.2). Not conflicting with the stack's existing ports (3000, 5055, 7878, 8989, 9696, 32400). ✔
+10. **Auth on the RPG frontend — RESOLVED (set-a-pin gate):** PIN-based gate (§7.3), PIN stored in Postgres, V1 single-user. No full username/password account system for V1. ✔
+11. **Shared modules between the two backend crates — RESOLVED (common libs fine):** both crates may share a common `backend/` lib (§7.2) for non-coupling shared bits (`.env`/config, HTTP helpers, auth/secret patterns). No shared RPG state in the common lib. ✔
+12. **Backfill scope & speed on first run — RESOLVED (no big backfill assumed; faster updates at first, settle to 5-min cadence once caught up):** the library is brand new, so first-run is "faster, more frequent updates at first" rather than a large backfill blast; settle to the normal 5-minute poll once the content mirror is caught up. (See §9.3.) ✔
+13. **Exactly which Plex/Sonarr/Radarr endpoints and how much metadata to mirror — RESOLVED (start from §4 + §4.5 metadata mirror note):** mirror title/year/genres/ratings/IDs/runtime/summary/poster/watch-state/episode-data as detailed in §4.5; skip MediaInfo blobs, extras, full actor/collection sets for V1. Sync keyed by TMDb/TVDb/Plex ratingKey + last-sync markers. (See §4.5.) ✔
+
+---
+
+## 6.4 Concrete Postgres schema (V1)
+
+**Convention:** table names are snake_case, plural. All tables have `id` (bigserial PK) unless noted. Timestamps are `timestamptz` (UTC). The schema is written for the **single-character V1** (one character row; the character_id foreign keys resolve to that one character). Multi-character support is a future extension; the schema is written so adding more characters is additive (character_id on the relevant tables), not a rewrite.
+
+### 6.4.1 Accounts / auth (PIN gate, §7.3)
+
+```sql
+CREATE TABLE accounts (
+  id          bigserial PRIMARY KEY,
+  pin_hash    text NOT NULL,        -- hashed PIN (argon2 or similar; finalize hashing crate during implementation)
+  pin_salts   text NOT NULL,       -- storage for salt/params needed to verify
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE characters (
+  id          bigserial PRIMARY KEY,
+  account_id  bigint NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name        text NOT NULL DEFAULT 'The Investigator',  -- display name; V1 default, changeable
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+- V1 = one account, one character. The PIN is set once at first run / first login (PIN set flow is an implementation detail; the spec commits to "PIN stored hashed in Postgres, single character behind the PIN").
+- `characters.name` is changeable (a simple name-edit feature); the default is "The Investigator".
+
+### 6.4.2 Character state (XP, level, stats)
+
+```sql
+CREATE TABLE character_state (
+  character_id bigint PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  xp           bigint NOT NULL DEFAULT 0,
+  level        int NOT NULL DEFAULT 1,
+  total_watches int NOT NULL DEFAULT 0,     -- total completed watches (episode + movie)
+  episode_watches int NOT NULL DEFAULT 0,
+  movie_watches  int NOT NULL DEFAULT 0,
+  current_streak_days int NOT NULL DEFAULT 0,
+  best_streak_days  int NOT NULL DEFAULT 0,
+  streak_last_watch_date date,             -- last calendar date (local) with a completion; NULL if none
+  genres_accessed int NOT NULL DEFAULT 1,  -- count of genres accessed (starts at 1 = horror)
+  last_level_up_at timestamptz
+);
+```
+
+- `character_state` is a **singleton per character** (one row, `character_id` PK). Updates are atomic increments.
+- `xp` is total cumulative XP. `level` is derived from `xp` against the §5.2 level table — but stored explicitly so the UI can read it without recomputing every time; the RPG logic recomputes level from XP on every XP change and updates `level` if it changed.
+- `current_streak_days` / `streak_last_watch_date` implement the §5.1 day-streak: on each new completion, if `streak_last_watch_date` == yesterday (local date) → increment streak; if == today → no change; otherwise reset to 1 and set last date to today. (Local date uses the host TZ from `.env`.) `best_streak_days` is the max ever.
+- `genres_accessed` counts how many genres the character has access to (starts at 1 = horror). Used by the UI and by the level-broadens-access rule (§5.2): at level N, max genres accessed can be up to N; the character can't access more than N genres until leveling up. (The actual per-genre access state is in `genre_access` below.)
+
+### 6.4.3 Genre access & sub-genre XP
+
+```sql
+CREATE TABLE genres (
+  id          bigserial PRIMARY KEY,
+  name        text NOT NULL UNIQUE,       -- e.g. 'Horror', 'Sci-Fi', 'Documentary'
+  list_order  int NOT NULL,               -- position in the fixed genre list order (§5.2); horror = 1
+  is_opening  boolean NOT NULL DEFAULT false  -- true for horror (the opening unlocked genre)
+);
+
+CREATE TABLE sub_genres (
+  id          bigserial PRIMARY KEY,
+  genre_id    bigint NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+  name        text NOT NULL,              -- e.g. 'Slasher', 'Supernatural', 'Space Opera'
+  UNIQUE (genre_id, name)
+);
+
+CREATE TABLE genre_access (
+  character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  genre_id     bigint NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+  accessed_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (character_id, genre_id)
+);
+
+CREATE TABLE sub_genre_xp (
+  character_id  bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  sub_genre_id  bigint NOT NULL REFERENCES sub_genres(id) ON DELETE CASCADE,
+  xp            bigint NOT NULL DEFAULT 0,   -- accumulated sub-genre XP toward purchase
+  purchased     boolean NOT NULL DEFAULT false,
+  purchased_at  timestamptz,
+  PRIMARY KEY (character_id, sub_genre_id)
+);
+
+CREATE TABLE genre_xp_ledger (
+  id           bigserial PRIMARY KEY,
+  character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  sub_genre_id bigint NOT NULL REFERENCES sub_genres(id) ON DELETE CASCADE,
+  xp_added     bigint NOT NULL,
+  source_watch_id bigint REFERENCES watches(id),  -- the watch that generated this sub-genre XP (if any)
+  at           timestamptz NOT NULL DEFAULT now()
+);
+```
+
+- `genres.list_order` = the fixed genre list order from §5.2 (horror first = list_order 1, then the next genre at list_order 2, etc.). The cascade "next available genre to buy" = the lowest-list_order genre the character hasn't accessed yet, among genres with list_order > the character's currently-accessed-count. (Finalize the genre list contents + order during implementation.)
+- `genre_access` = which genres the character has accessed (full XP). Horror is pre-populated for the new character (one row, horror genre_id, accessed_at = character creation). Other genres get a row when purchased/accessed.
+- `sub_genre_xp` = per-sub-genre accumulation bucket. `xp` accumulates as the character completes watches in that sub-genre (§5.2: +10 per episode, +20 per movie, toward that sub-genre). `purchased` flag + `purchased_at` when the player spends the XP to buy the sub-genre (purchase is a separate action — the player clicks "buy" when xp >= 100; the backend spends the xp, sets purchased=true, and adds a genre_access row for the parent genre if not already accessed).
+- `genre_xp_ledger` = an audit trail of sub-genre XP additions (so the UI can show "you earned X sub-genre XP from this watch"). `source_watch_id` links to the watch that generated it (if applicable).
+
+### 6.4.4 Content mirror (read-only from stack)
+
+```sql
+CREATE TABLE content (
+  id                bigserial PRIMARY KEY,
+  source            text NOT NULL,                 -- 'plex' | 'sonarr' | 'radarr'
+  source_id         text NOT NULL,                 -- the ID the source uses (Plex ratingKey, Sonarr seriesId, Radarr movieId)
+  external_id       text,                          -- TMDb ID / TVDb ID when available (the stable cross-source key)
+  external_id_type  text,                         -- 'tmdb' | 'tvdb' | null
+  title             text NOT NULL,
+  year              int,
+  content_type     text NOT NULL,                 -- 'movie' | 'series' | 'episode'
+  parent_id         bigint,                       -- for episodes: points to the series content row (self-ref via content.id)
+  season_number     int,
+  episode_number    int,
+  runtime_seconds   int,
+  release_date      date,
+  first_air_date    date,
+  status            text,                         -- series status: 'continuing' | 'ended' | etc. (where available)
+  summary           text,
+  rating           numeric,                       -- source rating (MPAA/score/whatever the source exposes)
+  rating_source     text,                         -- which source the rating came from
+  poster_url        text,
+  fanart_url        text,
+  section_key       text,                         -- Plex library section key (e.g. '/library/sections/<key>')
+  section_title     text,                         -- Plex library section title (e.g. 'Movies', 'Shows')
+  genres            jsonb NOT NULL DEFAULT '[]',  -- list of genre names from the source
+  sub_genres        jsonb NOT NULL DEFAULT '[]', -- list of sub-genre names where the source exposes them
+  metadata_blob     jsonb NOT NULL DEFAULT '{}', -- everything else the source exposes (full mirror, §4.5): cast, directors, writers, studio, mpaa, network, episode file state, MediaInfo blobs, credits, extras, etc.
+  last_synced_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (source, source_id)
+);
+
+CREATE INDEX content_external_id ON content(external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX content_type_type ON content(content_type);
+CREATE INDEX content_parent ON content(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX content_genres_gin ON content USING GIN (genres jsonb_path_ops);
+CREATE INDEX content_sub_genres_gin ON content USING GIN (sub_genres jsonb_path_ops);
+CREATE INDEX content_section ON content(section_key);
+```
+
+- `content` is the **full metadata mirror** (§4.5: mirror everything). Core searchable fields are columns (`title`, `year`, `content_type`, `external_id`, `genres`, `sub_genres`, `section_key`, `rating`, etc.); **everything else** the source exposes goes into `metadata_blob` (jsonb) so the mirror is complete without a schema per source field. This matches "mirror everything" + "full picture, no trimming for V1".
+- `source` + `source_id` is the unique key per source. `external_id` (TMDb/TVDb) is the stable cross-source key used to de-duplicate / match across Plex/Sonarr/Radarr when the same title appears in multiple sources.
+- For episodes: `content_type = 'episode'`, `parent_id` points to the series' content row (content_type = 'series'), `season_number` + `episode_number` identify the episode.
+- `genres`/`sub_genres` are jsonb arrays of name strings (from the source's genre/sub-genre exposure). The GIN indexes let the case board / map / suggested-title lists filter by genre/sub-genre efficiently.
+- `metadata_blob` stores the full extra metadata (cast, directors, writers, summary, full ratings, fanart, episode file state, MediaInfo, credits, extras, etc.) — complete mirror, §4.5. The RPG can read from it for UI richness and for achievement triggers that need it (e.g. director-based achievements, franchise-based achievements).
+- `last_synced_at` is updated on each poll's incremental sync for the rows that changed.
+
+### 6.4.5 Watch records (the RPG's own awarded watches)
+
+```sql
+CREATE TABLE watches (
+  id                    bigserial PRIMARY KEY,
+  character_id           bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  content_id             bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  content_type          text NOT NULL,                 -- 'movie' | 'episode' (the unit that was completed)
+  completed_at           timestamptz NOT NULL DEFAULT now(),  -- when the RPG detected/awarded the completion
+  pct_viewed             numeric NOT NULL,              -- the Plex-reported % viewed at detection time (for audit / threshold confirmation)
+  xp_awarded             bigint NOT NULL,               -- total XP awarded for this completion (normal + bonuses)
+  normal_xp              bigint NOT NULL,               -- the base XP (episode=10 / movie=20)
+  bonuses                jsonb NOT NULL DEFAULT '[]',  -- list of bonus objects applied: {name, xp} e.g. {name:'new_arrival', xp:5}, {name:'featured', xp:10}, {name:'season', xp:100}, {name:'series', xp:500}, {name:'streak', xp:50}, {name:'variety', xp:5}, {name:'holiday_halloween', xp:15}
+  new_arrival            boolean NOT NULL DEFAULT false,
+  new_arrival_at         timestamptz,                  -- the title's arrival timestamp (from Sonarr/Radarr import), when set
+  featured               boolean NOT NULL DEFAULT false,
+  featured_case_id       bigint REFERENCES featured_cases(id),
+  season_bonus           boolean NOT NULL DEFAULT false,
+  series_bonus           boolean NOT NULL DEFAULT false,
+  first_completion       boolean NOT NULL DEFAULT false,
+  holiday_bonus          jsonb,                        -- which holiday window(s) applied, if any: {window:'halloween', multiplier:1.5}
+  via_plex               boolean NOT NULL DEFAULT true,
+  via_manual             boolean NOT NULL DEFAULT false,  -- V2 manual-claim flag; V1 always via_plex=true
+  created_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX watches_character ON watches(character_id);
+CREATE INDEX watches_completed_at ON watches(character_id, completed_at DESC);
+CREATE INDEX watches_content ON watches(content_id);
+```
+
+- `watches` is the **RPG's own record** of awarded completions (not the stack's watch state — that stays in Plex). Each row = one completion the RPG awarded points for.
+- `xp_awarded` = total XP for the row (normal + all bonuses). `normal_xp` = the base (10/20). `bonuses` jsonb lists each bonus applied with its name + XP, so the watch log / character sheet can show "this completion earned +10 normal +5 new-arrival +10 featured = +25 XP".
+- `new_arrival` / `new_arrival_at` / `featured` / `featured_case_id` / `season_bonus` / `series_bonus` / `first_completion` / `holiday_bonus` / `via_plex` / `via_manual` are the audit flags for achievements (e.g. "first new-arrival bonus", "featured streak", "perfect day", "via-plex vs manual").
+- `pct_viewed` is stored for audit/threshold confirmation (≥95% at detection time).
+
+### 6.4.6 Cases (player-driven case board)
+
+```sql
+CREATE TABLE cases (
+  id              bigserial PRIMARY KEY,
+  character_id    bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  content_id      bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  case_type       text NOT NULL,                 -- 'movie_case' | 'series_campaign' | 'featured'
+  status          text NOT NULL DEFAULT 'available',  -- 'available' | 'taken' | 'in_progress' | 'completed'
+  taken_at        timestamptz,
+  completed_at    timestamptz,
+  completion_watch_id bigint REFERENCES watches(id),  -- the watch row that completed this case (for movie_case: the movie watch; for series_campaign: the watch that completed the final episode)
+  bonus_flags     jsonb NOT NULL DEFAULT '[]',  -- which bonuses applied to this case's completion
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX cases_character ON cases(character_id);
+CREATE INDEX cases_status ON cases(character_id, status);
+```
+
+- `cases` = the **case board**. `case_type`: movie_case (one-off, content_type='movie'), series_campaign (multi-episode, content_type='series' — the case completes when all episodes are watched), featured (a featured case, linked to featured_cases).
+- `status`: available (on the board, not yet taken), taken (player chose it), in_progress (at least one episode/movie watched but not completed), completed (done). For movie_case, taken→completed on the movie watch. For series_campaign, taken→in_progress on first episode watch, in_progress→completed on the episode that completes the series.
+- `completion_watch_id` links to the watch row that completed the case (for audit + achievement triggers like "one-click wonder", "instant case").
+- Cases are **player-driven**: the player takes a case from available; the backend doesn't auto-assign. Case generation (which content becomes a case card) is §5.4 / §9.1.
+
+### 6.4.7 Featured cases (periodic)
+
+```sql
+CREATE TABLE featured_cases (
+  id          bigserial PRIMARY KEY,
+  character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  period      text NOT NULL,                     -- e.g. '2026-wk37' or '2026-10' — identifies the period
+  content_id  bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  selection_mode text NOT NULL,                  -- 'new_arrival' | 'all_time_ranking'
+  bonus_xp    bigint NOT NULL DEFAULT 10,       -- featured bonus XP (§5.1: +10)
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (character_id, period)
+);
+```
+
+- `featured_cases` = one featured case per period per character (the featured case for that period). `period` identifies the period (weekly/monthly — finalize during implementation). The old period's featured case becomes historical; a new one is generated each period.
+- `selection_mode` = how it was chosen (new_arrival vs all_time_ranking, §5.4/Q7). `content_id` = the featured title. `bonus_xp` = the featured bonus (§5.1: +10 XP on completion).
+- Featured case generation runs during the poll/sync (§9.1): pick the featured title per the selection rule, insert a new featured_cases row for the new period.
+
+### 6.4.8 Achievements
+
+```sql
+CREATE TABLE achievements (
+  id           bigserial PRIMARY KEY,
+  slug         text NOT NULL UNIQUE,             -- e.g. 'first_blood', 'horror_native'
+  name         text NOT NULL,
+  description  text NOT NULL,
+  category     text NOT NULL,                    -- 'completion_milestone' | 'genre_coverage' | 'time_streak' | 'novelty_firsts' | 'themed_quirky' | 'combo'
+  visible      boolean NOT NULL DEFAULT true,   -- visible vs hidden (§5.5)
+  kind         text NOT NULL,                     -- 'once' | 'progress' | 'streak' | 'counter' | 'combo' -- achievement evaluation kind
+  -- progress/counter kinds store their target + current in achievement_state; once-kinds are evaluated purely from watches/content state
+  target_value bigint,                           -- for counter/progress kinds: the target count
+  metadata     jsonb NOT NULL DEFAULT '{}',     -- achievement-specific evaluation metadata (e.g. required genre, required sub-genre, date window, day-of-week, hour range, franchise filter, director filter, etc.) — finalize per-achievement during implementation
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE character_achievements (
+  character_id   bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  achievement_id bigint NOT NULL REFERENCES achievements(id) ON DELETE CASCADE,
+  unlocked_at    timestamptz NOT NULL DEFAULT now(),
+  progress       bigint NOT NULL DEFAULT 0,     -- current progress for progress/counter kinds (e.g. 5/10)
+  PRIMARY KEY (character_id, achievement_id)
+);
+
+CREATE INDEX achievements_category ON achievements(category);
+CREATE INDEX achievements_visible ON achievements(visible);
+```
+
+- `achievements` = the achievement definitions (the §5.5 list). `slug` is the stable internal id. `visible` = visible vs hidden. `kind` = how it's evaluated: `once` (fires when a condition is met, one-time), `progress`/`counter` (has a current + target, shows progress), `streak` (evaluated against the streak state), `combo` (multi-condition).
+- `metadata` jsonb holds per-achievement evaluation parameters (e.g. a genre-coverage achievement's required genre count, a themed achievement's required genre + day-of-week + hour range, a holiday achievement's window, a director achievement's director id filter). Finalize each achievement's metadata during implementation — the list in §5.5 is the first cut.
+- `character_achievements` = which character unlocked which achievement + when, plus current progress for progress/counter kinds. Visible achievements read progress from here for the badge wall.
+
+### 6.4.9 Sync state (poll cursors)
+
+```sql
+CREATE TABLE sync_state (
+  character_id  bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  source        text NOT NULL,                 -- 'plex' | 'sonarr' | 'radarr'
+  last_sync_at  timestamptz NOT NULL DEFAULT now(),
+  cursor        text,                          -- last-sync marker per source (e.g. last ratingKey synced, last import timestamp checked, etc. — finalize per source during implementation)
+  PRIMARY KEY (character_id, source)
+);
+```
+
+- `sync_state` = per-source last-sync markers for incremental sync (§4.5, §9.1). The poll uses these to only fetch what changed.
+
+### 6.4.10 Settings / config (RPG config values, §5.1/§5.2 tunable)
+
+```sql
+CREATE TABLE settings (
+  character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  key          text NOT NULL,
+  value        text NOT NULL,                  -- stringified config value (numbers/booleans as text; parse in app)
+  PRIMARY KEY (character_id, key)
+);
+```
+
+- `settings` = the RPG's configurable values for the character/server (the LoGD-inspired module/settings surface, §15.4). V1 samples:
+  - `near_end_threshold_pct` = '95' (§5.1)
+  - `new_arrival_window_hours` = '48' (§5.1)
+  - `poll_interval_seconds` = '300' (§9.1: 5 min)
+  - `horror_list_order` / genre list order — stored as a JSON array of genre names in order, e.g. key `genre_list_order`, value `'["Horror","Thriller","Mystery","Sci-Fi","Fantasy","Documentary","Comedy","Drama","Romance","Animation"]'` (§5.2 cascade)
+  - `sub_genre_purchase_xp_threshold` = '100' (§5.2)
+  - `holiday_windows` = JSON array of window objects: `[{"name":"halloween","start":"10-01","end":"10-31","genres":["Horror"],"multiplier":1.5}, {"name":"winter_holiday","start":"12-01","end":"12-31","genres":["Comedy","Drama"],"multiplier":1.5}]` (finalize genres per window during implementation)
+  - `perks_unlocked` = JSON array of perk slugs unlocked (§5.2)
+  - `daily_budget_enabled` = 'false' (§15.2 #1 — off by default for V1; toggleable)
+  - `daily_budget_actions` = '3' (if enabled)
+  - `featured_selection_mode` = 'new_arrival' | 'all_time_ranking' | 'rotate' (§5.4/Q7)
+  - `fame_enabled` = 'false' (§15.2 #4 — off by default for V1; toggleable)
+- Settings are the **toggleable/tunable feature surface** modeled on LoGD's Superuser Grotto module manager + game settings (§15.4). V1 defaults above reflect the spec's current commitments (no daily budget, no fame, 95% threshold, 48h new-arrival window, 5-min poll, 100 sub-genre XP purchase, horror-first genre list).
+
+### 6.4.11 Migration approach
+
+- **Migration layer:** use SQLx migrations (or a lightweight migrations table) to version the schema. Each migration is a versioned SQL file applied in order on first run / upgrade.
+- **Initial migration (V1 schema):** the tables above, in dependency order: `accounts` → `characters` → `genres` (seed horror + the genre list order) → `sub_genres` (seed from library mirror on first sync, or a small starter set) → `character_state` (one row, seeded at character creation with horror accessed, level 1, xp 0) → `genre_access` (seed horror row for the character) → `sub_genre_xp` (empty buckets, created per sub-genre on first watch in that sub-genre or pre-created from the library's sub-genre list) → `content` → `watches` → `cases` → `featured_cases` → `achievements` (seed the §5.5 achievement list) → `character_achievements` (empty) → `sync_state` (one row per source, seeded at first sync) → `settings` (seed V1 defaults).
+- **Seed data (first run):**
+  - `genres`: seed the fixed genre list order (horror first + the rest in order). Finalize the list during implementation.
+  - `achievements`: seed the §5.5 list (name, description, category, visible/hidden, kind, target_value where applicable, metadata where applicable).
+  - `character_state`: one row at character creation, level 1, xp 0, horror accessed, streak 0.
+  - `genre_access`: horror row for the character at creation.
+  - `settings`: seed V1 defaults (§6.4.10).
+- **Incremental sync:** the `content` table is populated/updated by the poll/sync (§9.1), not by a one-time backfill (the library is brand new — §9.3). `sub_genres` can be pre-seeded from the first content sync's sub-genre exposures, or created on demand as watches accumulate in new sub-genres.
+- **Schema evolution:** future migrations add columns/tables for V2 features (manual claims → add `via_manual` handling, shared quests → add multi-character + shared_cases tables, economy → add inventory/spending tables, fame → add fame table + state). The `metadata_blob` + `bonuses`/ `holiday_bonus`/`metadata` jsonb columns already give room to add data without early schema churn.
+
+### 6.4.12 Design notes / rationale
+
+- **Single-character V1 with character_id throughout:** even though V1 is one character, the schema carries `character_id` on every state table. This is intentional — it lets V2 multi-character / shared quests land without a rewrite (just add more character rows). The V1 app always reads/writes the single character's rows.
+- **`content.metadata_blob` + `watches.bonuses` + `achievements.metadata` + `settings.value` as jsonb:** the spec says "mirror everything" (§4.5) and "finalize during implementation" for many values. jsonb columns absorb that without a schema-per-field explosion now, and without losing queryability for the fields that matter (genres, sub_genres, external_id, content_type, etc. are real columns with indexes).
+- **`watches.bonuses` as a list:** makes the watch log / character sheet renderable ("this completion earned +10 normal +5 new-arrival +10 featured") and makes achievement triggers auditable ("perfect day" checks bonuses for new_arrival + featured + holiday).
+- **`cases` separate from `watches`:** cases are the player-facing board; watches are the RPG's awarded-completion ledger. They're linked by `completion_watch_id` so achievements like "instant case" / "one-click wonder" can be evaluated.
+- **`sync_state` cursors:** finalize the exact cursor shape per source during implementation (e.g. Plex: last ratingKey synced; Sonarr: last import timestamp checked; Radarr: last import timestamp checked). The spec commits to incremental sync keyed by IDs + last-sync markers (§4.5), not to a specific cursor format.
+
+---
+
+## 13. Assumptions
+
+- The Bear Cave stack is running and reachable on the LAN at the configured ports.
+- Plex has a populated library (Movies + Shows) with watch-state data.
+- Sonarr/Radarr have API keys and are reachable.
+- The host runs Linux (the stack is Linux-only; the RPG sitting on the same host inherits that).
+- PostgreSQL is or can be made available on the host network without adding a Compose container.
+- The existing `backend/` Rust code is a starting point / reference for style and helpers; the RPG is a new crate, not a continuation of the stack-management routes.
+
+---
+
+## 14. Non-goals
+
+- This is **not** a replacement for Plex, Sonarr, or Radarr.
+- This is **not** a general media dashboard (the stack already has `stack-watchable` / `stack-unwatched` / `stack-recent` for that).
+- This is **not** a tool that writes back to the stack or changes playback behavior.
+- This is **not** a multiplayer game in V1.
+
+---
+
+---
+
+## 15. Inspiration & reference: Legends of the Green Dragon (LoGD)
+
+> **Why this section exists:** the user asked to mine LoGD for ideas, mods, and host-inspiration. LoGD is a PHP/MySQL browser RPG (remake/homage of Seth Able's Legend of the Red Dragon, a BBS door game). It is not a technical dependency of this RPG — this spec's stack is Rust/Axum + Postgres, not PHP/MySQL. LoGD is referenced here purely as a **design inspiration source** and as a model for how a host ships/modularizes features.
+
+### 15.1 What LoGD is (summary)
+
+- **Format:** text-based browser multiplayer RPG. Played by clicking links; no real-time action.
+- **Loop:** a **game day** is the main cycle. Each game day grants a set of **forest fights** (action points / turns), plus refreshed buffs/stats; when you run out you start a **new day** (some servers have an explicit "New Day" link; days can also tick on a timer, e.g. 2 game days per real day in the classic server).
+- **Progression:** 15 levels per rank, then slay the dragon, then next rank, repeat (new game+). Ranks: Farmboy/Farmgirl → Page → Squire → … → Gladiator etc.
+- **Combat:** turn-based forest fights vs monsters; death costs on-hand gold + some XP (bank gold is safe). Healer's hut to recover.
+- **Economy:** gold earned in fights, deposited in the bank for **daily interest**; gems are a scarce secondary currency found while exploring, spent on permanent upgrades (e.g. stallion, vitality) or temporary boosts (ale).
+- **PvP:** optional; new players protected for first 5 game days / 1500 XP. Attacking a player yields a share of their XP + on-hand gold; losing costs XP + on-hand gold.
+- **Fame:** there is a **fame rating / fame bar** concept — a visible reputation signal; the primer and the module list both reference fame-related mechanics (fame gain, fame display, fame contests). (Exact fame arithmetic is server/version-dependent; treat "visible fame signal tied to deeds" as the inspiration, not a specific formula.)
+- **Social:** inn (sleep to protect from casual PvP; bribe the bartender to attack someone in the inn), clans, mail/chat RP, commentators/spectators, graveyard/shades underworld when dead.
+
+### 15.2 Design ideas to borrow / adapt (entertainment RPG → media-watching RPG translation)
+
+1. **Daily turn bucket.** LoGD gives a fixed number of forest fights per game day, refreshed on new day; unused turns don't carry over. **Adaptation idea:** a daily "investigation budget" — e.g. a daily cap on how many completion credits / case-picks you can make per real day (or per poll cycle), refreshed daily. Gives a daily-login rhythm and prevents one session from burning through everything. The existing spec's 5-minute poll + completion model stays; this would be an extra **per-day activity budget** layered on top. (Optional — V1 could omit; LoGD's "daily turns" is the inspiration, not a requirement.)
+
+2. **New Day as a rhythm event.** LoGD's new day is a visible event: fresh fights, interest on banked gold, buff refresh, resurrect if dead. **Adaptation idea:** a visible "end of day / new day" moment in the RPG that surfaces: interest-like bonus on "saved up" progress (e.g. a small bonus for having watched something that day, or a streak refresh), fresh featured case for the new period, any daily-budget reset. Makes the passage of time feel like part of the game rather than invisible.
+
+3. **Interest on banked progress.** LoGD rewards leaving gold in the bank (daily interest). **Adaptation idea (loose):** reward "not spending / not burning your budget" — e.g. a tiny bonus for carrying momentum across days (streak-adjacent), or a bonus for completing the same series across multiple days (slow-burn investment). Keep it light; the spec's existing streak model is the vehicle.
+
+4. **Fame as a visible reputation signal.** LoGD has a fame rating/bar that reflects deeds. **Adaptation idea:** an explicit **fame / renown** number or bar on the character sheet, separate from XP/level, that goes up from notable deeds (first completion of a title, completing a featured case, unlocking a genre, a big streak, a holiday-window completion). Fame could feed into the "investigator reputation" flavor and unlock social-facing niceties. (Loose adaptation — finalize during implementation; the spec commits to "a fame/renown signal is a good LoGD-inspired idea to consider," not to a formula.)
+
+5. **Spectators / commentary.** LoGD has commentators and a visible social layer (chat, mail, public commentary). **Adaptation idea (V2, household):** a lightweight "case feed" or "case commentary" where household members can leave a note on a case ("this one's good") — ties to the deferred V2 shared-quest idea. V1 is single-player, so this is just noted as LoGD-inspired future work.
+
+6. **Death as a soft setback, not a full reset.** LoGD: dying costs on-hand gold + some XP, bank is safe, you linger in the graveyard doing things until resurrected. **Adaptation idea (optional, abstract):** a "cold case" or "on the shelf" state — if you let a taken case go too long without progress, it goes back to available (no big penalty; you just lose the in-progress status). Gives the case board a sense of "cases don't wait forever" without punishing. Very loose; finalize during implementation or omit.
+
+7. **New-player onboarding ramp.** LoGD's primer + first-day guidance is explicit (the primer doc is written because new players were confused). **Adaptation idea:** a short first-login walkthrough in the RPG: "here's your character sheet, here's the case board, pick a case, watch something, come back in 5 minutes." The spec's V1 is single-player on a brand-new library, so onboarding matters. (Concrete onboarding text TBD during implementation.)
+
+8. **Rank/title ladder as flavor.** LoGD's ranks are mostly flavor + a gate (15 levels then dragon). **Adaptation idea:** keep the spec's title/rank flavor (Junior Investigator → Detective → …) at level milestones, primarily cosmetic + the genre-unlock gate. LoGD's "rank = gate to dragon" maps loosely to "level = gate to next genre purchase."
+
+9. **Seasonal / holiday content.** LoGD has holiday text modules (Christmas, April Fool's, Talk Like a Pirate Day, etc.) — date-gated flavor/special events. **Adaptation idea:** this is the LoGD ancestor of the spec's **date-detected holiday bonuses** (§5.2, Q6). LoGD's existing holiday-module pattern (a module that fires on a date and adds special text/effects) is a direct model for how to implement the RPG's holiday windows: a date-aware module that activates a bonus for the relevant genre during the window. Good concrete precedent.
+
+10. **Grind-with-a-purpose pacing.** LoGD is deliberately paced: 15 levels per rank, forest fights as a finite daily resource, dragon as the long-term goal. **Adaptation idea:** keep the media RPG's pacing intentional rather than "watch everything, get everything instantly." The genre-unlock-via-sub-genre-XP model (§5.2/Q6) is the RPG's version of "work toward a gate." The daily budget idea (point 1) is the RPG's version of "finite turns per day." Both give the watching a game-loop shape rather than pure consumption.
+
+### 15.3 What NOT to copy
+
+- **PvP predation on new players.** LoGD's PvP-predation-on-farmboys is a multiplayer-social dynamic; the media RPG is single-player V1 and a household/co-op V2 — replicating predatory PvP wouldn't fit. (If V2 household competition ever appears, make it friendly/optional, not predatory.)
+- **Gold/XP loss on death as the main tension.** The media RPG isn't a combat game; "death" tension doesn't translate directly. The "cold case goes back to the board" idea (point 6) is the softened analog if used at all.
+- **PHP/MySQL architecture.** This RPG is Rust/Axum + Postgres, separate from the stack, not a new container. LoGD's PHP/MySQL is referenced for design only. (Though §15.4 below borrows the **module/host model**, not the stack.)
+- **Real-time anything.** LoGD is turn/daily-based and click-through; that part actually **does** translate well (the RPG is also not real-time — 5-minute poll, daily rhythms). So LoGD's non-real-time daily-loop design is compatible, not opposed.
+
+### 15.4 Host / module model — what a LoGD host does, and what to steal for this RPG
+
+LoGD's **host model** is the relevant structural inspiration, more than any single mechanic:
+
+- **Core + modules.** LoGD ships a core game plus a large set of **modules** (administrative, clan, darkhorse games, dragon mods, forest specials, gardens, graveyard specials, holiday texts, inn specials, lodge, mounts, pvp, quests, races, shades, specialties, travel, village, village specials, etc.). Hosts install the core, then **select which modules to install and activate** via the installer / Superuser Grotto module manager.
+- **Baseline + optional.** The installer installs a recommended baseline of modules; hosts then toggle additional modules on/off and configure each module's settings in the game settings page. A host's "flavor" is largely the **module set + settings** they choose.
+- **Host differentiation.** Different LoGD servers run different module sets and settings — that's how servers differentiate (more forest fights, new day link, PvP on/off, extra shops, extra races, extra quests, holiday modules active/inactive, etc.). The r/LotGD community and DragonPrime Reborn / NB-Core +nb fork exist specifically to help hosts find, rehost, and refactor modules.
+- **Module release pipeline.** Historically via DragonPrime.net (now DragonPrime Reborn, a snapshot archive of legacy modules that often need refactoring for PHP 8+); modern forks (NB-Core +nb, StephenKise) add hooks, Composer integration, Twig templates, async/Ajax, and a Docker deployment path. The **module = a packaged add-on a host can install/activate/configure** is the key structural idea.
+
+**What to steal structurally for the media RPG (this is the most useful part for the user's "mods/host inspiration" ask):**
+
+- **Treat the RPG as core + optional modules/features.** The spec already has"finalize during implementation" items (featured-case selection rule, achievement list, genre unlock thresholds, perk list, holiday calendar, daily budget, fame formula). Model these as **configurable features** a host (the player/household) can turn on/off and tune, rather than hard-coded everything.
+- **A "module/features" selection + settings page** for the RPG's own admin (the player's settings): which achievement categories are active, which holiday windows are enabled, daily budget on/off and size, fame formula on/off, featured-case mode (new vs all-time ranking), poll interval, near-end threshold, genre unlock costs. This mirrors LoGD's Superuser Grotto module manager + game settings page at the small scale of a single-player/household app.
+- **Seasonal/holiday modules as date-gated feature modules.** LoGD's holiday text modules are a direct pattern for the RPG's holiday windows: each holiday window = a small feature module that activates on a date range and adds a bonus/rule. Easy to add new holiday windows later by adding a new module/rule, without touching core.
+- **Config-driven, not hard-coded, wherever the spec says "finalize during implementation."** That's the LoGD lesson: the fun host customization comes from configuration + modules, not from rewriting core. For a single-player/household RPG the "host" is the player; give them a settings surface that reads like LoGD's module/settings grotto, just scaled down.
+- **Onboarding primer.** LoGD's written primer (because new players were confused) is a reminder to invest in first-login guidance. The RPG should have a short onboarding walkthrough.
+
+### 15.5 Concrete "modules" the RPG could ship as configurable features (inspired by LoGD's module catalog)
+
+These are **possible configurable features** for the RPG's settings surface — inspired by LoGD's module names/categories, adapted to a media-watching RPG. None are required for V1; they're a menu the player can turn on later. Naming is LoGD-flavored for fun.
+
+| LoGD module inspiration | RPG feature idea (configurable) | Spec section |
+|---|---|---|
+| Forest / forest fights / new day | Daily investigation budget (turns per day), new-day rhythm event, interest-on-momentum | §15.2 #1, #2, #3 |
+| Fame bar / fame rating | Fame/renown signal on character sheet, from notable deeds (finalize formula) | §15.2 #4 |
+| Holiday texts (Christmas, April Fool's, TLPD, etc.) | Date-detected holiday/seasonal bonus windows per genre (finalize calendar) | §5.2/Q6 #9 |
+| Inn / sleeping / bartender bribe | (abstract) "cold case goes back to board" timeout; inn = a "signed off / away" state that protects a taken case's progress from aging? Very loose | §15.2 #6 |
+| Races / classes / specialties | Genre specialization = the RPG's equivalent of race/class/specialty: your unlocked genres are your "specialties"; hidden achievements could be "specialty" unlocks (e.g. "completed 5 horror sub-genres" → horror specialist badge) | §5.2/Q6, §5.5 |
+| Quests (bandit, dags, manticore, minotaur) | Featured cases / case types = the RPG's "quests"; maybe named case templates later (e.g. "The 5-night horror sweep" = watch 5 horror sub-genres in a window) | §5.4/Q7 |
+| Mounts (stallion, rarity, upgrade) | (abstraction) a "long-term companion" perk you buy once with sub-genre XP or level — e.g. a permanent small XP boost for a chosen genre, flavoring the "stallion fights with you" idea as "your specialist consultant boosts this genre" | §5.2, §15.2 #10 |
+| Graveyard / shades / Ramius | (abstract) the "cold case / on the shelf" underworld state where abandoned cases sit | §15.2 #6 |
+| Bank / interest | (abstract) momentum interest / daily streak refresh | §15.2 #3 |
+| PvP / slay other players | Not for V1; V2 household co-op/competition should be friendly and opt-in, not predatory | §15.3 |
+| Commentary / spectators / chat | V2 household case feed / commentary ("this one's good") — ties to deferred shared quests | §15.2 #5 |
+| Clan system | V2 household "case squad" / shared case board — deferred | V2 |
+| Donators / points transfer / store | Not relevant to a personal media RPG; skip the real-money/donation patterns entirely | §15.3 |
+
+### 15.6 Sources consulted
+
+- LoGD official site & module list: <http://www.lotgd.net/> and `about.php?op=listmodules` (full module catalog used above).
+- LoGD New Player Primer: <http://www.lotgd.net/petition.php?op=primer> (day loop, PvP, death, new day, forest fights, interest).
+- LoGD gameplay hints (community): <http://www.geocities.ws/riochas/LoGD.html> (daily rhythm, stallion, vitality, gems, bank interest, 15-level-per-rank, dragon kill, new day link, server-to-server variation).
+- LoGD wiki (Muds Wiki / Fandom): game format, ranks, dragon/new game+, versions/licensing, server list, Dragonprime/Dragonbones.
+- NB-Core +nb fork: <https://github.com/NB-Core/lotgd> (modern PHP 8.3+, Composer, Twig, async/Ajax, Docker, module hooks, newday cron, settings-as-config).
+- StephenKise revival: <https://github.com/stephenKise/Legend-of-the-Green-Dragon> (installer, PHP 8.4+/MySQL 8+, module system, permission system, translator tools, new-day loop).
+- jimlunsford/lotgd + jimlunsford/lotgd-modules: core file layout (modules/ directory, modules.php, runmodule.php, superuser module manager, game settings per module) and a modules repo.
+- DragonPrime Reborn (community module rehost/snapshot archive) and r/LotGD (community module ideas, recreation efforts) for the host/modding-ecosystem picture.
+- LoGD server list (lotgd.net + wiki): how different hosts run different module sets/settings — the host-differentiation model.
+
+### 15.7 How to use this section going forward
+
+- Treat §15 as an **inspiration menu**, not a requirements list. Items marked "(optional)" or "(V2)" or "finalize during implementation" are not committed.
+- When you resolve a §12-style open question that overlaps something here (e.g. "should there be a daily budget?", "fame formula?"), resolve it in §12/§5 and reference §15 as the inspiration source.
+- The **host/module model (§15.4)** is the most actionable takeaway: design the RPG's settings/feature surface to be modular/config-driven like LoGD's module manager, scaled to a single-player/household app. Write that decision into the spec when it's resolved (it's currently "inspiration, not committed").
+
+---
+
+*Spec end. Next step: implementation planning (or add new open questions to §12 as they arise during implementation and I'll update the spec in place).*
+> **Change log (2026-09-08, batch 1):** §12 Q1–Q5 resolved — Q1 host install (§6.3), Q2 Svelte (§8.4), Q3 5 min poll (§9.1), Q4 95% near-end threshold configurable (§5.1), Q5 base episode XP = 10 / level 2 at 100 XP rough anchors (§5.1, §5.2). Movie/season/series/streak XP values remain TBD.
+> **Change log (2026-09-08, batch 2):** §12 Q6–Q13 resolved — Q6 genre unlock model: horror opening, everything else locked, unlock via sub-genre XP purchase, cascade one genre at a time, library-filtered sub-genre suggested titles, date-detected holiday/seasonal bonuses (§5.2); Q7 featured cases = new arrivals or all-time ranking by external rating (§5.4, §4.5); Q8 massive achievement list, categories decided, items finalized during implementation (§5.5); Q9 port 86532 (§10.2); Q10 set-a-pin gate, PIN in Postgres, V1 single-user (§7.3); Q11 common libs fine, minimal non-coupling sharing, no shared RPG state in common lib (§7.2); Q12 no big backfill (library brand new), faster updates at first, settle to 5-min cadence once caught up (§9.3); Q13 mirror everything the APIs expose, full metadata store, stack remains source of truth (§4.5).
+> **Change log (2026-09-08, post-batch tightening):** §5.1/§5.2 got concrete V1 values — episode XP = 10, movie XP = 20, season bonus = 10 × episode count, series bonus = 25 × total episode count, first-completion +10, new-arrival +5 (48h window), featured +10, day-streak bonus table (§5.1.1), genre variety bonus +5/+15 (§5.1.2), level table 1→10 with cumulative XP thresholds (§5.2), genre unlock: horror opening, level-broadens-access (1 new genre per level), sub-genre XP purchase at 100 XP (+10 episode / +20 movie toward the sub-genre), fixed ordered genre list cascade, suggested titles from library mirror, holiday windows (Halloween/winter starters, +50% XP multiplier, date-gated feature modules) (§5.2); §6.4 concrete Postgres schema added (accounts, characters, character_state, genres, sub_genres, genre_access, sub_genre_xp, genre_xp_ledger, content with full metadata_blob mirror, watches, cases, featured_cases, achievements, character_achievements, sync_state, settings) + migration approach + seed data + design notes (§6.4).
