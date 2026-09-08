@@ -1,5 +1,7 @@
 use crate::normalization::NormalizedMetadata;
-use crate::stack::{PlexLibraryItem, RadarrMovie, SonarrSeries};
+use crate::stack::{
+    PlexClient, PlexLibraryItem, RadarrClient, RadarrMovie, SonarrClient, SonarrSeries,
+};
 use crate::{ProbeError, Result};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -321,6 +323,132 @@ impl ContentSyncRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StackSyncFailure {
+    pub source: ContentSource,
+    pub operation: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct StackSyncOutcome {
+    pub batch: ContentSyncBatch,
+    pub failures: Vec<StackSyncFailure>,
+}
+
+pub struct StackSyncOrchestrator<'a> {
+    plex: &'a PlexClient,
+    sonarr: &'a SonarrClient,
+    radarr: &'a RadarrClient,
+}
+
+impl<'a> StackSyncOrchestrator<'a> {
+    pub fn new(
+        plex: &'a PlexClient,
+        sonarr: &'a SonarrClient,
+        radarr: &'a RadarrClient,
+    ) -> Self {
+        Self {
+            plex,
+            sonarr,
+            radarr,
+        }
+    }
+
+    pub async fn collect(&self) -> StackSyncOutcome {
+        let mut records = Vec::new();
+        let mut failures = Vec::new();
+
+        match self.plex.sections().await {
+            Ok(sections) => {
+                for section in sections {
+                    let Some(section_key) = section.key.as_deref() else {
+                        failures.push(StackSyncFailure {
+                            source: ContentSource::Plex,
+                            operation: "library_sections".to_owned(),
+                            error: "section was missing key".to_owned(),
+                        });
+                        continue;
+                    };
+                    match self.plex.library_items(section_key).await {
+                        Ok(items) => {
+                            for item in items {
+                                match ContentSyncRecord::from_plex(&item) {
+                                    Ok(mut record) => {
+                                        record.section_key = section.key.clone();
+                                        record.section_title = section.title.clone();
+                                        records.push(record);
+                                    }
+                                    Err(error) => failures.push(StackSyncFailure {
+                                        source: ContentSource::Plex,
+                                        operation: format!("library_items/{section_key}"),
+                                        error: error.to_string(),
+                                    }),
+                                }
+                            }
+                        }
+                        Err(error) => failures.push(StackSyncFailure {
+                            source: ContentSource::Plex,
+                            operation: format!("library_items/{section_key}"),
+                            error: error.to_string(),
+                        }),
+                    }
+                }
+            }
+            Err(error) => failures.push(StackSyncFailure {
+                source: ContentSource::Plex,
+                operation: "library_sections".to_owned(),
+                error: error.to_string(),
+            }),
+        }
+
+        match self.sonarr.series().await {
+            Ok(series) => {
+                for series in series {
+                    match ContentSyncRecord::from_sonarr(&series) {
+                        Ok(record) => records.push(record),
+                        Err(error) => failures.push(StackSyncFailure {
+                            source: ContentSource::Sonarr,
+                            operation: "series".to_owned(),
+                            error: error.to_string(),
+                        }),
+                    }
+                }
+            }
+            Err(error) => failures.push(StackSyncFailure {
+                source: ContentSource::Sonarr,
+                operation: "series".to_owned(),
+                error: error.to_string(),
+            }),
+        }
+
+        match self.radarr.movies().await {
+            Ok(movies) => {
+                for movie in movies {
+                    match ContentSyncRecord::from_radarr(&movie) {
+                        Ok(record) => records.push(record),
+                        Err(error) => failures.push(StackSyncFailure {
+                            source: ContentSource::Radarr,
+                            operation: "movies".to_owned(),
+                            error: error.to_string(),
+                        }),
+                    }
+                }
+            }
+            Err(error) => failures.push(StackSyncFailure {
+                source: ContentSource::Radarr,
+                operation: "movies".to_owned(),
+                error: error.to_string(),
+            }),
+        }
+
+        StackSyncOutcome {
+            batch: ContentSyncBatch::from_records(records),
+            failures,
+        }
+    }
+}
+
 impl ContentSyncBatch {
     pub fn from_records(records: impl IntoIterator<Item = ContentSyncRecord>) -> Self {
         let mut groups = ContentSyncRecord::deduplicate(records)
@@ -351,7 +479,10 @@ impl ContentSyncBatch {
                 .keys()
                 .filter(|identity| {
                     matches!(identity, ContentIdentityKey::External { .. })
-                        && same_title_year(identity, groups.get(&fallback_identity).unwrap())
+                            && same_title_year(
+                                groups.get(&fallback_identity).unwrap(),
+                                groups.get(identity).unwrap(),
+                            )
                 })
                 .cloned()
                 .collect::<Vec<_>>();
@@ -390,30 +521,14 @@ impl ContentSyncBatch {
     }
 }
 
-fn same_title_year(identity: &ContentIdentityKey, group: &ContentSyncGroup) -> bool {
-    let ContentIdentityKey::TitleYear {
-        content_type,
-        title,
-        year,
-    } = group.records.values().next().map(ContentSyncRecord::identity_key).unwrap_or_else(|| {
-        ContentIdentityKey::TitleYear {
-            content_type: ContentType::Movie,
-            title: String::new(),
-            year: None,
-        }
-    }) else {
-        return false;
-    };
-    let ContentIdentityKey::External { content_type: external_type, .. } = identity else {
-        return false;
-    };
-    if content_type != *external_type {
-        return false;
-    }
-    group.records.values().any(|record| {
-        record.content_type == *external_type
-            && normalize_title(&record.title) == title
-            && record.year == year
+fn same_title_year(fallback_group: &ContentSyncGroup, external_group: &ContentSyncGroup) -> bool {
+    fallback_group.records.values().any(|fallback_record| {
+        external_group.records.values().any(|external_record| {
+            fallback_record.content_type == external_record.content_type
+                && normalize_title(&fallback_record.title)
+                    == normalize_title(&external_record.title)
+                && fallback_record.year == external_record.year
+        })
     })
 }
 
@@ -528,9 +643,147 @@ fn json_string_array(raw: &Map<String, Value>, key: &str) -> Vec<String> {
 mod tests {
     use super::{
         ContentIdentityKey, ContentSource, ContentSyncBatch, ContentSyncRecord, ContentType,
+        StackSyncOrchestrator,
     };
-    use crate::stack::{PlexLibraryItem, RadarrMovie, SonarrSeries};
+    use crate::stack::{
+        PlexClient, PlexLibraryItem, RadarrClient, RadarrMovie, SonarrClient, SonarrSeries,
+    };
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn orchestrates_healthy_stack_sources_into_a_batch() {
+        let (base_url, server) = stack_mock_server(None, 5).await;
+        let plex = PlexClient::with_base_url(&base_url, "plex-token");
+        let sonarr = SonarrClient::with_base_url(&base_url, "sonarr-key");
+        let radarr = RadarrClient::with_base_url(&base_url, "radarr-key");
+
+        let outcome = StackSyncOrchestrator::new(&plex, &sonarr, &radarr)
+            .collect()
+            .await;
+
+        assert!(outcome.failures.is_empty());
+        assert_eq!(outcome.batch.len(), 4);
+        assert_eq!(
+            outcome
+                .batch
+                .groups()
+                .flat_map(|group| group.records.keys())
+                .filter(|key| key.source == "plex")
+                .count(),
+            2
+        );
+        assert_eq!(
+            outcome
+                .batch
+                .groups()
+                .flat_map(|group| group.records.keys())
+                .filter(|key| key.source == "sonarr")
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcome
+                .batch
+                .groups()
+                .flat_map(|group| group.records.keys())
+                .filter(|key| key.source == "radarr")
+                .count(),
+            1
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn preserves_healthy_sources_when_sonarr_fails() {
+        let (base_url, server) = stack_mock_server(Some(401), 5).await;
+        let plex = PlexClient::with_base_url(&base_url, "plex-token");
+        let sonarr = SonarrClient::with_base_url(&base_url, "sonarr-key");
+        let radarr = RadarrClient::with_base_url(&base_url, "radarr-key");
+
+        let outcome = StackSyncOrchestrator::new(&plex, &sonarr, &radarr)
+            .collect()
+            .await;
+
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].source, ContentSource::Sonarr);
+        assert!(outcome.failures[0].error.contains("HTTP 401"));
+        assert!(outcome
+            .batch
+            .groups()
+            .any(|group| group.records.keys().any(|key| key.source == "plex")));
+        assert!(outcome
+            .batch
+            .groups()
+            .any(|group| group.records.keys().any(|key| key.source == "radarr")));
+        assert!(!outcome
+            .batch
+            .groups()
+            .any(|group| group.records.keys().any(|key| key.source == "sonarr")));
+        server.await.unwrap();
+    }
+
+    async fn stack_mock_server(
+        sonarr_status: Option<u16>,
+        expected_requests: usize,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 8192];
+                let bytes_read = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                let (status, body, content_type) = if request.contains("/library/sections")
+                    && !request.contains("/all")
+                {
+                    (
+                        200,
+                        include_str!("../fixtures/plex_sections.xml"),
+                        "application/xml",
+                    )
+                } else if request.contains("/library/sections/1/all") {
+                    (
+                        200,
+                        include_str!("../fixtures/plex_library.xml"),
+                        "application/xml",
+                    )
+                } else if request.contains("/library/sections/2/all") {
+                    (200, "<MediaContainer size=\"0\"></MediaContainer>", "application/xml")
+                } else if request.contains("/api/v3/series") {
+                    match sonarr_status {
+                        Some(status) => (status, "unauthorized", "application/json"),
+                        None => (
+                            200,
+                            include_str!("../fixtures/sonarr_series.json"),
+                            "application/json",
+                        ),
+                    }
+                } else if request.contains("/api/v3/movie") {
+                    (
+                        200,
+                        include_str!("../fixtures/radarr_movies.json"),
+                        "application/json",
+                    )
+                } else {
+                    (404, "not found", "text/plain")
+                };
+                let reason = if status == 200 { "OK" } else { "Error" };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    reason,
+                    content_type,
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{}", address), server)
+    }
 
     #[test]
     fn creates_stable_records_for_plex_arr_sources() {
