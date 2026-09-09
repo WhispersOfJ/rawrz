@@ -195,6 +195,38 @@ async fn logout(State(app): State<AppState>, request: Request) -> Response {
     response
 }
 
+async fn archetypes(State(app): State<AppState>) -> Response {
+    match app.store.lock().await.archetype_state().await {
+        Ok(Some(state)) => Json(state).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no character" })),
+        )
+            .into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+async fn select_archetype(
+    State(app): State<AppState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Response {
+    match app.store.lock().await.select_archetype(&slug).await {
+        Ok(state) => Json(state).into_response(),
+        Err(crate::ProbeError::ArchetypeSelectionConflict(reason)) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": reason })),
+        )
+            .into_response(),
+        Err(crate::ProbeError::InvalidArchetypeSelection(reason)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": reason })),
+        )
+            .into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
 async fn character(State(app): State<AppState>) -> Response {
     match app.store.lock().await.character_overview().await {
         Ok(Some(overview)) => Json(overview).into_response(),
@@ -322,6 +354,8 @@ pub fn router(store: Arc<tokio::sync::Mutex<PostgresContentStore>>) -> Router {
     let gated = Router::new()
         .route("/auth/logout", post(logout))
         .route("/api/character", get(character))
+        .route("/api/archetypes", get(archetypes))
+        .route("/api/archetypes/{slug}/select", post(select_archetype))
         .route("/api/achievements", get(achievements))
         .route("/api/orders", get(orders))
         .route("/api/orders/refresh", post(orders_refresh))

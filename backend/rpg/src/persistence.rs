@@ -68,6 +68,13 @@ async fn seed_rows_for(
         .execute(SETTINGS_SEED_SQL, &[&character_id, &keys, &values])
         .await?;
 
+    // 0012 starter loadout: the neutral archetype is permanent and seeded
+    // alongside the existing character bootstrap, without changing neutral
+    // progression history.
+    transaction
+        .execute(ARCHETYPE_BOOTSTRAP_SQL, &[&character_id])
+        .await?;
+
     Ok(bootstrap_summary(
         character_state_seeded as usize,
         genre_access_seeded as usize,
@@ -199,6 +206,14 @@ WHERE NOT EXISTS (
 )
 "#;
 
+pub const ARCHETYPE_BOOTSTRAP_SQL: &str = r#"
+INSERT INTO character_archetypes (character_id, archetype_id, unlock_source_event_key)
+SELECT $1, id, 'bootstrap:lantern_scholar'
+FROM wizard_archetypes
+WHERE slug = 'lantern_scholar'
+ON CONFLICT (character_id, archetype_id) DO NOTHING
+"#;
+
 // PIN gate account flows (spec §6.4.1 / §7.3): set-PIN creates the single
 // account exactly once; verify reads the single account's PHC pin_hash.
 pub const ACCOUNT_EXISTS_SQL: &str = "SELECT EXISTS (SELECT 1 FROM accounts)";
@@ -220,11 +235,102 @@ pub const CHARACTER_EXISTS_SQL: &str = "SELECT EXISTS (SELECT 1 FROM characters)
 // V1 has exactly one character per account (§6.4.1); the exists-check above
 // guards the insert so repeat set-PIN calls never duplicate characters.
 pub const CHARACTER_INSERT_SQL: &str = r#"
-INSERT INTO characters (account_id)
-SELECT accounts.id FROM accounts
+INSERT INTO characters (account_id, active_archetype_id)
+SELECT accounts.id, archetypes.id
+FROM accounts
+CROSS JOIN wizard_archetypes AS archetypes
+WHERE archetypes.slug = 'lantern_scholar'
 ORDER BY accounts.id
 LIMIT 1
 RETURNING id
+"#;
+
+pub const ARCHETYPE_UNLOCK_SQL: &str = r#"
+INSERT INTO character_archetypes (character_id, archetype_id, unlock_source_event_key)
+SELECT c.id, a.id, 'unlock:' || a.slug
+FROM characters c
+JOIN wizard_archetypes a ON (
+  a.unlock_kind = 'bootstrap'
+  OR (a.unlock_kind = 'level' AND EXISTS (
+    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.level >= a.unlock_target
+  ))
+  OR (a.unlock_kind = 'completed_order' AND (
+    SELECT count(*) FROM watch_orders wo WHERE wo.character_id = c.id AND wo.status = 'completed'
+  ) >= a.unlock_target)
+  OR (a.unlock_kind = 'achievements' AND (
+    SELECT count(*) FROM character_achievements ca WHERE ca.character_id = c.id
+  ) >= a.unlock_target)
+  OR (a.unlock_kind = 'streak' AND EXISTS (
+    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.best_streak_days >= a.unlock_target
+  ))
+  OR (a.unlock_kind = 'genres_accessed' AND EXISTS (
+    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.genres_accessed >= a.unlock_target
+  ))
+)
+ON CONFLICT (character_id, archetype_id) DO NOTHING
+"#;
+
+pub const ARCHETYPE_STATE_SQL: &str = r#"
+SELECT a.slug, a.display_name, a.description, a.portrait_key,
+       a.primary_effect, a.secondary_effect, a.unlock_kind, a.unlock_target,
+       a.strengths, a.weaknesses, ca.character_id IS NOT NULL AS unlocked,
+       active.slug, pending.slug, c.archetype_selected_local_date::text
+FROM characters c
+JOIN wizard_archetypes active ON active.id = c.active_archetype_id
+LEFT JOIN wizard_archetypes pending ON pending.id = c.pending_archetype_id
+CROSS JOIN wizard_archetypes a
+LEFT JOIN character_archetypes ca
+  ON ca.character_id = c.id AND ca.archetype_id = a.id
+WHERE c.account_id = $1
+ORDER BY a.id
+"#;
+
+pub const SELECT_ARCHETYPE_TARGET_SQL: &str = r#"
+SELECT a.id, c.id, active.slug, pending.slug,
+       c.archetype_selected_local_date, ca.character_id IS NOT NULL AS unlocked
+FROM characters c
+JOIN wizard_archetypes active ON active.id = c.active_archetype_id
+LEFT JOIN wizard_archetypes pending ON pending.id = c.pending_archetype_id
+JOIN wizard_archetypes a ON a.slug = $1
+LEFT JOIN character_archetypes ca
+  ON ca.character_id = c.id AND ca.archetype_id = a.id
+WHERE c.account_id = (SELECT id FROM accounts ORDER BY id LIMIT 1)
+FOR UPDATE OF c
+"#;
+
+pub const QUEUE_ARCHETYPE_SELECTION_SQL: &str = r#"
+UPDATE characters
+SET pending_archetype_id = $2,
+    pending_archetype_requested_at = now(),
+    pending_archetype_event_key = $3,
+    archetype_selected_local_date = $4
+WHERE id = $1
+  AND pending_archetype_id IS NULL
+"#;
+
+pub const APPLY_PENDING_ARCHETYPE_SQL: &str = r#"
+SELECT c.id, c.pending_archetype_id, c.pending_archetype_event_key
+FROM characters c
+WHERE c.pending_archetype_id IS NOT NULL
+ORDER BY c.id
+LIMIT 1
+FOR UPDATE
+"#;
+
+pub const APPLY_ARCHETYPE_SQL: &str = r#"
+UPDATE characters
+SET active_archetype_id = $2,
+    pending_archetype_id = NULL,
+    pending_archetype_requested_at = NULL,
+    pending_archetype_event_key = NULL
+WHERE id = $1
+"#;
+
+pub const ARCHETYPE_EVENT_SQL: &str = r#"
+INSERT INTO character_archetype_events
+  (character_id, archetype_id, event_type, source, source_event_key, outcome, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (character_id, event_type, source_event_key) DO NOTHING
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -508,6 +614,29 @@ pub struct AccountPinOutcome {
     pub account_created: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchetypeView {
+    pub slug: String,
+    pub display_name: String,
+    pub description: String,
+    pub portrait_key: String,
+    pub primary_effect: Value,
+    pub secondary_effect: Option<Value>,
+    pub unlock_kind: String,
+    pub unlock_target: Option<i64>,
+    pub strengths: Value,
+    pub weaknesses: Value,
+    pub unlocked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArchetypeState {
+    pub active_archetype: String,
+    pub pending_archetype: Option<String>,
+    pub archetype_selected_local_date: Option<String>,
+    pub archetypes: Vec<ArchetypeView>,
+}
+
 /// V1 settings defaults (§6.4.10), verbatim. Missing keys are seeded at
 /// character-creation bootstrap; existing values are never overwritten.
 pub const SETTINGS_V1_DEFAULTS: &[(&str, &str)] = &[
@@ -765,6 +894,154 @@ impl PostgresContentStore {
         })
     }
 
+    /// Returns the authoritative archetype catalog and the character's
+    /// current/pending loadout. Locked definitions remain visible.
+    pub async fn archetype_state(&self) -> Result<Option<ArchetypeState>> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(None);
+        };
+        let rows = self
+            .client
+            .query(ARCHETYPE_STATE_SQL, &[&account_id])
+            .await?;
+        let Some(first) = rows.first() else {
+            return Ok(None);
+        };
+        let active_archetype: String = first.get(11);
+        let pending_archetype: Option<String> = first.get(12);
+        let archetype_selected_local_date: Option<String> = first.get(13);
+        let mut archetypes = Vec::with_capacity(rows.len());
+        for row in rows {
+            archetypes.push(ArchetypeView {
+                slug: row.get(0),
+                display_name: row.get(1),
+                description: row.get(2),
+                portrait_key: row.get(3),
+                primary_effect: row.get(4),
+                secondary_effect: row.get(5),
+                unlock_kind: row.get(6),
+                unlock_target: row.get(7),
+                strengths: row.get(8),
+                weaknesses: row.get(9),
+                unlocked: row.get(10),
+            });
+        }
+        Ok(Some(ArchetypeState {
+            active_archetype,
+            pending_archetype,
+            archetype_selected_local_date,
+            archetypes,
+        }))
+    }
+
+    /// Accepts one already-unlocked archetype selection. The active choice is
+    /// deliberately unchanged; only the pending selection is written.
+    pub async fn select_archetype(&mut self, slug: &str) -> Result<ArchetypeState> {
+        let transaction = self.client.transaction().await?;
+        transaction.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
+        let row = transaction
+            .query_opt(SELECT_ARCHETYPE_TARGET_SQL, &[&slug])
+            .await?;
+        let Some(row) = row else {
+            return Err(crate::ProbeError::InvalidArchetypeSelection(
+                "unknown archetype".to_owned(),
+            ));
+        };
+        let archetype_id: i64 = row.get(0);
+        let character_id: i64 = row.get(1);
+        let active_slug: String = row.get(2);
+        let pending_slug: Option<String> = row.get(3);
+        let selected_date: Option<chrono::NaiveDate> = row.get(4);
+        let unlocked: bool = row.get(5);
+        let today = chrono::Local::now().date_naive();
+
+        if !unlocked {
+            return Err(crate::ProbeError::ArchetypeSelectionConflict(
+                "archetype is not unlocked".to_owned(),
+            ));
+        }
+        if slug == active_slug {
+            return Err(crate::ProbeError::ArchetypeSelectionConflict(
+                "archetype is already active".to_owned(),
+            ));
+        }
+        if pending_slug.is_some() {
+            return Err(crate::ProbeError::ArchetypeSelectionConflict(
+                "another selection is already pending".to_owned(),
+            ));
+        }
+        if selected_date == Some(today) {
+            return Err(crate::ProbeError::ArchetypeSelectionConflict(
+                "one selection is already accepted today".to_owned(),
+            ));
+        }
+
+        let event_key = format!(
+            "archetype-select:{slug}:{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        transaction
+            .execute(
+                QUEUE_ARCHETYPE_SELECTION_SQL,
+                &[&character_id, &archetype_id, &event_key, &today],
+            )
+            .await?;
+        transaction
+            .execute(
+                ARCHETYPE_EVENT_SQL,
+                &[
+                    &character_id,
+                    &archetype_id,
+                    &"selection_requested",
+                    &"api",
+                    &event_key,
+                    &"accepted",
+                    &Option::<String>::None,
+                ],
+            )
+            .await?;
+        transaction.commit().await?;
+        self.archetype_state()
+            .await?
+            .ok_or_else(|| crate::ProbeError::InvalidArchetypeSelection("character missing".to_owned()))
+    }
+
+    /// Applies one pending selection at the tick boundary, before watch
+    /// awards. It is idempotent and returns the applied/rejected event count.
+    pub async fn apply_pending_archetype(&mut self) -> Result<usize> {
+        let transaction = self.client.transaction().await?;
+        transaction.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
+        let Some(row) = transaction
+            .query_opt(APPLY_PENDING_ARCHETYPE_SQL, &[])
+            .await?
+        else {
+            transaction.commit().await?;
+            return Ok(0);
+        };
+        let character_id: i64 = row.get(0);
+        let pending_id: i64 = row.get(1);
+        let event_key: String = row.get(2);
+        transaction
+            .execute(APPLY_ARCHETYPE_SQL, &[&character_id, &pending_id])
+            .await?;
+        transaction
+            .execute(
+                ARCHETYPE_EVENT_SQL,
+                &[
+                    &character_id,
+                    &pending_id,
+                    &"selection_applied",
+                    &"game_tick",
+                    &event_key,
+                    &"applied",
+                    &Option::<String>::None,
+                ],
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(1)
+    }
+
     /// Character-sheet payload for the gated API (§7.4): the singleton
     /// character's identity, progression state, and accessed genre names.
     pub async fn character_overview(&self) -> Result<Option<CharacterOverview>> {
@@ -806,6 +1083,10 @@ impl PostgresContentStore {
     /// snapshot, run the pure engine, write only new unlocks (idempotent).
     /// Returns `None` when no character exists (pre-set-PIN).
     pub async fn evaluate_achievements(&self) -> Result<Option<EvaluationSummary>> {
+        // Unlock facts are materialized before the read pass so the API and
+        // the next tick see newly satisfied archetypes without a stale
+        // one-cycle delay.
+        self.client.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
         let Some(account_id) = self.single_account_id().await? else {
             return Ok(None);
         };
@@ -1660,7 +1941,7 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 11);
+        assert_eq!(MIGRATIONS.len(), 12);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
@@ -1672,6 +1953,7 @@ mod tests {
         assert_eq!(MIGRATIONS[8].0, "0009_featured_cases");
         assert_eq!(MIGRATIONS[9].0, "0010_achievements");
         assert_eq!(MIGRATIONS[10].0, "0011_watch_orders");
+        assert_eq!(MIGRATIONS[11].0, "0012_wizard_archetypes");
 
         assert_eq!(
             migration_summary(0, 1),
@@ -1831,8 +2113,8 @@ mod tests {
         assert!(SINGLE_ACCOUNT_PIN_SQL.contains("LIMIT 1"));
 
         assert!(CHARACTER_EXISTS_SQL.contains("SELECT EXISTS (SELECT 1 FROM characters)"));
-        assert!(CHARACTER_INSERT_SQL.contains("INSERT INTO characters (account_id)"));
-        assert!(CHARACTER_INSERT_SQL.contains("SELECT accounts.id FROM accounts"));
+        assert!(CHARACTER_INSERT_SQL.contains("INSERT INTO characters (account_id, active_archetype_id)"));
+        assert!(CHARACTER_INSERT_SQL.contains("FROM accounts"));
         assert!(CHARACTER_INSERT_SQL.contains("RETURNING id"));
     }
 

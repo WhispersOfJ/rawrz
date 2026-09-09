@@ -26,6 +26,9 @@ pub const ACHIEVEMENTS_MIGRATION: &str =
 pub const WATCH_ORDERS_VERSION: &str = "0011_watch_orders";
 pub const WATCH_ORDERS_MIGRATION: &str =
     include_str!("../migrations/0011_watch_orders.sql");
+pub const WIZARD_ARCHETYPES_VERSION: &str = "0012_wizard_archetypes";
+pub const WIZARD_ARCHETYPES_MIGRATION: &str =
+    include_str!("../migrations/0012_wizard_archetypes.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -45,6 +48,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (FEATURED_CASES_VERSION, FEATURED_CASES_MIGRATION),
     (ACHIEVEMENTS_VERSION, ACHIEVEMENTS_MIGRATION),
     (WATCH_ORDERS_VERSION, WATCH_ORDERS_MIGRATION),
+    (WIZARD_ARCHETYPES_VERSION, WIZARD_ARCHETYPES_MIGRATION),
 ];
 
 #[cfg(test)]
@@ -54,7 +58,7 @@ mod tests {
         CHARACTER_STATE_MIGRATION, FEATURED_CASES_MIGRATION, GENRES_MIGRATION,
         INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
         SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
-        WATCH_ORDERS_MIGRATION,
+        WATCH_ORDERS_MIGRATION, WIZARD_ARCHETYPES_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -80,7 +84,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 11);
+        assert_eq!(MIGRATIONS.len(), 12);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -92,11 +96,13 @@ mod tests {
         assert_eq!(MIGRATIONS[8].0, super::FEATURED_CASES_VERSION);
         assert_eq!(MIGRATIONS[9].0, super::ACHIEVEMENTS_VERSION);
         assert_eq!(MIGRATIONS[10].0, super::WATCH_ORDERS_VERSION);
+        assert_eq!(MIGRATIONS[11].0, super::WIZARD_ARCHETYPES_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
         assert!(MIGRATIONS[6].0 < MIGRATIONS[7].0 && MIGRATIONS[7].0 < MIGRATIONS[8].0);
         assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0 && MIGRATIONS[9].0 < MIGRATIONS[10].0);
+        assert!(MIGRATIONS[10].0 < MIGRATIONS[11].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -647,6 +653,33 @@ mod tests {
                 "watch orders migration is missing {index:?}"
             );
         }
+    }
+
+    #[test]
+    fn creates_archetype_catalog_and_queued_selection_state() {
+        let catalog = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE wizard_archetypes (");
+        for field in [
+            "slug text NOT NULL UNIQUE",
+            "primary_effect jsonb NOT NULL DEFAULT '{}'",
+            "unlock_kind text NOT NULL",
+            "strengths jsonb NOT NULL DEFAULT '[]'",
+        ] {
+            assert!(contains_sql(catalog, field), "wizard archetypes missing {field:?}");
+        }
+        let definitions = [
+            "lantern_scholar", "ember_adept", "veil_cartographer",
+            "rune_forger", "star_shepherd", "moonlit_mediator",
+        ];
+        for slug in definitions {
+            assert!(WIZARD_ARCHETYPES_MIGRATION.contains(&format!("'{slug}'")));
+        }
+        let unlocks = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE character_archetypes (");
+        assert!(contains_sql(unlocks, "PRIMARY KEY (character_id, archetype_id)"));
+        let events = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE character_archetype_events (");
+        assert!(contains_sql(events, "UNIQUE (character_id, event_type, source_event_key)"));
+        assert!(WIZARD_ARCHETYPES_MIGRATION.contains("pending_archetype_id bigint"));
+        assert!(WIZARD_ARCHETYPES_MIGRATION.contains("characters_pending_archetype_fields"));
+        assert!(WIZARD_ARCHETYPES_MIGRATION.contains("active_archetype_id SET NOT NULL"));
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod providers;
 pub mod server;
 pub mod stack;
 pub mod sync;
+pub mod wizard;
 
 use thiserror::Error;
 
@@ -41,6 +42,10 @@ pub enum ProbeError {
     Database(#[from] tokio_postgres::Error),
     #[error("unauthenticated")]
     Unauthenticated,
+    #[error("invalid archetype selection: {0}")]
+    InvalidArchetypeSelection(String),
+    #[error("archetype selection conflict: {0}")]
+    ArchetypeSelectionConflict(String),
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;

@@ -5,12 +5,13 @@
 
 ## Status (updated 2026-09-10)
 
-**Latest pushed commit on `main`:** `acd3538` — feat: add unattended RPG
-polling loop. The progression, HTTP server, watch awards, and poll loop are
-implemented and validated. The current local work is a **spec-only wizard-
-academy rules contract revision**; it is not yet committed. Preserve the
-untracked `.freebuff/` runtime directory and do not begin implementation until
-the updated contract is reviewed.
+**Latest pushed commit on `main`:** `f5a5f5c` — docs: finalize Lantern Academy
+wizard contract. The progression, HTTP server, watch awards, and poll loop are
+implemented and validated. The current local work is the first backend-first
+Lantern Academy vertical slice: migration 0012, starter archetype bootstrap,
+authoritative archetype state, queued selection, and next-tick application.
+Preserve the untracked `.freebuff/` runtime directory; spell implementation,
+frontend work, and the remaining wizard economy are still deferred.
 
 ### Done so far
 
@@ -83,7 +84,10 @@ the updated contract is reviewed.
   fixed `POLL_INTERVAL` (300 seconds), one-line cycle logging, non-fatal sync
   and phase-1 degradation, and watch-channel shutdown. `main.rs` shares one
   `Arc<Mutex<PostgresContentStore>>` with Axum and the poll task.
-- Fixtures + full test suite: **80 tests, all passing**
+- Lantern Academy archetype slice (local, uncommitted): migration
+  `0012_wizard_archetypes.sql`, `wizard.rs`, starter bootstrap integration,
+  catalog/selection API, and next-tick application in `game.rs`.
+- Fixtures + full test suite: **83 unit tests + 1 live proof, all passing**
   (`cd backend/rpg && cargo test --all-targets`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -124,19 +128,27 @@ the updated contract is reviewed.
    API payload fields, transactional sequence, and implementation order are
    now explicit. No code, migration, asset, or frontend implementation
    belongs to this documentation pass.
-7. **Next implementation pass:** implement migrations 0012/0013 in the
-   specified order, backfill the starter archetype without mutating history,
-   add pure archetype/affinity/cap/overflow calculations, apply queued state
-   at the tick boundary, add transactional spell casts, and run live proofs
-   for all six archetypes and five spells. Then build the guided Svelte UI
-   against the resulting APIs. Keep the existing neutral `watches`, XP,
-   streak, genre, achievement, `watch_orders`, and `skip_grants` ledgers
-   authoritative.
+7. **Lantern Academy archetype slice — in progress locally:** migration
+   `0012_wizard_archetypes.sql` seeds all six original archetypes, backfills
+   existing characters to `lantern_scholar`, and adds permanent unlock rows,
+   audit events, active/pending selection fields, and the starter bootstrap.
+   `wizard.rs` owns the pure unlock predicates; `persistence.rs` owns the
+   transactional catalog/read, selection queue, unlock materialization, and
+   tick-boundary application; `game.rs` applies pending selection before the
+   existing watch → order → achievement phases; `server.rs` exposes gated
+   `GET /api/archetypes` and `POST /api/archetypes/{slug}/select`.
+8. **Next implementation pass:** add the remaining 0012 resource state and
+   then migration 0013 for spells, affinity, charges, and casts; add pure
+   affinity/cap/overflow calculations, apply queued affinity at the tick
+   boundary, and run live proofs for all six archetypes and five spells. Then
+   build the guided Svelte UI against those APIs. Keep the existing neutral
+   `watches`, XP, streak, genre, achievement, `watch_orders`, and `skip_grants`
+   ledgers authoritative.
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test --all-targets  # expect 80 unit + 1 live-proof passing
+cd backend/rpg && cargo test --all-targets  # expect 83 unit + 1 live-proof passing
 cargo clippy --all-targets                 # expect only the 3 known warnings
 ```
 

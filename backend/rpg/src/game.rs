@@ -37,6 +37,10 @@ pub async fn run_game_tick(
     store: &mut PostgresContentStore,
     plex: Option<&crate::stack::PlexClient>,
 ) -> Result<GameTickReport> {
+    // Wizard loadout boundary: pending selection is applied before any
+    // watch/order/achievement work in this tick.
+    store.apply_pending_archetype().await?;
+
     let mut report = GameTickReport {
         watches_awarded: 0,
         orders: OrderRefreshSummary {

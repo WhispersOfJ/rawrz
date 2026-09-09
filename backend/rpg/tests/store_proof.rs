@@ -2,7 +2,7 @@
 //! RPG_DB_URL points at a scratch database (see
 //! scripts/scratch_pg_proof.sh for the disposable one-command harness).
 //!
-//! Exercises the real surface: migrate() over all eleven migrations, the
+//! Exercises the real surface: migrate() over all twelve migrations, the
 //! locked/set/verify PIN flows, row-level seed assertions for the bootstrap
 //! (character_state, horror genre_access, all 13 settings defaults),
 //! idempotency by execution (set + seed twice, zero duplicates), and a
@@ -56,7 +56,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("store connects to scratch database");
     let summary = store.migrate().await.expect("migrate() succeeds");
-    assert_eq!(summary.applied, 11, "all eleven migrations apply on a fresh database");
+    assert_eq!(summary.applied, 12, "all twelve migrations apply on a fresh database");
     assert_eq!(summary.already_applied, 0);
 
     // (2a) verify with no account yet: locked.
@@ -88,6 +88,16 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
 
     // (3b) Row-level assertions: the seed actually landed.
     let probe = fresh_connection(&database_url).await;
+    assert_eq!(count(&probe, "wizard_archetypes").await, 6);
+    assert_eq!(count(&probe, "character_archetypes").await, 1);
+    let starter = probe
+        .query_one(
+            "SELECT a.slug, c.active_archetype_id::text FROM characters c JOIN wizard_archetypes a ON a.id = c.active_archetype_id",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(starter.get::<_, String>(0), "lantern_scholar");
     assert_eq!(count(&probe, "accounts").await, 1);
     assert_eq!(count(&probe, "characters").await, 1);
     assert_eq!(count(&probe, "character_state").await, 1);
@@ -235,7 +245,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // (5) re-run migrate() on an already-migrated database: clean no-op.
     let summary = store.migrate().await.expect("re-migrate succeeds");
     assert_eq!(summary.applied, 0, "re-migrate applies nothing");
-    assert_eq!(summary.already_applied, 11, "re-migrate recognizes all eleven versions");
+    assert_eq!(summary.already_applied, 12, "re-migrate recognizes all twelve versions");
 
     // (5b-prev) Plex-shaped fixture for tick phase 1 (§9.1 detection): two
     // catalog rows joined to ratingKeys, one fully watched movie, one 96%
@@ -388,6 +398,25 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .unwrap()
         .get(0);
     assert_eq!(unlock_rows, 3, "exactly the three unlocks are stored");
+
+    // Queueing is observable immediately, but the active loadout changes
+    // only when the next game tick applies it.
+    let initial = store.archetype_state().await.unwrap().unwrap();
+    assert_eq!(initial.active_archetype, "lantern_scholar");
+    let selected = store.select_archetype("ember_adept").await.unwrap();
+    assert_eq!(selected.active_archetype, "lantern_scholar");
+    assert_eq!(selected.pending_archetype.as_deref(), Some("ember_adept"));
+    let tick = movie_rpg::game::run_game_tick(&mut store, None).await.unwrap();
+    assert_eq!(tick.watches_awarded, 0);
+    let applied = store.archetype_state().await.unwrap().unwrap();
+    assert_eq!(applied.active_archetype, "ember_adept");
+    assert!(applied.pending_archetype.is_none());
+
+    // Same-day selection, active selection, and an unknown selection are all
+    // rejected without changing state.
+    assert!(store.select_archetype("lantern_scholar").await.is_err());
+    assert!(store.select_archetype("rune_forger").await.is_err());
+    assert!(store.select_archetype("unknown").await.is_err());
 
 
     // (5c) Mystery watch orders (§5.7): generation, derived reveals, leakage
@@ -733,7 +762,53 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .to_owned();
     let cookie_header = format!("rpg_session={token}");
 
-    // The cookie unlocks the gated API.
+    // The cookie unlocks the gated API, including the first Lantern Academy
+    // endpoint. The response is server-owned state for all six definitions.
+    let archetypes: serde_json::Value = http
+        .get(format!("{base_url}/api/archetypes"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("archetypes reachable")
+        .json()
+        .await
+        .expect("archetypes are json");
+    assert_eq!(archetypes["active_archetype"], "ember_adept");
+    assert!(archetypes["pending_archetype"].is_null());
+    assert_eq!(archetypes["archetypes"].as_array().map(Vec::len), Some(6));
+    assert_eq!(
+        archetypes["archetypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["unlocked"] == true)
+            .count(),
+        4,
+        "starter, level, order, and achievement archetypes are unlocked"
+    );
+
+    // The daily selection guard is enforced through the actual HTTP surface;
+    // it must not mutate the active or pending state.
+    let response = http
+        .post(format!("{base_url}/api/archetypes/lantern_scholar/select"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("archetype selection reachable");
+    assert_eq!(response.status(), 409, "same-day selection is a conflict");
+    let after_rejection: serde_json::Value = http
+        .get(format!("{base_url}/api/archetypes"))
+        .header("cookie", &cookie_header)
+        .send()
+        .await
+        .expect("archetypes remain reachable")
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after_rejection["active_archetype"], "ember_adept");
+    assert!(after_rejection["pending_archetype"].is_null());
+
+    // The cookie unlocks the rest of the gated API.
     let overview: serde_json::Value = http
         .get(format!("{base_url}/api/character"))
         .header("cookie", &cookie_header)
