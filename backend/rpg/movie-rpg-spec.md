@@ -1,13 +1,13 @@
 # Movie / TV RPG — Specification
 
-> **Status:** Draft v1.0 — gathered from user interview; reviewed 2026-09-08. Open questions in §12 are all designated "decide during implementation" (none are pre-V1 blockers).
+> **Status:** Draft v1.2 — gathered from user interview; reviewed 2026-09-10. The progression engine is implemented; the original wizard-academy rebrand is now a finalized presentation and rules contract, with the backend-first vertical release defined and implementation intentionally deferred to a later migration/API task. Open questions in §12 are either resolved or explicitly deferred.
 > **Related:** The Bear Cave stack at `~/Cave` (8-service Usenet media stack: Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr). This RPG is *linked with* the stack but *not a part of it*.
 
 ---
 
 ## 1. Overview
 
-A web-based RPG where watching movies and TV shows is the core mechanic. Points are earned by watching content served from the Bear Cave stack (Plex + Sonarr + Radarr). The RPG uses a **detective / investigation** theme: watching content is your "investigation work," and progress unfolds through cases, evidence, and genre-based territory.
+A web-based RPG where watching movies and TV shows is the core mechanic. Points are earned by watching content served from the Bear Cave stack (Plex + Sonarr + Radarr). The RPG is presented as an **original wizard academy**: watching is study and spellcraft, and progress unfolds through disciplines, assignments, enchanted watch orders, archetypes, spells, and awards. The underlying progression engine remains theme-neutral; the wizard vocabulary is a presentation and rules layer over the existing watches, XP, streak, genre, achievement, and order ledgers.
 
 **Relationship to the stack (explicit):**
 
@@ -20,27 +20,74 @@ A web-based RPG where watching movies and TV shows is the core mechanic. Points 
 
 ## 2. Theme & Framing
 
-- **Genre:** Modern detective / investigation.
-- **Metaphor:** Watching = doing casework. Your character is an investigator whose "office" is the media stack.
-- **Tone:** Light, playful, personal — not gritty. Think "case log" and "evidence board," not "crime thriller."
+- **Genre:** Light wizard-academy adventure and personal collection game.
+- **Setting:** **The Lantern Academy**, an original school of storycraft where students study the many disciplines hidden inside movies and television. The academy is a presentation frame, not a claim that the media itself is magical.
+- **Metaphor:** Watching = attending a lesson and practicing spellcraft. Plex is the viewing library; the RPG is the academy's private study ledger.
+- **Tone:** Warm, playful, curious, and slightly mysterious — parchment and constellation-board charm without grimdark stakes or imitation of a film franchise.
 - **Positions watching as:**
-  - **Movies** = self-contained *cases* (one-off investigations).
-  - **TV shows** = *campaigns* / *series investigations* (multi-episode, ongoing).
-- **Newly arrived content** (from Sonarr/Radarr imports) is the engine of new casework — but the player *chooses* which cases to take on.
+  - **Movies** = completed assignments or one-sitting practicals.
+  - **TV shows** = term-long courses and multi-episode studies.
+  - **Mystery watch orders** = enchanted reading lists whose next title is sealed until the prior assignment is resolved.
+  - **Achievements** = certificates, honors, and displayed academy awards.
+  - **Archetypes** = selectable study paths that change how future progress behaves.
+  - **Spells** = limited, auditable abilities that bend one rule without bypassing the watch ledger.
+- **Newly arrived content** is new coursework from the stack, but the player still chooses what to study.
+
+### 2.1 Rebrand boundary and vocabulary map (finalized 2026-09-09)
+
+The product-facing language changes, but stable database identifiers and progression semantics do not. Internal code may retain neutral names such as `character`, `watches`, `watch_orders`, `achievements`, and `genre_access`; those names are contracts, not visible theme copy.
+
+| Neutral engine term | Lantern Academy presentation | Rule boundary |
+|---|---|---|
+| Character / player | Student, wizard, or academy member | One persisted V1 progression identity remains. |
+| Case / case board | Assignment board or lesson board | Existing case semantics remain; no automatic assignment. |
+| Evidence / watch log | Viewing journal or study log | Still shows only awarded `watches` rows. |
+| Genre | Magical discipline | Existing genre IDs and access rules remain stable. |
+| Mystery watch order | Enchanted watch list | Existing reveal, finale, and skip rules remain authoritative. |
+| Skip grant | Academy free pass | Still a `skip_grants` ledger row; it is not XP and is not a spell charge. |
+| Achievement / badge wall | Honor, certificate, or award shelf | Existing unlock idempotency and hidden/visible rules remain. |
+| XP / level | Mastery / academy level | XP values and level thresholds remain the neutral engine contract. |
+| Poll / game tick | Academy bell / study cycle | Existing sync → tick ordering remains unchanged. |
+
+The words **house**, **wand**, **patronus**, **quidditch**, and other recognizable franchise-specific constructs are not part of this setting. The academy has disciplines, study paths, spell charges, and original awards instead.
+
+The current backend may still expose legacy neutral/default copy such as `The Investigator` or seeded achievement descriptions. That is a compatibility fact, not the new product vocabulary: this documentation pass does not silently mutate existing rows or APIs. The later presentation migration/API work must provide academy labels alongside stable slugs, and may offer an explicit copy migration only after the new UI and acceptance checks are ready.
+
+**Release shape (finalized 2026-09-10):** implementation is backend-first but vertical. The first wizard release is not a schema-only foundation: it completes migrations 0012/0013, server-owned archetype and spell flows, tick integration, and live proofs for all six archetypes and five spells. The Svelte UI follows against those stable APIs, beginning with a guided dossier rather than requiring the backend to expose unfinished or client-computed rules.
+
+### 2.2 Original IP and asset policy (finalized 2026-09-09)
+
+This product must not use copyrighted Harry Potter names, characters, house names, spell names, logos, typography, screenshots, promotional stills, actor likenesses, or film artwork. It must not ask an image model or artist to imitate the film artwork or a living artist's distinctive style. The reference is only the broad category of whimsical wizard-school illustration; all names, symbols, portraits, UI motifs, and assets are original or properly licensed.
+
+The visual brief is: inked marginalia, warm parchment, brass and midnight-blue interface chrome, lanterns, constellations, botanical diagrams, geometric sigils, stained-glass color accents, and expressive original student portraits. Avoid lightning scars, school crests that resemble known franchises, copied costume silhouettes, recognizable props, or any derivative film composition. Initial art may use generated SVG geometry, abstract spell diagrams, and commissioned/licensed original portraits; placeholders must be replaceable through stable `portrait_key`/asset IDs rather than hard-coded image URLs.
+
+### 2.3 Core loop in the academy frame
+
+1. Content arrives as new coursework or is discovered in the library.
+2. The student chooses an assignment, course, or enchanted watch list.
+3. The student watches normally in Plex.
+4. The poll detects the completed watch and writes the neutral `watches` ledger.
+5. Neutral XP, streaks, bonuses, order reveals, and achievements advance in the existing game tick.
+6. The active archetype and any valid spell effect modify only the explicitly permitted future outcome.
+7. The UI presents the result as mastery, a revealed lesson, a spell charge, or an academy award.
+
+The academy layer never creates a completion, watch, XP award, achievement unlock, or order resolution directly from client claims.
 
 ---
 
 ## 3. Core Loop
 
+The neutral engine remains the contract underneath the academy presentation. The UI may say "lesson" and "mastery"; persistence and server-side evaluation continue to use the existing watch, XP, genre, order, and achievement terms.
+
 1. **Something arrives** on the stack (Sonarr/Radarr import, or already-in-library content).
-2. **The RPG surfaces it as a case/assignment** the player can review (player-driven — you pick).
-3. **Player watches** the content via Plex (normal Plex playback; nothing special required).
-4. **Plex records the watch.** The RPG polls Plex (every few minutes) and picks up the completed watch.
-5. **Points/XP awarded** based on completion (episode, season, series) and any applicable bonuses.
-6. **Progression:** XP → level → unlocks (new genres/tools). Map/territory updates.
+2. **The RPG surfaces it as coursework** on the assignment board (player-driven — the student chooses).
+3. **The student watches** the content via Plex (normal Plex playback; nothing special required).
+4. **Plex records the watch.** The RPG polls Plex (every few minutes) and picks up the completed lesson.
+5. **Mastery/XP is awarded** based on completion (episode, season, series) and any applicable bonuses.
+6. **Progression:** XP → academy level → discipline access, archetype eligibility, spell grants, and awards.
 7. **Repeat.**
 
-The app doesn't change how you watch. You keep using Plex as normal. The RPG reads behind the scenes.
+The app does not change how the student watches. Plex remains the viewing surface; the RPG reads behind the scenes and is the authority for progression outcomes.
 
 ---
 
@@ -111,7 +158,7 @@ The app doesn't change how you watch. You keep using Plex as normal. The RPG rea
 - **Watch state (authoritative source for completion):** Plex is the ground truth for watched/unwatched and watch progress. Sonarr/Radarr contribute import/arrival events and episode file state, not watch state. (This matches §5.1's completion-based model: the RPG awards points when Plex reports a near-complete watch.)
 - **Ratings source hierarchy (for featured-case ranking — see §5.4):** rank by the normalized provider score in this order: TMDb vote average, OMDb IMDb rating, TVDB rating, then Plex/Sonarr/Radarr ratings. Preserve vote counts and every provider score for display and audit; do not merge unlike scales into a single opaque value.
 
-**Why mirror everything:** the user wants the full picture available, and the library is brand new (small: Plex Movies = 4 items, Plex TV Shows = 8 shows / Sonarr = 24 series per the 2026-09-08 probe), so there's no scaling pressure to trim for V1. Storing the full mirror keeps options open for the UI (case board, character sheet, genre map, achievement context, genre filtering for the unlock model §5.2, featured-case ranking §5.4) without a later "add back what we skipped" pass. The stack remains the source of truth; the RPG's Postgres is a read-only mirror.
+**Why mirror everything:** the user wants the full picture available, and the library is brand new (small: Plex Movies = 4 items, Plex TV Shows = 8 shows / Sonarr = 24 series per the 2026-09-08 probe), so there's no scaling pressure to trim for V1. Storing the full mirror keeps options open for the UI (assignment board, student dossier, discipline map, achievement context, discipline filtering for the unlock model §5.2, featured-case ranking §5.4) without a later "add back what we skipped" pass. The stack remains the source of truth; the RPG's Postgres is a read-only mirror.
 
 **Probe correction (2026-09-08) — stack genres plus external enrichment:** Plex exposes operational top-level genres as `<Genre tag="...">`; Sonarr/Radarr do not reliably expose genres in this library. Plex remains the fallback operational genre source. The selected V1 enrichment pipeline then adds canonical TMDb parent genre IDs, TMDb keyword-derived sub-genres, and TVDB genre/tag candidates where available. OMDb and Fanart.tv do not determine gameplay genre access. Every normalized tag records its provider and source payload in the mirror/cache (§4.6, §6.4.4a).
 
@@ -162,7 +209,7 @@ The Bear Cave services remain authoritative for operational state: Plex owns pla
 
 **Streak definition (concrete):** a **day-streak** = at least one completed watch (episode or movie, ≥95%) on each of N consecutive **real calendar days** (local date, based on the host's `TZ` from `.env`). A watch counts toward the day's streak if its completion is detected on that calendar day (i.e., the poll that detects it runs on that day). A day with no detected completion breaks the streak. (Episode-vs-movie, sub-genre, etc. don't matter for the streak — any completion counts.)
 
-**Point sinks / spending (future, V2):** Not for V1. V1 is earn-and-progress. No inventory/economy to spend points on yet. Mentioned for completeness.
+**Point sinks / spending (future, V2):** XP remains earn-and-progress only; the spell-charge economy is a bounded affinity resource and does not turn XP into a spendable currency. Spell casts consume spell charges, not XP.
 
 #### 5.1.1 Streak bonus table (concrete)
 
@@ -191,7 +238,7 @@ The Bear Cave services remain authoritative for operational state: Plex owns pla
 
 ### 5.2 Character & progression (concrete V1 values)
 
-**Character:** Single investigator character (V1, single-player).
+**Character:** Single student character (V1, single-player), presented as a Lantern Academy wizard.
 
 **Level thresholds (concrete):** XP accumulates → level up at thresholds. **V1 level table:**
 
@@ -209,20 +256,20 @@ The Bear Cave services remain authoritative for operational state: Plex owns pla
 | 10 | 4400 |
 
 - XP is **cumulative**: you level up when your total XP crosses the threshold for the next level. Level 1 → level 2 at 100 XP total (≈10 episodes, or ≈5 movies, or a mix). The base episode XP = 10 / movie XP = 20 anchors mean ~10 episodes or ~5 movies to level 2 as a rough pace.
-- On level-up, the character's level field updates and any **level-triggered unlocks** fire (genre-access broadening — see below — and perk eligibility). Level-up is evaluated during the poll/sync when XP is awarded.
-- **Titles / ranks (optional flavor):** soft narrative titles at milestone levels — e.g. level 1–2 "Junior Investigator", level 3–4 "Investigator", level 5–6 "Detective", level 7–8 "Senior Detective", level 9–10 "Lead Investigator" — mostly cosmetic/flavor, displayed on the character sheet. Final titles/descriptions finalize during implementation.
+- On level-up, the character's level field updates and any **level-triggered unlocks** fire (discipline-access broadening — see below — plus the archetype/spell eligibility rules in §5.8). Level-up is evaluated during the poll/sync when XP is awarded.
+- **Academy ranks (presentation only):** soft narrative titles at milestone levels — level 1–2 **Novice of the Lantern**, level 3–4 **Journeyman of Storycraft**, level 5–6 **Keeper of the Archive**, level 7–8 **Senior Spellwright**, and level 9–10 **Master of the Lantern**. Ranks are cosmetic display labels; they never replace the numeric level or change unlock truth.
 
-**What leveling unlocks (decided: unlock new investigation tools/genres, with Q6 resolution + concrete thresholds):**
+**What leveling unlocks (decided: unlock new academy disciplines and study privileges, with concrete thresholds):**
 
 - **Genre unlock model (resolved §12 Q6, concrete):**
-  - **Horror is the opening unlocked genre** — the investigator starts qualified for horror cases at level 1. All other genres start **locked**.
-  - **Level-broadens-genre-access (concrete):** at each level, the set of genres you can **earn full XP from** broadens. Concretely:
-    - **Level 1:** only horror is fully unlocked (earn full XP from horror watches).
-    - **Level 2:** one additional genre becomes accessible (player's choice of the next available genre — see purchase model below; the "next available" is the next genre in the cascade, §5.2). At level 2, the player can also start **accumulating sub-genre XP** toward buying the next genre.
+  - **Horror is the opening unlocked genre** — the student begins qualified for the Shadowcraft discipline (neutral slug `horror`) at level 1. All other disciplines start **locked**.
+  - **Level-broadens-discipline-access (concrete):** at each level, the set of disciplines whose content can earn full XP broadens. The database continues to use the stable `genre` terminology. Concretely:
+    - **Level 1:** only Shadowcraft/horror is fully unlocked (earn full XP from horror watches).
+    - **Level 2:** one additional discipline/genre becomes accessible (player's choice of the next available genre — see purchase model below; the "next available" is the next genre in the cascade, §5.2). At level 2, the player can also start **accumulating sub-genre XP** toward buying the next genre.
     - **Level 3:** a second additional genre becomes accessible, etc.
-    - In general: **each level unlocks access to one more genre** (beyond horror). So at level N (N≥1), the player has access to N genres total (horror + (N−1) purchased/accessed genres). This is the "level = gate to next genre purchase" mapping.
+    - In general: **each level unlocks access to one more discipline** (beyond Shadowcraft/horror). So at level N (N≥1), the student has access to N genres total (horror + (N−1) purchased/accessed genres). This is the "level = gate to next discipline purchase" mapping.
     - "Access" means: you can earn **full XP** from watches in an accessed genre. For a genre that is **not yet accessed** (not unlocked, beyond your current level's allowance), watches still **accumulate sub-genre XP toward buying it** but **do not grant full XP** (or grant reduced XP) until you buy it / until your level broadens access to include it. Exact reduced-XP rule for non-accessed genres: **0 XP** from non-accessed genres until purchased/accessed (cleanest gate), or a small "exploration" XP (TBD — finalize during implementation; the spec's default assumption is 0 XP from non-accessed genres, full XP once accessed). The sub-genre XP that accumulates toward purchase still accumulates regardless of access (so you can "save up" sub-genre XP for a genre before you're high-level enough to access it — the purchase itself is gated by access, but the savings accumulate).
-    - This means: **level gives you the right to buy/access the next genre; sub-genre XP gives you the cost to buy it once you have the right.** Both are gates; both are needed.
+    - This means: **level gives the student the right to buy/access the next discipline; sub-genre XP gives the cost to buy it once that right is available.** Both are gates; both are needed.
   - **Unlock purchase via sub-genre XP (concrete):** each genre has sub-genres (from the library, filtered by sub-genre metadata, §4.5). Watching movies/episodes in a sub-genre accumulates **sub-genre XP** toward that sub-genre. When a sub-genre's accumulated sub-genre XP reaches a **purchase threshold**, the player can **"buy" that sub-genre unlock** by spending the accumulated sub-genre XP. Buying a sub-genre:
     - Marks that sub-genre as **owned/unlocked** for the character.
     - Counts as **accessing the parent genre** (if that genre wasn't already accessed) — i.e., buying the first sub-genre of a parent genre = unlocking that genre for full XP.
@@ -231,40 +278,34 @@ The Bear Cave services remain authoritative for operational state: Plex owns pla
     - Sub-genre XP is **per sub-genre per character** (not global). Each sub-genre has its own accumulation bucket.
     - Sub-genre XP is **spent on purchase** (not retained as general XP). It's a sink specifically for genre unlocking.
     - **Example:** horror is open at level 1. Say the library has horror sub-genres "slasher", "supernatural", "psychological". Watching horror movies/episodes accumulates sub-genre XP in each horror sub-genre you watch. Once you've accumulated 100 sub-genre XP in, say, "supernatural", you can buy the "supernatural" sub-genre — which unlocks the "supernatural horror" access (horror already open, so this is more about sub-genre coverage / suggested-title targeting / map detail, and about progress toward the genre-unlock cascade). Wait — refinement: horror is already the opened genre, so buying horror sub-genres doesn't "unlock the genre" (it's already unlocked). The purchase model's genre-unlock gating applies to **non-horror genres**: to unlock, say, "sci-fi", you buy a sci-fi sub-genre (e.g. "space opera" or "cyberpunk") once you've accumulated 100 sub-genre XP in it **and** your level gives you access to buy the next genre. The first sub-genre purchased in a non-horror parent genre = that genre becomes accessed (full XP from that genre).
-    - **Cascade (concrete):** the order of genres available to purchase is a **fixed genre list order** (**finalized 2026-09-08:** Horror → Thriller → Mystery → Sci-Fi → Fantasy → Documentary → Comedy → Drama → Romance → Animation — 10 genres matching the 10-level table; seeded into `genres` by migration 0004 and mirrored in the §6.4.10 `genre_list_order` setting). At level 2, the player can buy the **first non-horror genre in the list** (the next one after horror) by purchasing any of its sub-genres (100 sub-genre XP in one of its sub-genres). At level 3, the **second** non-horror genre in the list becomes purchasable, etc. So level unlocks the right to buy the next genre in the list; sub-genre XP pays for it. One genre at a time, in list order, player chooses when to buy. (The list is fixed as above as of 2026-09-08; the standing rule remains "fixed ordered genre list, horror first, one new genre accessible per level, buy via 100 sub-genre XP in any of its sub-genres.")
-  - **Suggested titles per sub-genre (concrete):** when a sub-genre is **in progress** (sub-genre XP accumulated but not yet bought) or **just bought** or **available to pursue** (the next genre in the list is accessible at current level), the case board / genre map suggests actual titles from the stack library filtered to that sub-genre (from the content mirror, §4.5), so the player knows what to watch to accumulate sub-genre XP toward buying it. Suggested-title lists are derived from the content mirror on each poll (filter content by sub-genre tags).
-  - **Genre "hardness":** horror starts unlocked (the investigator's home ground). Other genres are locked until bought via sub-genre XP + level access. The "harder" genres are simply those later in the list / not yet bought — there is no separate difficulty rating; the unlock cost (100 sub-genre XP) + the level gate is what gates them.
+    - **Cascade (concrete):** the order of disciplines available to purchase is a **fixed genre list order** (**finalized 2026-09-08:** Horror → Thriller → Mystery → Sci-Fi → Fantasy → Documentary → Comedy → Drama → Romance → Animation — 10 genres matching the 10-level table; seeded into `genres` by migration 0004 and mirrored in the §6.4.10 `genre_list_order` setting). At level 2, the player can buy the **first non-horror genre in the list** (the next one after horror) by purchasing any of its sub-genres (100 sub-genre XP in one of its sub-genres). At level 3, the **second** non-horror genre in the list becomes purchasable, etc. So level unlocks the right to buy the next genre in the list; sub-genre XP pays for it. One genre at a time, in list order, player chooses when to buy. (The list is fixed as above as of 2026-09-08; the standing rule remains "fixed ordered genre list, horror first, one new genre accessible per level, buy via 100 sub-genre XP in any of its sub-genres.")
+  - **Suggested coursework per sub-genre (concrete):** when a sub-genre is **in progress** (sub-genre XP accumulated but not yet bought) or **just bought** or **available to pursue** (the next genre in the list is accessible at current level), the assignment board / discipline map suggests actual titles from the stack library filtered to that sub-genre (from the content mirror, §4.5), so the student knows what to watch to accumulate sub-genre XP toward buying it. Suggested-title lists are derived from the content mirror on each poll (filter content by sub-genre tags).
+  - **Discipline difficulty:** Shadowcraft starts unlocked as the student's home discipline. Other disciplines are sealed until bought via sub-genre XP plus the level gate. Later disciplines are not intrinsically harder; their position and purchase requirements are the progression gates, not a hidden difficulty rating.
   - **Holiday / date-appropriate bonuses (resolved §12 Q6, concrete):** the app **detects the current date and applies date-appropriate bonuses** via a **holiday window calendar** (fixed calendar mapping, finalize before build — at least Halloween + winter locked down now; more deferred). Example windows:
     - **Halloween window:** Oct 1 – Oct 31. Horror-content watches (≥95% completion) during this window get **+50% XP** (episode → +15 XP, movie → +30 XP) in addition to normal XP. Applies to the **Horror** genre (the opening genre) and any horror-adjacent genres once they're unlocked (finalize exact genre scope during implementation — default: Horror only for V1).
     - **Winter holiday window:** Dec 1 – Dec 31. Cozy/holiday-adjacent content gets **+50% XP** during the window. **Genre scope for V1 (finalize before build):** pick the genre(s) that qualify for the winter window (e.g. Comedy, Drama, or "holiday-themed" — which may be identifiable by title/keywords since Plex doesn't have a "holiday" genre; finalize the winter-window genre set before build, or defer winter to a later holiday cycle).
     - **Other seasonal windows:** TBD — e.g. summer blockbuster window (Jun–Aug, action/movies), Valentine's romance window (Feb, romance), spring documentary window, etc. The spec commits to "a fixed holiday-window calendar, each window = date range + genre filter + bonus multiplier (≥95% completion in-window → bonus XP)." The Halloween + winter examples are concrete starters; the rest are finalized-before-build or deferred.
     - **Bonus type:** V1 = **bonus XP** (multiplier on the normal XP for qualifying watches in the window). **Items/perks** as the bonus are noted as a V1-possible extension (finalize during implementation — the spec's default is bonus XP only for V1; items are optional and deferred unless decided otherwise).
     - Holiday windows are **implemented as date-gated feature modules** (§15.4/§15.5 inspiration from LoGD's holiday text modules): each window = a small feature with a start date, end date, genre filter, and bonus multiplier, stored in `settings.holiday_windows` (§6.4.10). New windows can be added by adding a new window record without touching core.
-- **Perks / tools (concrete starter list — finalize during implementation):** level-up unlocks small passive bonuses. Starter perk ideas (each perk is a level-gated unlock, one per level or selective):
-  - **Level 2 perk (choice):** +10% XP for horror (your home genre) OR widen the new-arrival window from 48h to 72h (once). (Example — finalize during implementation.)
-  - **Level 3 perk:** +5% XP for a genre of your choice (one genre, permanent once chosen).
-  - **Level 5 perk:** streak milestone bonus multiplier +10% (i.e. streak bonuses in §5.1.1 are multiplied by 1.1).
-  - **Level 7 perk:** featured-case bonus +5 XP (on top of the +10 featured bonus).
-  - **Level 10 perk:** +10% XP for all watched content (global small boost).
-  - Perks are **persistent** once unlocked/claimed. Some perks are "choose one of N" at the level; some are automatic. Final perk list, level gating, and choice mechanics finalize during implementation. Perks are **separate from genre purchases** (a perk doesn't cost sub-genre XP; it's a level unlock). Interaction with holiday items: if holiday bonuses ever include items/perks, those are separate from level perks — finalize during implementation.
-- **Titles / ranks (optional):** soft narrative flavor — "Junior Investigator" → "Investigator" → "Detective" → "Senior Detective" → "Lead Investigator" at milestone levels. Mostly cosmetic/flavor, on the character sheet.
+- **Legacy neutral perks:** older §5.2 perk ideas remain documented historical material but are not part of the wizard implementation contract. The wizard contract in §5.8 supersedes them: archetype modifiers and spells are the only new selectable effects. The `perks_unlocked` setting remains disabled for this release; do not implement both systems or stack an archetype with a separate perk tree without a new spec decision.
+- **Academy ranks:** the presentation-only rank ladder in the preceding bullet is shown on the student dossier alongside the unchanged numeric level.
 
-**Stats (V1):** XP (total), level, watch count (total completions), episode count, movie count, genres accessed, sub-genres owned, current streak (days), best streak, completed cases/campaigns (series completed, movies completed, featured cases completed), sub-genre XP per sub-genre (for purchase progress), holiday-window bonus count, achievement count (unlocked / total). Displayed on the character sheet.
+**Stats (V1):** XP (total), level, watch count (total completions), episode count, movie count, disciplines accessed, sub-genres owned, current streak (days), best streak, completed assignments/courses (series completed, movies completed, featured cases completed), sub-genre XP per sub-genre (for purchase progress), holiday-window bonus count, achievement count (unlocked / total). Displayed on the student dossier.
 
 ### 5.3 Movies vs TV — distinct roles
 
 | Aspect | Movies | TV Shows |
 |--------|--------|----------|
-| RPG framing | One-off *cases* | Multi-episode *campaigns* / *series investigations* |
+| RPG framing | One-off *assignments* | Multi-episode *courses* / *term studies* |
 | Completion unit | Whole movie | Episode → Season → Series |
 | Bonus structure | Movie completion + new-arrival + first-completion | Episode XP + season bonus + series bonus + streak |
-| Case generation | A movie = a case card you can pick up | A show = an ongoing investigation; episodes are "evidence" you collect |
+| Coursework presentation | A movie = an assignment card the student may choose | A show = an ongoing course; episodes are lessons collected toward completion |
 
 Both feed the same XP/level system. They differ in *granularity and framing*, not in fundamentals.
 
 ### 5.4 New arrivals & featured cases
 
-**New arrivals:** When Sonarr/Radarr records a new import (or a new item appears in the library), the RPG can generate a *case card* for it. The case card represents "there's something new to investigate." It is **not assigned** — the player sees it on the case board and chooses whether to take it on.
+**New arrivals:** When Sonarr/Radarr records a new import (or a new item appears in the library), the RPG can generate an *assignment card* for it. The card represents new coursework. It is **not assigned** — the student sees it on the assignment board and chooses whether to take it on.
 
 **Featured cases:** A smaller set of cases highlighted each period (V1 default: weekly). Select from available content using either the configured new-arrival mode or all-time mode. Rank candidates by normalized provider score: TMDb vote average, then OMDb IMDb rating, TVDB rating, then stack ratings. Restrict candidates to the character's accessed genres and retain the selected provider scores in the featured-case audit. Featured cases give +10 XP when completed.
 
@@ -274,7 +315,7 @@ Both feed the same XP/level system. They differ in *granularity and framing*, no
 
 **Hybrid model (decided, Q8 resolved — massive list):** a large/extensive achievement list across five categories, split into **visible** (player can see and work toward) and **hidden** (revealed only when unlocked). Specific items below are the first cut; the list is meant to be extensive and can grow during implementation. Categories match §5.5's category model: completion milestones, genre coverage, time/streak, novelty, themed/quirky.
 
-**How achievements award:** each achievement has a trigger condition evaluated during the poll/sync (§9) and/or on case completion. On unlock, the achievement is recorded in `character_achievements` (unlocked-at, source) and shown on the badge wall / character sheet. Hidden achievements reveal their name + description on unlock; visible achievements show progress toward them.
+**How achievements award:** each achievement has a trigger condition evaluated during the poll/sync (§9) and/or on assignment completion. On unlock, the achievement is recorded in `character_achievements` (unlocked-at, source) and shown on the certificate wall / student dossier. Hidden achievements reveal their name + description on unlock; visible achievements show progress toward them.
 
 #### 5.5.1 Completion milestones (visible)
 
@@ -434,8 +475,76 @@ A **mystery watch order** is a per-genre, numbered sequence of movies where the 
 - **Reveal rule (single source of truth):** an item is *resolved* when the player has an awarded watch for it — exactly the §6.4.5 award, i.e. a `watches` row at ≥95% `pct_viewed`. Completion/progress is **always derived** from `watches` (never stored on the item), so there is one threshold, one ledger, and no drift between the mystery rule and the XP rule.
 - **Rewards:** completing an order grants **skips** (V1: 1 skip per completed order) recorded in an audited grant ledger. A skip resolves the **current** item without watching it — no XP, no watch row, and **the final item of an order can never be skipped** (the finale must be watched). A skipped item still counts toward order completion. Skips are spendable in any active order of the **next** cycle of that genre (and any later one — banked skips persist).
 - **Mystery is enforced at the API:** a locked item serializes as `{position, locked: true}` and nothing else — no title, no poster, no content id. The reveal timestamps (`revealed_at`) exist for audit and achievement triggers, not for display.
-- **Finalized decisions:** (1) **Authoring** — V1 generates orders algorithmically from the library (deterministic per cycle: genre-matching content the character has no awarded watch for, ranked by provider score per §5.4); curated JSON pick-lists are a noted V1.1 extension, not a V1 dependency. (2) **Pre-watched items** — content the character already completed is **excluded at generation** (the honest-mystery rule; consistent with §5.5 Ghost Completer). (3) **Movies only** in V1 (`content_type = 'movie'`) — episode orders fight natural binge behavior. (4) **Per-genre achievements** extend the §5.5 list in a `watch_orders` category (completion trophies per genre, no-skip completions, streaks of consecutive cycles) with a per-genre **awards shelf** on the badge wall — the shelf rendering is a frontend concern.
+- **Finalized decisions:** (1) **Authoring** — V1 generates orders algorithmically from the library (deterministic per cycle: genre-matching content the character has no awarded watch for, ranked by provider score per §5.4); curated JSON pick-lists are a noted V1.1 extension, not a V1 dependency. (2) **Pre-watched items** — content the character already completed is **excluded at generation** (the honest-mystery rule; consistent with §5.5 Ghost Completer). (3) **Movies only** in V1 (`content_type = 'movie'`) — episode orders fight natural binge behavior. (4) **Per-genre achievements** extend the §5.5 list in a `watch_orders` category (completion trophies per genre, no-skip completions, streaks of consecutive cycles) with a per-discipline **awards shelf** on the certificate wall — the shelf rendering is a frontend concern.
 - **Where it hooks:** generation and reveals run inside the game tick (poll/sync + refresh, §9) — detect watches → award → **reveal next item (and grant skips on completion)** → evaluate achievements.
+
+### 5.8 Wizard archetypes and spellbook (finalized 2026-09-10; implementation deferred)
+
+The wizard layer is a strategic loadout over the one existing V1 character. It does **not** create a second `characters` row, watch history, XP pool, or parallel progression ledger. The neutral `character_state`, `watches`, `genre_access`, `sub_genre_xp`, `watch_orders`, `skip_grants`, and `character_achievements` tables remain authoritative. The backend-first release implements the complete six-archetype/five-spell contract before the Svelte UI is treated as done.
+
+#### 5.8.1 Active archetype and queued switching
+
+- The account begins with **The Lantern Scholar**, a neutral starter with no modifiers. Existing characters are backfilled to this archetype by 0012 without changing their name, level, XP, watches, or achievements.
+- A character may permanently unlock many archetypes but has exactly **one active archetype**. No archetype stacking, party, house, or alternate save exists in V1.
+- Selecting an already-unlocked archetype creates one immutable **pending selection**. It does not change the current loadout immediately. The pending selection is applied transactionally at the next game tick, before that tick awards or resolves any operation; the response exposes both current and pending state.
+- A new selection is accepted only when there is no pending selection and the character has not accepted an archetype selection during the current local calendar day. The accepted request's local date is stored immediately for rate limiting; the active loadout changes only when the next tick applies the pending selection. A request that conflicts with either rule is rejected without side effects. This makes the selection effective at a deterministic tick boundary rather than halfway through a poll.
+- A request for the already-active archetype is a no-op rejection, not a daily selection. A pending selection cannot be cancelled or replaced in V1; if the requested archetype is no longer eligible when the tick runs, the transaction clears the pending request without changing the active archetype and records the rejected event.
+- Unlocks are permanent and idempotent. Unlock facts are evaluated from persisted progression during the game tick; selecting an archetype never rewrites prior watches, XP, achievements, orders, spell events, or affinity progress.
+- The backend evaluates the active archetype at the moment an operation is awarded or resolved. The UI cannot retroactively choose a loadout for an existing event.
+
+#### 5.8.2 V1 archetype matrix and unlock conditions
+
+These are original Lantern Academy identities, not references to any external franchise. Every archetype has one primary mechanic and at most one secondary modifier. Percentage effects are exact, additive, prospective, and bounded to ±10%; the two token/ward effects are explicitly capped resources rather than hidden multipliers.
+
+| Archetype | Unlock condition | Primary mechanic | Secondary modifier / weakness |
+|---|---|---|---|
+| **Lantern Scholar** | Granted at character bootstrap | Baseline: no primary modifier | No secondary modifier; reliable neutral route. |
+| **Ember Adept** | Reach level 2 | `+10%` movie normal-XP component | `-10%` episode normal-XP component. |
+| **Veil Cartographer** | Complete one mystery watch order | Gain one **preview token** per newly created order cycle; it may reveal one additional non-final item without resolving it | `-10%` affinity progress from movie watches. |
+| **Rune Forger** | Unlock three achievements | `+10%` to the displayed progress meter for visible achievements only | `-10%` normal-XP component on all watches; unlock truth is unchanged. |
+| **Star Shepherd** | Reach a seven-day streak | Gain one **streak ward** on unlock and one replacement ward after each 30-day local cooldown; a ward protects one otherwise cold-gap transition | `-10%` affinity progress from episode watches. |
+| **Moonlit Mediator** | Access three parent genres | `+10%` affinity progress for watches matching the selected spell discipline | `-10%` normal-XP component for Shadowcraft/horror watches. |
+
+A preview token reveals content but never resolves an item; it cannot reveal the finale before its predecessor is resolved and it cannot bypass §5.7 redaction for an item not legally revealable. One preview token is granted for each newly created order cycle while Veil Cartographer is active, is consumed by a successful extra reveal, and is never retroactive; an order with no eligible extra reveal consumes nothing. A streak ward changes only the streak transition, never the watch date, watch row, XP ledger, or completion threshold. Star Shepherd grants one ward on archetype unlock and one additional ward after each 30-day local cooldown only if the prior ward has been consumed; unused wards do not stack beyond one. An effect that would produce a negative amount is clamped to zero. Archetypes never change the 95% threshold, award-once dedupe, finale rule, or achievement truth.
+
+#### 5.8.3 Modifier precedence and tick boundary
+
+At the start of a game tick, the server applies any pending archetype selection and pending spell-affinity selections in one transaction. For each newly awarded watch it computes the neutral base first, applies the active archetype's one primary effect and optional secondary effect to their named components, applies a targeted spell effect, then applies existing contextual bonuses (holiday, new-arrival, featured, streak, and variety) according to their neutral rules. This order is the only legal stacking order.
+
+- Percent modifiers on the same component add, rather than multiply; final component multipliers are clamped to **50%–200%** before integer rounding down.
+- A primary non-percentage effect is represented as an explicit token/ward balance and is never smuggled in as an XP multiplier.
+- `watches.normal_xp`, `watches.bonuses`, and `watches.xp_awarded` record the actual applied result. Archetype changes and definition changes are prospective; historical rows are immutable.
+- Display-only progress effects never alter the neutral evaluator or unlock condition. A single active archetype and a single targeted spell may affect an operation; no other loadout state participates.
+
+#### 5.8.4 Spell affinity economy
+
+Spells are finite, auditable charges earned from the student's viewing choices. Each spell has exactly **one selected parent discipline** (the stable genre slug) and a visible meter from `0` to `100` affinity points toward the next charge.
+
+- On first setup, the player selects the spell's discipline before the spell can earn a charge. The initial selection is queued and becomes active at the next game tick.
+- A player may request at most **one affinity change per spell per local calendar day**. The request is immutable once queued, takes effect at the next tick, and never reclassifies earlier watches. Changing the selected discipline does not reset the meter; only newly awarded watches after activation can add progress.
+- Only a newly inserted `watches` row can advance affinity. Re-watches, skipped items, preview tokens, spell casts, syncs, manual claims, and achievement rows add no affinity points. A spell's selected discipline must be an accessed parent genre; a watch matches when its authoritative parent genre matches that selection. If a newly awarded watch matches, it adds `floor(neutral normal_xp / 2)` points: **5 for an episode and 10 for a movie**, before the active archetype's affinity modifier. Apply a `+10%` affinity modifier by multiplying the unrounded point value, then round down; the bounded modifier therefore yields 5/10 normally or 5/11 for episode/movie when Moonlit Mediator applies. A matching watch may advance every spell currently assigned to that discipline; there is no hidden global affinity pool.
+- Each full **100 affinity points** grants one charge and carries any remainder into the next meter, unless doing so would put unspent charges above 3. At most **3 unspent charges per spell** may exist. When a matching watch arrives while the spell is already at 3 charges, all calculated affinity points are dropped and one `overflow_noop` audit event records the amount. If a watch crosses the cap, charges are minted only up to 3 and any remainder that cannot be retained because the cap was reached is also recorded as `overflow_noop`; the meter is left at 0 at the cap. After a charge is spent, later matching watches resume from the stored meter value. Overflow never creates debt or retroactive charges.
+- Charges persist without expiry. Grants and casts are transactional. A valid cast locks and consumes exactly one available charge; an invalid target, locked item, missing affinity setup, or insufficient balance consumes nothing. Each grant, overflow, affinity change, and cast has a stable source/event key and is recorded for audit.
+
+#### 5.8.5 Initial spellbook and exact effects
+
+| Spell | Effect | Ledger/order boundary |
+|---|---|---|
+| **Vanishing Step** | Resolve the current non-final mystery-order item without watching it | Consumes one charge and stamps `watch_order_items.skipped_at`; it does not consume `skip_grants`, create `watches`, grant XP, or resolve the finale. |
+| **Unsealing Light** | Reveal the next legally revealable locked item without resolving its predecessor | Consumes one charge and records a reveal audit; the item remains unresolved and all other locked-item redaction rules remain in force. |
+| **Chronicle Ward** | Protect one future cold-gap streak transition | Consumes one charge only when that transition occurs; it preserves the streak transition rule but never changes the watch date or fabricates a completion. |
+| **Focus Sigil** | Add `+10%` to the next watch's normal-XP component | Consumes one charge on the next newly inserted watch, applies in the precedence order, respects the clamp, and records the applied amount in `watches.bonuses`. |
+| **Second Sight** | Mark one active order as the student's study target for the next cycle | Consumes one charge and targets only an unstarted active order; it changes priority/presentation, never candidate ranking, reveal legality, skip legality, completion, or XP truth. |
+
+The five spell definitions are visible even before setup. The UI distinguishes `needs_affinity_setup`, `ready`, `charged`, `at_capacity`, and `locked` states, and displays the `progress_points/100`, `unspent_charges/3`, selected discipline, pending discipline, and next eligible change time. The server exposes enough state to explain a capped meter and every discarded overflow event.
+
+#### 5.8.6 Unlocking and displaying wizard progression
+
+Archetype unlock facts remain: Lantern Scholar at bootstrap; Ember Adept at level 2; Veil Cartographer after one completed order; Rune Forger after three achievements; Star Shepherd at a seven-day streak; Moonlit Mediator after three accessed parent genres. Spell charges are **not** granted by those milestones. The five spell definitions become usable when their own unlock facts are met: Vanishing Step after the first completed order, Unsealing Light at level 2, Chronicle Ward at a seven-day streak, Focus Sigil at five achievements, and Second Sight at three accessed parent genres. A definition may remain visible as `locked` before its fact is met, but it cannot be assigned affinity or cast.
+
+Affinity watches are the sole V1 charge source, so the economy remains predictable and route-plannable. The first affinity setup is available only after that spell is unlocked; setup must select one accessed discipline and is applied at the next tick. A spell with no setup has no active meter and cannot receive affinity from earlier watches.
+
+The guided student dossier shows academy level/mastery, active and pending archetype, the single primary and optional secondary effect with their tradeoff explanation, neutral progression facts, and each spell's affinity meter and charge balance. It recommends the starter loadout and explains why a selection/cast is unavailable; it never computes eligibility or effects client-side.
 
 ---
 
@@ -449,17 +558,20 @@ PostgreSQL is introduced as a **shared metadata store** — the RPG uses it as i
 
 **Core tables (conceptual):**
 
-- `characters` — player characters (V1 = one row; multi-player future).
-- `character_stats` / `character_xp` — XP, level, per-genre unlock state, perks.
+- `characters` — student characters (V1 = one row; multi-player future).
+- `character_stats` / `character_xp` — XP, level, per-discipline unlock state, and perks.
 - `watches` — records of watches earned: character, content id (TMDb/TVDb), content type (movie/episode/series), watched-at, watched-via (plex/manual-flag for V2), points awarded, source metadata.
 - `content` — enriched content catalog the RPG knows about: movies and series/episodes, pulled from Plex/Sonarr/Radarr. Includes metadata (title, year, genres, ratings, IDs, section/path). Incremental sync, not a full rebuild each poll.
-- `cases` — case cards: content reference, case type (movie-case / series-campaign / featured), status (available / taken / in-progress / completed), taken-at, completed-at, bonus flags.
+- `cases` — assignment cards: content reference, case type (movie-case / series-campaign / featured), status (available / taken / in-progress / completed), taken-at, completed-at, bonus flags.
 - `featured_cases` — periodic featured case assignments (period, content ref, bonus).
 - `achievements` — achievement definitions (id, name, description, category, visible/hidden, trigger condition).
 - `character_achievements` — which character unlocked which achievement and when.
 - `watch_orders` — per-genre mystery watch orders (§5.7) with ordered, progressively revealed items and an audited skip-grant ledger.
 - `genre_unlocks` / `genre_progress` — which genres are unlocked at current level, coverage counts.
 - `sync_state` — poll cursors / last-sync markers for Plex/Sonarr/Radarr incremental syncs.
+- `wizard_archetypes` / `character_archetypes` — original archetype definitions and permanent unlocks; a single active selection overlays `character_state`.
+- `spells` / `character_spell_ledger` — spell definitions plus auditable grant/consumption rows; never a replacement for `watches` or `skip_grants`.
+- `wizard_presentations` — optional display metadata for genres, achievement awards, portraits, and spell art; it must not duplicate progression truth.
 
 **Sync pattern:** The RPG maintains a curated content table by periodically syncing from Plex/Sonarr/Radarr (incremental, keyed by IDs and last-sync markers). Watches flow from Plex watch-state changes into the `watches` table when detected by polling.
 
@@ -510,6 +622,10 @@ There is **no `Cargo.toml`**, no `main.rs`, and no complete runtime yet — the 
 
 - **API endpoints** for the frontend: character state, watches, cases, achievements, stats, content/case board, sync status. Auth-gated where appropriate (character/account data behind login).
 - **Frontend serving:** Svelte assets (see §8.4), served by the Axum backend (or a separate dev server during development).
+- **Wizard academy boundary (finalized 2026-09-10):** the backend returns authoritative archetype eligibility, current/pending loadout, active modifiers, affinity selections and progress, spell balances, spell target validation, order legality, and award results. The frontend renders the academy shell, portraits, spellbook, discipline map, and awards shelf; it never computes XP, unlocks, reveals, skips, affinity progress, or cast legality.
+- **Response contract:** neutral IDs/slugs, timestamps, ledger amounts, and eligibility reasons remain available for audit. The UI is guided rather than power-user-first: it recommends the starter path, explains tradeoffs and requirements, and progressively surfaces advanced decisions without hiding their underlying state. Presentation fields (`display_name`, `description`, `portrait_key`, `icon_key`, `art_key`, discipline label, and award label) are additive and replaceable. A locked archetype or spell is returned with its unlock requirement and zero balance, not hidden; a locked order item remains governed by §5.7's redaction rule. Mutating responses return the authoritative post-transaction state plus a machine-readable event summary, so the UI does not infer whether a switch, affinity change, cast, reveal, or grant succeeded.
+- **Required wizard state fields:** the character payload exposes `active_archetype`, `pending_archetype` (or null), `archetype_switch_eligible_at`, `archetypes[]` with `unlocked`, `primary_effect`, `secondary_effect`, `strengths`, `weaknesses`, and eligibility reason; `spells[]` with `selected_discipline_slug`, `pending_discipline_slug`, `affinity_progress_points`, `affinity_threshold`, `unspent_charges`, `charge_cap`, `status`, and `next_affinity_change_at`; and a tick/event summary containing applied selections, affinity changes, grants, overflow no-ops, and casts. The API must distinguish current from pending state and must not expose a supposedly revealed locked-order title through any other endpoint.
+- **Smallest later API slice:** preserve `GET /api/character`, `GET /api/achievements`, and `GET /api/orders` for neutral facts. Add `GET /api/archetypes` (definitions + unlock state + current/pending selection), `POST /api/archetypes/{slug}/select` (immutable next-tick selection), `GET /api/spells` (definitions + affinity/balance state), `POST /api/spells/{slug}/affinity` (immutable next-tick discipline selection), and `POST /api/spells/{slug}/cast` (server-validated target and transaction). Extend the character response with academy display metadata, discipline labels, archetype/spell state, and charge summaries rather than creating parallel `/wizard/*` copies of existing progression APIs. A future `GET /api/theme` is optional and may return a static manifest; it is not a progression endpoint.
 
 ---
 
@@ -517,40 +633,52 @@ There is **no `Cargo.toml`**, no `main.rs`, and no complete runtime yet — the 
 
 ### 8.1 Aesthetic
 
-**Detective / investigation** game-like feel:
+**Lantern Academy / original wizard-school** game-like feel:
 
-- Character sheet (stats, level, XP bar, perks, genre unlocks).
-- Quest log / case board (available cases, taken cases, completed cases).
-- Achievement/badge wall (visible achievements + recently unlocked hidden ones).
-- **Genre/watching map** (see §8.2).
-- Case cards / evidence aesthetic for individual watches and cases.
+- Student dossier with academy level, mastery bar, active archetype, modifiers, and spellbook.
+- Assignment board and enchanted watch lists, with sealed next lessons for mystery orders.
+- Certificate wall / awards shelf for visible achievements, newly unlocked honors, and per-genre completion awards.
+- **Discipline map** (see §8.2), using original magical study motifs rather than a literal fantasy world map.
+- Viewing-journal cards with parchment, ink, constellation, botanical, and geometric-sigil accents.
+- Original student portraits and asset keys only; no franchise-derived character art or film stills.
 
 ### 8.2 The map — genre/watching map
 
-**Decided:** A map that represents your watching coverage across genres.
+**Decided:** A discipline map represents the student's watching coverage across the stable neutral genres.
 
-- Genres or genre-groups are "regions" on the map.
-- Watching content in a genre "explores" or "lights up" that region.
-- Coverage level in a genre (e.g., episodes watched, variety) determines how explored it looks.
-- Locked genres (not yet unlocked at current level) appear as uncharted/locked regions.
-- The map is a visual progress/coverage artifact, not a literal navigable world. It ties the detective theme ("mapping the territory of what you've investigated") to the genre-unlock mechanic.
+| Neutral genre slug | Academy display name | Visual motif |
+|---|---|---|
+| `horror` | Shadowcraft | lantern-black ink, moonlit sigils |
+| `thriller` | Tension Weaving | taut red-gold threads |
+| `mystery` | Pattern Reading | constellations and clue-like geometry |
+| `sci-fi` | Far-Realm Studies | star charts and brass instruments |
+| `fantasy` | Mythic Arts | botanical forms and luminous ink |
+| `documentary` | World Lore | field notes and specimen diagrams |
+| `comedy` | Gleeful Charms | bright stained-glass marks |
+| `drama` | Human Studies | layered portrait silhouettes |
+| `romance` | Heartwork | paired orbit motifs |
+| `animation` | Living Illustration | kinetic color blocks |
 
-**V1 scope:** A visual map component showing genre coverage and unlock state. Not a literal RPG world map with movement. If a more literal "world map" metaphor is desired later, that's V2.
+The API keeps the neutral slug and source genre data as the identifier; the academy display name and motif are presentation metadata. Watching content in a genre "lights up" its discipline. Coverage level (watches, variety, and owned sub-genres) determines how explored it looks. Locked disciplines appear sealed and show their level gate plus sub-genre-XP requirement, but never imply that the content is inaccessible in Plex.
+
+**V1 scope:** a visual map component showing discipline coverage, access state, and the next purchase path. It is not a literal navigable world map and has no movement, combat, or spatial gameplay. A more literal academy/world map is V2.
 
 ### 8.3 Views / pages (V1)
 
-- **Character sheet** — stats, level, XP, perks, genre unlocks, streaks.
-- **Case board** — available cases (new arrivals + unwatched library + featured), taken/active cases, completed cases. Player picks cases from here.
-- **Watch log / evidence log** — history of awarded watches (content, when, points, via-plex flag).
-- **Achievement / badge wall** — visible achievements, recently unlocked hidden ones.
-- **Genre map** — the coverage map.
-- **Settings / sync status** — lightweight; sync state, last poll, maybe manual refresh.
+- **Student dossier** — stats, academy rank, level, XP, active archetype, spells, discipline access, and streaks.
+- **Assignment board** — available coursework (new arrivals + unwatched library + featured), taken/active assignments, and completed work. The student chooses assignments here.
+- **Viewing journal** — history of awarded watches (content, when, points, and via-Plex flag).
+- **Certificate wall / awards shelf** — visible honors, recently unlocked hidden awards, and per-discipline completion shelves.
+- **Discipline map** — the coverage map and sealed/unlocked study paths.
+- **Settings / sync status** — lightweight; sync state, last poll, maybe manual refresh. Wizard settings show active-loadout switch eligibility, spell balances, and the neutral-versus-presentation boundary; they do not expose database terminology as the primary UI.
+
+**UI state and accessibility contract:** locked disciplines, archetypes, and spells remain visible with their requirement and a plain-language reason; unavailable actions are disabled rather than simulated. Every modifier has both a short label and an expanded explanation, every cast/selection reports success or a non-consuming failure, and sealed order items retain the §5.7 redaction rule. The first UI can use responsive cards and keyboard-accessible controls; portraits and decorative effects are optional and must never be required to understand level, XP, eligibility, or ledger outcomes.
 
 ### 8.4 Frontend tech (resolved §12 Q2)
 
 **Frontend stack (resolved):** **Svelte** (likely SvelteKit, or Svelte + Vite for a SPA). The spec does not otherwise mandate React vs server-rendered HTML — Svelte is the chosen direction. The existing backend is Rust/Axum; the Svelte frontend can be served as static assets by the Axum backend, or as a separate dev server during development. Exact build setup (SvelteKit adapter, Vite config, asset serving from Axum) is an implementation detail.
 
-The UI remains **game-like** (character sheet, quest log, maps, case-board aesthetic) regardless of the Svelte-flavored implementation.
+The UI remains **game-like** (student dossier, assignment board, discipline map, spellbook, and awards shelf) regardless of the Svelte-flavored implementation.
 
 ---
 
@@ -629,7 +757,16 @@ The UI remains **game-like** (character sheet, quest log, maps, case-board aesth
 
 ## 12. Open questions for implementation
 
-**Status (2026-09-08, after batch resolution): all 14 resolved.** None are pre-V1 blockers; all were either resolved in the interview or in the resolution batches (2026-09-08). Provider enrichment is now a committed V1 capability, with TMDb, TVDB, OMDb, and Fanart.tv API keys configured through the shared `~/Cave/.env`. The list is kept for the record + change log; new implementation questions get added here as they arise.
+**Status (2026-09-10): the original wizard-academy rebrand and backend-first release decisions below are resolved for the next implementation task.** The existing 14 infrastructure questions remain resolved. The wizard contract is documented in §§2.1–2.3, 5.8, 6.4.14, 7.4, and 8.1–8.3; no wizard code, migration, endpoint, or asset implementation is implied by this documentation pass.
+
+15. **Wizard setting — RESOLVED:** use the original **Lantern Academy** setting and broad wizard-school visual language. Do not use Harry Potter names, characters, logos, houses, spells, film artwork, actor likenesses, or imitation of its film art. Use original academy vocabulary and original/licensed assets only. The product tone is cozy, scholarly, curious, and lightly mysterious. (See §§2.1–2.2, 8.1.) ✔
+16. **Progression ownership — RESOLVED:** one existing V1 `character` and neutral ledgers remain authoritative. Archetypes are loadouts, not alternate saves; spells are audited charges, not a second XP/economy ledger. (See §5.8.) ✔
+17. **Archetype roster and build tradeoffs — RESOLVED:** seed the six original archetypes in §5.8.2. Unlocks are permanent and fact-based; each archetype has one primary mechanic and at most one secondary modifier, with percentage effects bounded to ±10%. One archetype is active; its selection is immutable once queued and applies at the next game tick. (See §5.8.1–§5.8.3.) ✔
+18. **Spell affinity — RESOLVED:** each spell has one player-selected parent discipline. First setup and later affinity changes are queued, immutable, limited to once per local day per spell, and applied at the next game tick. Only newly awarded watches advance the selected spell's meter. (See §5.8.4.) ✔
+19. **Spell economy — RESOLVED:** each spell advances by 5 affinity points per episode or 10 per movie matching its selected discipline, grants one charge at 100 points, carries remainders, caps at 3 unspent charges, and records overflow as an auditable no-op. Milestones unlock definitions but do not mint charges. (See §5.8.4–§5.8.6.) ✔
+20. **Switching and modifier precedence — RESOLVED:** pending archetype and affinity changes apply before awards at the next tick; neutral base first, active archetype effects second, targeted spell effect third, contextual bonuses thereafter. Same-component percentages add and clamp to 50%–200%; historical rows never change. (See §5.8.1 and §5.8.3–§5.8.4.) ✔
+21. **Power boundary and presentation — RESOLVED:** spells may reveal, protect, prioritize, or resolve only eligible non-final order items; they never fabricate watches, normal XP, final completion, or achievement truth. The guided UI shows current/pending state, requirements, meters, tradeoffs, and machine-readable outcomes while stable neutral slugs remain authoritative. (See §§5.7–5.8, 7.4, 8.1–8.3.) ✔
+22. **Implementation seam and order — RESOLVED:** the backend-first vertical release implements migrations 0012/0013, bootstrap/backfill, pure archetype/affinity calculations, tick-boundary application, transactional casts, and integration proofs before the Svelte UI. The minimal API is character extension plus archetype list/select, spell list/affinity/cast; no parallel progression APIs. (See §6.4.14 and §7.4.) ✔
 
 1. **Postgres provisioning — RESOLVED (host install, NOT yet available — needs provisioning):** host-side Postgres install, available on host network, not a new compose container. **Probe result (2026-09-08):** no Postgres currently running on the host — no `pg_isready`/`psql` on PATH, no systemd `postgresql` service, nothing on port 5432. The RPG backend cannot connect to Postgres until one is installed/provisioned on the host. **Concrete provisioning decision (finalize before build):** plan + run a host-side Postgres install (the spec's default assumption is a packaged install via the host's package manager + systemd service + a dedicated `rpg` db + a dedicated db user, with `RPG_DB_URL` = `postgresql://<user>:<pass>@localhost:5432/rpg`). Provisioning is a pre-build step, not part of the RPG backend code itself. (See §6.3, §6.4.10.) ✔
 2. **Frontend tech — RESOLVED (Svelte):** Svelte (likely SvelteKit or Svelte+Vite SPA), served as static assets by the Axum backend (or separate dev server during dev). (See §8.4.) ✔
@@ -666,7 +803,7 @@ CREATE TABLE accounts (
 CREATE TABLE characters (
   id          bigserial PRIMARY KEY,
   account_id  bigint NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  name        text NOT NULL DEFAULT 'The Investigator',  -- display name; V1 default, changeable
+  name        text NOT NULL DEFAULT 'The Investigator',  -- legacy neutral fallback; display name is changeable
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 ```
@@ -674,7 +811,7 @@ CREATE TABLE characters (
 - **PIN hashing (finalized 2026-09-08):** the **`argon2` crate** (RustCrypto; pure Rust, matching the crate's no-OpenSSL/rustls posture) with the **Argon2id** variant, in **PHC string format**. `pin_hash` stores the complete PHC string (`$argon2id$v=19$m=…,t=…,p=…$<salt>$<hash>`), so the salt and cost parameters travel with the hash and verification re-derives from the string's embedded params. `pin_salts` stores the base64 salt separately for explicit access and future rotation/rehash flows. Rehashing on successful login if parameters are upgraded is allowed but optional (V1: single account, set once). Version pin: `argon2 = "0.5"` (with `password-hash` PHC support, its default).
 - **PIN set / verify flows (finalized 2026-09-08):** **set-PIN** (first run, exactly once): the PIN must be **4–12 digits** (digits only); it is hashed with Argon2id and the single account row is inserted, then character-creation bootstrap (§6.4.11) seeds `character_state`, the horror `genre_access` row, and missing `settings` defaults. If an account already exists, set-PIN is rejected (no PIN change flow in V1). **Verify** (each gate entry): load the single account's `pin_hash` (a missing account = **locked**, nothing to verify), re-derive with Argon2id from the PHC string's embedded params, and compare; a wrong PIN is rejected without side effects. Verify never reports a wrong PIN as an error; a malformed `pin_hash` is an operational error, not a login failure. (Session issuance after successful verify — cookie vs token, lifetime — remains an implementation detail.)
 - V1 = one account, one character. The PIN is set once at first run / first login (PIN set flow is an implementation detail; the spec commits to "PIN stored hashed in Postgres, single character behind the PIN").
-- `characters.name` is changeable (a simple name-edit feature); the default is "The Investigator".
+- `characters.name` is changeable (a simple student-name feature). Existing rows and the legacy database default remain untouched by the documentation-only rebrand; the academy presentation supplies the starter archetype and rank independently of this free-form name.
 
 ### 6.4.2 Character state (XP, level, stats)
 
@@ -877,7 +1014,7 @@ CREATE INDEX cases_character ON cases(character_id);
 CREATE INDEX cases_status ON cases(character_id, status);
 ```
 
-- `cases` = the **case board**. `case_type`: movie_case (one-off, content_type='movie'), series_campaign (multi-episode, content_type='series' — the case completes when all episodes are watched), featured (a featured case, linked to featured_cases).
+- `cases` = the **assignment board**. `case_type` remains the stable neutral value: movie_case (one-off, content_type='movie'), series_campaign (multi-episode, content_type='series' — the assignment completes when all episodes are watched), featured (a featured assignment, linked to featured_cases).
 - `status`: available (on the board, not yet taken), taken (player chose it), in_progress (at least one episode/movie watched but not completed), completed (done). For movie_case, taken→completed on the movie watch. For series_campaign, taken→in_progress on first episode watch, in_progress→completed on the episode that completes the series.
 - `completion_watch_id` links to the watch row that completed the case (for audit + achievement triggers like "one-click wonder", "instant case").
 - Cases are **player-driven**: the player takes a case from available; the backend doesn't auto-assign. Case generation (which content becomes a case card) is §5.4 / §9.1.
@@ -971,7 +1108,7 @@ CREATE TABLE settings (
   - `horror_list_order` / genre list order — stored as a JSON array of genre names in order, e.g. key `genre_list_order`, value `'["Horror","Thriller","Mystery","Sci-Fi","Fantasy","Documentary","Comedy","Drama","Romance","Animation"]'` (§5.2 cascade)
   - `sub_genre_purchase_xp_threshold` = '100' (§5.2)
   - `holiday_windows` = JSON array of window objects: `[{"name":"halloween","start":"10-01","end":"10-31","genres":["Horror"],"multiplier":1.5}, {"name":"winter_holiday","start":"12-01","end":"12-31","genres":["Comedy","Drama"],"multiplier":1.5}]` (finalize genres per window during implementation)
-  - `perks_unlocked` = JSON array of perk slugs unlocked (§5.2)
+  - `perks_unlocked` = legacy JSON setting retained for compatibility; it is disabled for the Lantern Academy release and must not be combined with the §5.8 archetype modifier system
   - `daily_budget_enabled` = 'false' (§15.2 #1 — off by default for V1; toggleable)
   - `daily_budget_actions` = '3' (if enabled)
   - `featured_selection_mode` = 'new_arrival' | 'all_time_ranking' | 'rotate' (§5.4/Q7) — **V1 default finalized 2026-09-08: `all_time_ranking`** (all-time ranking always yields candidates from unwatched accessed-genre content — important on the tiny probe-confirmed library, where new-arrival mode would dead-end between imports; new_arrival/rotate remain configurable).
@@ -993,7 +1130,7 @@ CREATE TABLE settings (
 - **Incremental sync:** the `content` table is populated/updated by the poll/sync (§9.1), not by a one-time backfill (the library is brand new — §9.3). `sub_genres` can be pre-seeded from the first content sync's sub-genre exposures, or created on demand as watches accumulate in new sub-genres.
 - **Migration placement (2026-09-08):** `settings` is created in migration **0006** (right after `character_state`), not last — it has no dependency beyond `characters` and is required by the character-creation bootstrap seeding. `sync_state` similarly landed early as 0002. The §6.4.11 list order remains the logical dependency order, not the file numbering.
 - **Character-creation bootstrap (finalized 2026-09-08):** character creation is performed by the **application** (not migrations), as one transaction, idempotently: ensure the account's single character exists, insert the `character_state` row (level 1, xp 0, streak 0, `genres_accessed` = 1), insert the `genre_access` horror row, and insert any **missing** `settings` V1 defaults (§6.4.10 samples verbatim, including the winter window scope = Comedy+Drama as a configurable default). With no account yet (PIN not set), bootstrap is a no-op; the PIN-set flow triggers it after account creation.
-- **Schema evolution:** future migrations add columns/tables for V2 features (manual claims → add `via_manual` handling, shared quests → add multi-character + shared_cases tables, economy → add inventory/spending tables, fame → add fame table + state). The `metadata_blob` + `bonuses`/ `holiday_bonus`/`metadata` jsonb columns already give room to add data without early schema churn.
+- **Schema evolution:** future migrations add columns/tables for V2 features (manual claims → add `via_manual` handling, shared quests → add multi-character + shared_cases tables, fame → add fame table + state). The wizard 0012/0013 seam is additive and does not replace neutral ledgers. The `metadata_blob` + `bonuses`/`holiday_bonus`/`metadata` jsonb columns already give room to add data without early schema churn.
 
 ### 6.4.13 Mystery watch orders (finalized 2026-09-08, §5.7)
 
@@ -1038,16 +1175,40 @@ CREATE INDEX skip_grants_character ON skip_grants(character_id) WHERE spent_at I
 CREATE INDEX watch_order_items_content ON watch_order_items(content_id);
 ```
 
-- **Reveal derivation (the invariant):** item `n+1` is visible iff item `n` is resolved — `EXISTS (SELECT 1 FROM watches w JOIN watch_order_items i ON i.content_id = w.content_id WHERE i.order_id = … AND i.position = n) OR i_n.skipped_at IS NOT NULL`. The store's order-flow computes this; it must never trust a client or store a completion flag.
+- **Reveal derivation (the invariant):** item `n+1` is visible iff item `n` is resolved — `EXISTS (SELECT 1 FROM watches w JOIN watch_order_items i ON i.content_id = w.content_id WHERE i.order_id = … AND i.position = n) OR i_n.skipped_at IS NOT NULL`. The store's order-flow computes this; it must never trust a client or store a completion flag. An academy spell may add an explicit reveal audit, but it must not turn a reveal into a resolution.
 - **Skip ledger semantics:** balance = unspent rows (`spent_at IS NULL`). Spending stamps `spent_at`/`spent_item_id` on one row (audit of what was spent where), never deletes. Grants are per completed order (V1: exactly 1); the grant's `source_order_id` links the reward to its earning order for the awards shelf.
 - **Generation (V1, algorithmic):** at creation, pick N movies (V1: 5) matching the genre that the character has no awarded watch for, ranked by provider score per §5.4; ties broken by id for determinism. Item 1 revealed at creation. Re-generation for cycle n+1 happens at completion, inside the game tick.
 - **Integration notes:** `cases` stays untouched (a case is one content card; an order is a sequence — overloading `case_type` would muddy §6.4.6 status semantics). `ProgressSnapshot` (§6.4.8 contract) gains `orders_completed`, `orders_completed_by_genre`, `skips_earned`, `skips_used` for the §5.7 achievement batch in category `watch_orders`.
+
+### 6.4.14 Wizard rebrand storage seam (finalized 2026-09-10; planned migrations, not implemented)
+
+The smallest future schema change is two additive migrations after 0011; no existing neutral ledger is renamed or rewritten. The order below is also the implementation order for the backend-first vertical release. 0012 owns durable current/pending loadout and affinity state; 0013 owns spell definitions and the append-only charge/cast audit.
+
+**Migration 0012 — archetypes, pending loadouts, affinity, and presentation:**
+
+- Create `wizard_archetypes` with stable `slug`, display name, description, `portrait_key`, one `primary_effect` JSONB value, optional `secondary_effect` JSONB value, unlock kind/target, and immutable `strengths`/`weaknesses` display metadata. Seed the six archetypes and the matrix in §5.8.2.
+- Add `characters.active_archetype_id` as a nullable FK to `wizard_archetypes(id)`, plus nullable pending-selection fields (`pending_archetype_id`, `pending_archetype_requested_at`, `pending_archetype_event_key`, `archetype_selected_local_date`). The active choice belongs on `characters`, not `character_state`, because it is a loadout; the local-date field enforces one accepted selection per local day. Existing rows are backfilled to `lantern_scholar` during the migration-safe bootstrap. The pending request is immutable until the next tick and is cleared on successful application or recorded rejection.
+- Create `character_archetypes` with `(character_id, archetype_id)` as the primary key, `unlocked_at`, and `unlock_source_event_key`; permanent unlocks are idempotent and are not inferred from client state.
+- Create `spell_affinities` with `(character_id, spell_id)` as the primary key, `selected_genre_id`, `pending_genre_id`, `pending_requested_at`, `pending_event_key`, `affinity_progress_points`, `last_affinity_change_local_date`, and `updated_at`. This stores one selected discipline per spell and its meter; it is not a general XP ledger. Because `spells` is seeded in 0013, `spell_id` is created as a deferred-reference column in 0012 and receives its FK in 0013. Setup/change requests must reference an accessed genre and obey one accepted change per spell per local day; pending state is applied or rejected at the next tick.
+- Create `wizard_presentations` only if compiled API metadata cannot provide the academy labels/art: `(entity_type, entity_slug, display_name, description, icon_key, art_key, metadata)`. It may cover genre labels and achievement award names without touching neutral slugs.
+
+**Migration 0013 — spell definitions and append-only charge audit:**
+
+- Create `spells` with stable `slug`, display name, description, `effect_type`, parameters, and `charge_cap = 3`; seed the five spells in §5.8.5. Definitions are visible before affinity setup, but a spell remains unusable until its own unlock fact in §5.8.6 is satisfied.
+- Create `character_spell_ledger` as an append-only audit of affinity events, grants, overflow, and casts: `id`, `character_id`, `spell_id`, `entry_type` (`affinity`, `grant`, `overflow_noop`, or `cast`), `source`, `source_event_key`, `affinity_points`, `granted_at`, `spent_at`, `target_order_id`, `target_item_id`, `outcome`, and optional `grant_id` pointing to the consumed grant. A valid cast locks and stamps one eligible grant row and appends one cast row; history is never deleted. Enforce idempotency for grants and affinity events with unique `(character_id, spell_id, source_event_key, entry_type)` keys; `overflow_noop` records the dropped points but never creates debt. Cast rows record the active archetype, selected discipline, and target-state summary in metadata so later audits can explain the decision without reconstructing mutable state.
+- Prefer `watch_order_spell_reveals(order_id, item_id, spell_ledger_id, revealed_at)` for `Unsealing Light` rather than giving `watch_order_items.revealed_at` a second meaning. `Vanishing Step` stamps the existing `skipped_at`; neither spell creates a `watches` row or resolves a finale.
+
+**Required transactional sequence:** at each game tick, lock the character's pending loadout rows, apply and clear valid pending archetype/affinity selections, then award newly detected watches and calculate affinity. A selection or affinity request either commits with its audit event or has no effect. A cast validates ownership, charge balance, target legality, and current order state in one transaction; invalid casts consume nothing. The tick/event response is the source of truth for what was applied.
+
+**Implementation order for the vertical release:** (1) apply 0012/0013 and backfill the starter archetype without mutating neutral history; (2) add pure archetype, affinity, cap, and overflow calculations with unit tests; (3) add transactional bootstrap, pending-selection application, watch-award integration, and unlock evaluation; (4) add archetype/affinity/spell read and mutation endpoints; (5) prove all six archetypes and all five spells against disposable Postgres, including next-tick boundaries, same-day rejection, affinity-only-on-new-watch, charge thresholds, cap overflow, invalid casts, and finale protection; (6) build the guided Svelte dossier and spellbook against those APIs. No UI or client-side calculation is a prerequisite for the backend release.
+
+No migration is needed for the neutral XP, watch, streak, genre, achievement, or free-skip ledgers. If compiled presentation labels are sufficient, 0012 and 0013 are the complete schema addition; a static theme manifest can be served without a table.
 
 ### 6.4.12 Design notes / rationale
 
 - **Single-character V1 with character_id throughout:** even though V1 is one character, the schema carries `character_id` on every state table. This is intentional — it lets V2 multi-character / shared quests land without a rewrite (just add more character rows). The V1 app always reads/writes the single character's rows.
 - **`content.metadata_blob` + `watches.bonuses` + `achievements.metadata` + `settings.value` as jsonb:** the spec says "mirror everything" (§4.5) and "finalize during implementation" for many values. jsonb columns absorb that without a schema-per-field explosion now, and without losing queryability for the fields that matter (genres, sub_genres, external_id, content_type, etc. are real columns with indexes).
-- **`watches.bonuses` as a list:** makes the watch log / character sheet renderable ("this completion earned +10 normal +5 new-arrival +10 featured") and makes achievement triggers auditable ("perfect day" checks bonuses for new_arrival + featured + holiday).
+- **`watches.bonuses` as a list:** makes the viewing journal / student dossier renderable ("this completion earned +10 normal +5 new-arrival +10 featured") and makes achievement triggers auditable ("perfect day" checks bonuses for new_arrival + featured + holiday).
 - **`cases` separate from `watches`:** cases are the player-facing board; watches are the RPG's awarded-completion ledger. They're linked by `completion_watch_id` so achievements like "instant case" / "one-click wonder" can be evaluated.
 - **`sync_state` cursors:** finalize the exact cursor shape per source during implementation (e.g. Plex: last ratingKey synced; Sonarr: last import timestamp checked; Radarr: last import timestamp checked). The spec commits to incremental sync keyed by IDs + last-sync markers (§4.5), not to a specific cursor format.
 
@@ -1203,11 +1364,11 @@ These are **possible configurable features** for the RPG's settings surface — 
 - **Ratings and artwork use all four providers:** TMDb is the primary normalized score; OMDb supplies IMDb/Rotten Tomatoes fallback and identity validation; TVDB supplies TV ratings/metadata; Fanart.tv supplies artwork variants. Stack ratings remain fallback/audit data.
 - **Postgres not on host:** ✅ correction to §6.3. Needs provisioning before build.
 
-### 16.3 Remaining pre-build calls from this probe (resolve into §5/§6/§12)
+### 16.3 Resolved probe follow-ups
 
 - **Provider enrichment is resolved:** TMDb, TVDB, OMDb, and Fanart.tv roles, cache boundaries, provenance, and failure behavior are defined in §4.6 and §6.4.4a. The provider-enriched sub-genre unlock model is committed for V1.
-- **#15 — holiday window genre scope:** Halloween defaults to Horror; winter scope remains a configurable setting and can use enriched TMDb keywords when available. Additional windows are deferred.
-- **#16 — genre list order:** seed a generic fixed list with Horror first, then Thriller, Mystery, Science Fiction, Fantasy, Documentary, Comedy, Drama, Romance, Animation, and expand through settings as the library grows. TMDb official genre names are normalized to this list where they match; unmatched genres remain visible but outside the unlock cascade until configured.
+- **Legacy probe calls #15 and #16 are superseded:** the holiday-window and genre-list decisions are now governed by the resolved contracts in §5.2, §8.2, and §12 items 15–21. The fixed neutral genre order remains the source of truth; academy discipline labels are presentation metadata only.
+- **Wizard rebrand follow-up:** no remaining product decision is hidden in the implementation. Any later change to an archetype effect, spell interaction, asset policy, or API/storage seam must update §§5.8–8.3 and the corresponding §12 decision before code changes.
 
 ### 16.4 Provider-enriched unlock model — implementation contract
 
@@ -1225,7 +1386,7 @@ The V1 unlock model uses TMDb/TVDB enrichment and sub-genre XP purchase:
 
 ---
 
-*Spec end. Next step: implementation planning (or add new open questions to §12 as they arise during implementation and I'll update the spec in place).*
+*Spec end. Next step: review this wizard contract, then implement only the approved migration/API seam; do not begin frontend or asset work from unstated assumptions.*
 > **Change log (2026-09-08, batch 1):** §12 Q1–Q5 resolved — Q1 host install (§6.3), Q2 Svelte (§8.4), Q3 5 min poll (§9.1), Q4 95% near-end threshold configurable (§5.1), Q5 base episode XP = 10 / level 2 at 100 XP rough anchors (§5.1, §5.2). Movie/season/series/streak XP values remain TBD.
 > **Change log (2026-09-08, batch 2):** §12 Q6–Q13 resolved — Q6 genre unlock model: horror opening, everything else locked, unlock via sub-genre XP purchase, cascade one genre at a time, library-filtered sub-genre suggested titles, date-detected holiday/seasonal bonuses (§5.2); Q7 featured cases = new arrivals or all-time ranking by external rating (§5.4, §4.5); Q8 massive achievement list, categories decided, items finalized during implementation (§5.5); Q9 port 86532 (§10.2); Q10 set-a-pin gate, PIN in Postgres, V1 single-user (§7.3); Q11 common libs fine, minimal non-coupling sharing, no shared RPG state in common lib (§7.2); Q12 no big backfill (library brand new), faster updates at first, settle to 5-min cadence once caught up (§9.3); Q13 mirror everything the APIs expose, full metadata store, stack remains source of truth (§4.5).
 > **Change log (2026-09-08, post-batch tightening):** §5.1/§5.2 got concrete V1 values — episode XP = 10, movie XP = 20, season bonus = 10 × episode count, series bonus = 25 × total episode count, first-completion +10, new-arrival +5 (48h window), featured +10, day-streak bonus table (§5.1.1), genre variety bonus +5/+15 (§5.1.2), level table 1→10 with cumulative XP thresholds (§5.2), genre unlock: horror opening, level-broadens-access (1 new genre per level), sub-genre XP purchase at 100 XP (+10 episode / +20 movie toward the sub-genre), fixed ordered genre list cascade, suggested titles from library mirror, holiday windows (Halloween/winter starters, +50% XP multiplier, date-gated feature modules) (§5.2); §6.4 concrete Postgres schema added (accounts, characters, character_state, genres, sub_genres, genre_access, sub_genre_xp, genre_xp_ledger, content with full metadata_blob mirror, watches, cases, featured_cases, achievements, character_achievements, sync_state, settings) + migration approach + seed data + design notes (§6.4).
@@ -1243,3 +1404,4 @@ The V1 unlock model uses TMDb/TVDB enrichment and sub-genre XP purchase:
 > **Change log (2026-09-08, during implementation, game tick):** §9.1 game-tick phase order finalized (watch award → order reveals → achievement evaluation). Implemented as `game.rs` (`run_game_tick`: `refresh_watch_orders` → `evaluate_achievements`, phase 1 a documented slot) wired into `POST /api/orders/refresh`.
 > **Change log (2026-09-08, during implementation, phase 1):** watch-award semantics finalized in §9.1 (viewCount/viewOffset detection, award-once rule, streak advance + §5.1.1 milestone timing, level re-evaluation from §5.2 thresholds). Implemented as `awards.rs` (pure detection/level/streak math) + tick phase 1 wired to a `PlexClient`.
 > **Change log (2026-09-08, during implementation, poll loop):** §9.1 poll-loop semantics finalized (sync → tick per cycle, fixed 5-minute interval, logged-and-non-fatal sync/phase-1 failures with phases 2–3 still advancing, Ctrl-C drains both server and loop, one-line per-cycle logging). Implemented as `poll.rs` (`PollStack::from_config`, `run_poll_cycle`, `run_poll_loop` with watch-shutdown); `main.rs` spawns the loop beside the HTTP server over the shared store.
+> **Change log (2026-09-10, spec-first wizard rules revision):** the product presentation is the original, cozy scholarly Lantern Academy. Neutral ledgers and stable identifiers remain authoritative; the backend-first vertical release, six pre-designed archetypes with one primary and at most one bounded secondary effect, immutable next-tick loadout changes, five spells with player-selected one-discipline affinities, newly-awarded-watch-only meters, 100-point charge thresholds, three-charge caps, overflow audit, guided UI boundary, and minimal 0012/0013 + API seam are finalized in §§2.1–2.3, 5.8, 6.4.14, 7.4, and 8.1–8.3. Implementation is deliberately deferred.

@@ -3,12 +3,14 @@
 > Resume point for any agent/session. Read this first, then `CLAUDE.md`, then
 > `movie-rpg-spec.md` (source of truth).
 
-## Status (updated 2026-09-08)
+## Status (updated 2026-09-10)
 
-**Latest pushed commit on `main`:** `8b15e56` — test: prove persistence
-surface against scratch postgres. The RPG progression, HTTP server, watch
-awards, and unattended poll-loop work are **uncommitted local work** on top;
-commit them when the session asks.
+**Latest pushed commit on `main`:** `acd3538` — feat: add unattended RPG
+polling loop. The progression, HTTP server, watch awards, and poll loop are
+implemented and validated. The current local work is a **spec-only wizard-
+academy rules contract revision**; it is not yet committed. Preserve the
+untracked `.freebuff/` runtime directory and do not begin implementation until
+the updated contract is reviewed.
 
 ### Done so far
 
@@ -111,10 +113,25 @@ commit them when the session asks.
    non-fatal sync/phase-1 degradation, and shutdown coordination; `main.rs`
    shares the store with Axum and waits for the poll task after the server
    drains.
-6. **Next:** Svelte frontend (§8.4) consuming `/auth/*`,
-   `/api/character`, `/api/achievements`, and `/api/orders`. The
-   wizard-theme brainstorm remains intentionally out of scope for this
-   poll-loop pass.
+6. **Wizard-academy contract — revised, implementation deferred:**
+   `movie-rpg-spec.md` now defines the cozy scholarly Lantern Academy, a
+   backend-first vertical release, six pre-designed archetypes with one
+   primary mechanic and at most one bounded secondary modifier, immutable
+   next-tick archetype selection, five spells with player-selected one-
+   discipline affinities, visible watch-driven charge meters, explicit
+   thresholds/overflow, guided UI behavior, and server-owned transactional
+   auditability. The archetype matrix, exact spell economy, migration fields,
+   API payload fields, transactional sequence, and implementation order are
+   now explicit. No code, migration, asset, or frontend implementation
+   belongs to this documentation pass.
+7. **Next implementation pass:** implement migrations 0012/0013 in the
+   specified order, backfill the starter archetype without mutating history,
+   add pure archetype/affinity/cap/overflow calculations, apply queued state
+   at the tick boundary, add transactional spell casts, and run live proofs
+   for all six archetypes and five spells. Then build the guided Svelte UI
+   against the resulting APIs. Keep the existing neutral `watches`, XP,
+   streak, genre, achievement, `watch_orders`, and `skip_grants` ledgers
+   authoritative.
 
 ## How to verify
 
@@ -137,7 +154,12 @@ the same proof inside plain `cargo test`.
 
 - Commit style: conventional commits (feat/fix/docs/chore/test).
 - Spec-first: update `movie-rpg-spec.md` before design changes; resolve
-  "finalize during implementation" items in the spec, not silently.
+  "finalize during implementation" items in the spec, not silently. The
+  Lantern Academy rebrand is documented as original IP; do not introduce
+  copyrighted franchise names, characters, logos, spells, or film artwork.
+  Preserve the next-tick boundary, one-primary/one-secondary archetype
+  shape, one-discipline affinity rule, watch-only meter input, and explicit
+  charge overflow audit unless the spec is revised again.
 - No new compose containers; RPG is a separate crate/process, port 46532
   (corrected from 86532, which exceeded the 65535 TCP limit — spec §12 Q9).
 - Tests follow the existing pattern: mock TCP servers + fixture files in
