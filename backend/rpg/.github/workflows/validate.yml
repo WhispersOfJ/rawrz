@@ -38,3 +38,40 @@ jobs:
             exit 1
           fi
           wc -l movie-rpg-spec.md | awk '{print "spec lines:", $1}'
+
+  store-proof:
+    # Runs the persistence proof (backend/rpg/tests/store_proof.rs) against a
+    # real Postgres service container. RPG_DB_URL also activates the proof
+    # inside the plain `cargo test` run, so the unit suite and the live
+    # surface are exercised together.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rpg
+          POSTGRES_PASSWORD: scratch
+          POSTGRES_DB: rpg_scratch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rpg -d rpg_scratch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/rpg
+
+      - name: unit tests + store proof against scratch postgres
+        working-directory: backend/rpg
+        env:
+          RPG_DB_URL: postgresql://rpg:scratch@localhost:5432/rpg_scratch
+        run: cargo test

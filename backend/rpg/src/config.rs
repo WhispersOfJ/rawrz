@@ -71,10 +71,44 @@ mod tests {
         .unwrap();
 
         let config = ProbeConfig::from_env_file(&path).unwrap();
-        assert_eq!(config.sonarr_api_key, "sonarr-key");
-        assert_eq!(config.fanart_api_key, "fanart-key");
-        assert_eq!(config.rpg_db_url, "postgresql://rpg@localhost/movie_rpg");
+        // Process environment wins over file values by contract, so the
+        // expectation for each key is ambient-env-when-set, else the file
+        // value. This keeps the test hermetic even when the runner itself
+        // exports one of these variables (e.g. RPG_DB_URL in CI).
+        let expected = |file_value: &str, name: &str| {
+            std::env::var(name).ok().unwrap_or_else(|| file_value.to_owned())
+        };
+        assert_eq!(
+            config.sonarr_api_key,
+            expected("sonarr-key", "SONARR_API_KEY")
+        );
+        assert_eq!(
+            config.fanart_api_key,
+            expected("fanart-key", "FANART_API_KEY")
+        );
+        assert_eq!(
+            config.rpg_db_url,
+            expected("postgresql://rpg@localhost/movie_rpg", "RPG_DB_URL")
+        );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn parse_env_line_strips_quotes_and_ignores_comments() {
+        assert_eq!(
+            super::parse_env_line("SONARR_API_KEY='sonarr-key'"),
+            Some(("SONARR_API_KEY".to_owned(), "sonarr-key".to_owned()))
+        );
+        assert_eq!(
+            super::parse_env_line("FANART_API_KEY=\"fanart-key\""),
+            Some(("FANART_API_KEY".to_owned(), "fanart-key".to_owned()))
+        );
+        assert_eq!(
+            super::parse_env_line("export RPG_DB_URL=postgresql://db"),
+            Some(("RPG_DB_URL".to_owned(), "postgresql://db".to_owned()))
+        );
+        assert_eq!(super::parse_env_line("# comment"), None);
+        assert_eq!(super::parse_env_line(""), None);
     }
 }
 
