@@ -64,7 +64,7 @@ commit it when the session asks.
   connect → `migrate()` → serve. Run: `cargo run -- [path/to/.env]`
   (defaults to `../.env`). End-to-end smoke-tested with curl against a
   scratch Postgres; HTTP flow also covered in the live-DB proof (§6 below).
-- Fixtures + full test suite: **59 tests, all passing**
+- Fixtures + full test suite: **61 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -75,8 +75,17 @@ commit it when the session asks.
 1. ~~Migration 0008 — cases (§6.4.6), then 0009 — featured_cases (§6.4.7)~~
    **Done:** both landed (0008, 0009), including the deferred
    `watches_featured_case` FK and the `cases_featured_case` FK.
-2. Then: `achievements` + `character_achievements` (§6.4.8) and the
-   §5.5 achievement-list seed.
+2. ~~`achievements` + `character_achievements` (§6.4.8) and the §5.5
+   achievement-list seed~~ **Done:** migration 0010 lands both tables
+   plus the full first-cut seed (101 rows, kinds/targets/metadata
+   finalized — see spec §6.4.8 implementation notes).
+3. Achievement **evaluation engine** (poll/sync + case-completion hooks
+   writing `character_achievements`).
+4. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
+5. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
+   set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
+   `server.rs`, `main.rs`. Sessions are in-memory (restart logs everyone
+   out) — acceptable for V1; revisit if restarts become frequent.
 3. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
 4. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
    set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
@@ -86,7 +95,7 @@ commit it when the session asks.
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 59 passing
+cd backend/rpg && cargo test        # expect 61 passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
 

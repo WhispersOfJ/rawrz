@@ -20,6 +20,9 @@ pub const CASES_MIGRATION: &str = include_str!("../migrations/0008_cases.sql");
 pub const FEATURED_CASES_VERSION: &str = "0009_featured_cases";
 pub const FEATURED_CASES_MIGRATION: &str =
     include_str!("../migrations/0009_featured_cases.sql");
+pub const ACHIEVEMENTS_VERSION: &str = "0010_achievements";
+pub const ACHIEVEMENTS_MIGRATION: &str =
+    include_str!("../migrations/0010_achievements.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -37,15 +40,16 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (WATCHES_VERSION, WATCHES_MIGRATION),
     (CASES_VERSION, CASES_MIGRATION),
     (FEATURED_CASES_VERSION, FEATURED_CASES_MIGRATION),
+    (ACHIEVEMENTS_VERSION, ACHIEVEMENTS_MIGRATION),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ACCOUNTS_CHARACTERS_MIGRATION, CASES_MIGRATION, CHARACTER_STATE_MIGRATION,
-        FEATURED_CASES_MIGRATION, GENRES_MIGRATION, INITIAL_CONTENT_PROVIDER_CACHE as SQL,
-        MIGRATIONS, SETTINGS_MIGRATION, SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
-        WATCHES_MIGRATION,
+        ACCOUNTS_CHARACTERS_MIGRATION, ACHIEVEMENTS_MIGRATION, CASES_MIGRATION,
+        CHARACTER_STATE_MIGRATION, FEATURED_CASES_MIGRATION, GENRES_MIGRATION,
+        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
+        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -71,7 +75,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 9);
+        assert_eq!(MIGRATIONS.len(), 10);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -81,10 +85,12 @@ mod tests {
         assert_eq!(MIGRATIONS[6].0, super::WATCHES_VERSION);
         assert_eq!(MIGRATIONS[7].0, super::CASES_VERSION);
         assert_eq!(MIGRATIONS[8].0, super::FEATURED_CASES_VERSION);
+        assert_eq!(MIGRATIONS[9].0, super::ACHIEVEMENTS_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
         assert!(MIGRATIONS[6].0 < MIGRATIONS[7].0 && MIGRATIONS[7].0 < MIGRATIONS[8].0);
+        assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -417,6 +423,158 @@ mod tests {
             2,
             "0009 must complete both deferred featured_case_id foreign keys"
         );
+    }
+
+    #[test]
+    fn creates_achievement_tables_with_categories_and_progress_key() {
+        let definitions_position = ACHIEVEMENTS_MIGRATION
+            .find("CREATE TABLE achievements (")
+            .expect("migration is missing the achievements table");
+        let unlocks_position = ACHIEVEMENTS_MIGRATION
+            .find("CREATE TABLE character_achievements (")
+            .expect("migration is missing the character_achievements table");
+        let seed_position = ACHIEVEMENTS_MIGRATION
+            .find("INSERT INTO achievements")
+            .expect("migration is missing the achievement seed");
+        assert!(definitions_position < unlocks_position && unlocks_position < seed_position);
+
+        for field in [
+            "slug text NOT NULL UNIQUE",
+            "category text NOT NULL",
+            "visible boolean NOT NULL DEFAULT true",
+            "kind text NOT NULL",
+            "target_value bigint",
+            "metadata jsonb NOT NULL DEFAULT '{}'",
+        ] {
+            assert!(
+                contains_sql(statement_containing(ACHIEVEMENTS_MIGRATION, "CREATE TABLE achievements ("), field),
+                "achievements table is missing {field:?}"
+            );
+        }
+        for field in [
+            "achievement_id bigint NOT NULL REFERENCES achievements(id) ON DELETE CASCADE",
+            "PRIMARY KEY (character_id, achievement_id)",
+            "progress bigint NOT NULL DEFAULT 0",
+        ] {
+            assert!(
+                contains_sql(
+                    statement_containing(ACHIEVEMENTS_MIGRATION, "CREATE TABLE character_achievements ("),
+                    field
+                ),
+                "character_achievements table is missing {field:?}"
+            );
+        }
+        for index in [
+            "CREATE INDEX achievements_category ON achievements(category)",
+            "CREATE INDEX achievements_visible ON achievements(visible)",
+        ] {
+            assert!(
+                ACHIEVEMENTS_MIGRATION.contains(index),
+                "achievements migration is missing {index:?}"
+            );
+        }
+    }
+
+    /// Parse a seed row's trailing metadata jsonb literal (last column,
+    /// always shaped `'{...}'` in the seed).
+    fn seed_row_metadata(row: &str) -> serde_json::Value {
+        let start = row
+            .rfind("'{")
+            .expect("seed row is missing a metadata literal")
+            + 1;
+        let rest = &row[start..];
+        let end = rest
+            .find("}'")
+            .expect("metadata literal is unterminated")
+            + 1;
+        serde_json::from_str(&rest[..end])
+            .unwrap_or_else(|error| panic!("seed metadata must be valid json ({error}): {:?}", &rest[..end]))
+    }
+
+    #[test]
+    fn seeds_the_full_achievement_first_cut_with_kinds_targets_and_metadata() {
+        let seed = ACHIEVEMENTS_MIGRATION
+            .split("VALUES")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("migration is missing the achievement seed");
+        // Strip the section-comment lines between seed groups, then split rows.
+        let body = seed
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows: Vec<&str> = body
+            .split("),\n")
+            .map(|row| {
+                row.trim()
+                    .trim_start_matches('(')
+                    .trim_start_matches("\n  ")
+            })
+            .collect();
+        assert_eq!(rows.len(), 101, "the §5.5 first-cut list has 101 achievements");
+
+        // Every row names exactly one of the six spec categories.
+        for category in [
+            "'completion_milestone'",
+            "'genre_coverage'",
+            "'time_streak'",
+            "'novelty_firsts'",
+            "'themed_quirky'",
+            "'combo'",
+        ] {
+            assert!(
+                body.contains(category),
+                "no seed rows for category {category}"
+            );
+        }
+
+        // Slugs are unique across the seed.
+        let mut slugs: Vec<&str> = rows
+            .iter()
+            .map(|row| row.split(',').next().unwrap_or("").trim().trim_matches('\''))
+            .collect();
+        assert!(!slugs.iter().any(|slug| slug.is_empty()), "seed row is missing a slug");
+        let unique = slugs.len();
+        slugs.sort_unstable();
+        slugs.dedup();
+        assert_eq!(slugs.len(), unique, "seed slugs must be unique");
+
+        // Counter/streak kinds carry targets, once/combo kinds do not, and
+        // every row's metadata parses as json.
+        for (slug, target) in [
+            ("episode_100", 100),
+            ("horror_homeground_25", 25),
+            ("streak_legend", 30),
+            ("iron_streak", 60),
+        ] {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(&format!("'{slug}'")))
+                .unwrap_or_else(|| panic!("seed is missing {slug}"));
+            assert!(
+                row.contains(&format!(", {target}, ")),
+                "{slug} must carry target_value {target}"
+            );
+        }
+        for slug in ["first_blood", "case_closed", "perfect_day"] {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(&format!("'{slug}'")))
+                .unwrap_or_else(|| panic!("seed is missing {slug}"));
+            assert!(row.contains(", NULL, "), "{slug} must not carry a target_value");
+        }
+        for slug in ["spooky_season", "rainy_day", "actors_playground"] {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(&format!("'{slug}'")))
+                .unwrap_or_else(|| panic!("seed is missing {slug}"));
+            let metadata = seed_row_metadata(row);
+            assert!(
+                metadata.get("metadata_dependent").is_some() || metadata.get("cumulative").is_some(),
+                "{slug} must carry its finalized metadata flag"
+            );
+        }
     }
 
     #[test]

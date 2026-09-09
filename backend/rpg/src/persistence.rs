@@ -843,7 +843,7 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 9);
+        assert_eq!(MIGRATIONS.len(), 10);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
@@ -853,6 +853,7 @@ mod tests {
         assert_eq!(MIGRATIONS[6].0, "0007_watches");
         assert_eq!(MIGRATIONS[7].0, "0008_cases");
         assert_eq!(MIGRATIONS[8].0, "0009_featured_cases");
+        assert_eq!(MIGRATIONS[9].0, "0010_achievements");
 
         assert_eq!(
             migration_summary(0, 1),
