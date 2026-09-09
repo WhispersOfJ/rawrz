@@ -866,6 +866,7 @@ CREATE INDEX cases_status ON cases(character_id, status);
 - `status`: available (on the board, not yet taken), taken (player chose it), in_progress (at least one episode/movie watched but not completed), completed (done). For movie_case, taken→completed on the movie watch. For series_campaign, taken→in_progress on first episode watch, in_progress→completed on the episode that completes the series.
 - `completion_watch_id` links to the watch row that completed the case (for audit + achievement triggers like "one-click wonder", "instant case").
 - Cases are **player-driven**: the player takes a case from available; the backend doesn't auto-assign. Case generation (which content becomes a case card) is §5.4 / §9.1.
+- **Implementation note (2026-09-08):** `cases.featured_case_id` links a `featured`-type case to its `featured_cases` row. The spec DDL above omits the column; migration 0008 creates it as a plain `bigint` with the FK deferred to 0009 (same deferred-prerequisite pattern as `watches.featured_case_id`).
 
 ### 6.4.7 Featured cases (periodic)
 
@@ -882,7 +883,7 @@ CREATE TABLE featured_cases (
 );
 ```
 
-- `featured_cases` = one featured case per period per character (the featured case for that period). `period` identifies the period (weekly/monthly — finalize during implementation). The old period's featured case becomes historical; a new one is generated each period.
+- `featured_cases` = one featured case per period per character (the featured case for that period). `period` identifies the period — **finalized (2026-09-08, during implementation):** V1 cadence is weekly (§5.4), so `period` holds the ISO week label `YYYY-Www` (e.g. `2026-W37`); monthly would be `YYYY-MM` if the cadence ever changes. The old period's featured case becomes historical; a new one is generated each period.
 - `selection_mode` = how it was chosen (new_arrival vs all_time_ranking, §5.4/Q7). `content_id` = the featured title. `bonus_xp` = the featured bonus (§5.1: +10 XP on completion).
 - Featured case generation runs during the poll/sync (§9.1): pick the featured title per the selection rule, insert a new featured_cases row for the new period.
 
@@ -1168,3 +1169,4 @@ The V1 unlock model uses TMDb/TVDB enrichment and sub-genre XP purchase:
 > **Change log (2026-09-08, during implementation, PIN gate):** set/verify flows finalized (§6.4.1, §7.3): set-PIN first-run-only, 4–12 digits, hashed Argon2id → account insert → character bootstrap; verify = load single `pin_hash`, missing account = locked, Argon2id re-derivation, wrong PIN rejected without side effects; malformed `pin_hash` is an operational error. Session issuance remains an implementation detail.
 > **Change log (2026-09-08, during implementation, HTTP server):** session mechanics finalized (§7.3) — Axum server on 46532 (port corrected from the impossible 86532, see §12 Q9), opaque 128-bit session tokens in an `rpg_session` HttpOnly/SameSite=Lax cookie, server-side in-memory session store with 7-day expiry, logout deletes the session; public routes: `/healthz`, `/auth/status`, `/auth/set-pin`, `/auth/login`; everything else 401 without a valid session. First API surface: `GET /api/character` (character overview behind the gate). Startup runs `migrate()`; binary target `movie-rpg` added.
 > **Change log (2026-09-08, during implementation, watches):** migration 0007 lands `watches` (§6.4.5) + the deferred `genre_xp_ledger` (§6.4.3 placement note corrected 0006 → 0007). `watches.featured_case_id` is created as a plain column — its FK to `featured_cases` is deferred to that table's migration (0009), which must `ALTER TABLE watches ADD CONSTRAINT watches_featured_case`.
+> **Change log (2026-09-08, during implementation, cases):** migration 0008 lands `cases` (§6.4.6) with `featured_case_id` created plain (FK deferred); migration 0009 lands `featured_cases` (§6.4.7) and completes **both** deferred FKs (`watches_featured_case`, `cases_featured_case`). §6.4.7 period format finalized: ISO week label `YYYY-Www` (V1 cadence weekly, §5.4).

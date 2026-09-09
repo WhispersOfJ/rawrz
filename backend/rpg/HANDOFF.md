@@ -33,6 +33,13 @@ commit it when the session asks.
     `genre_xp_ledger` (§6.4.3, `source_watch_id` FK now resolvable).
     `watches.featured_case_id` is a plain column — its FK to `featured_cases`
     (0009) is deferred, same pattern as sync_state/genre_xp_ledger.
+  - `0008_cases.sql` — cases case-board table (§6.4.6) with
+    `completion_watch_id` FK and `featured_case_id` created plain (FK
+    deferred to 0009, same pattern).
+  - `0009_featured_cases.sql` — featured_cases (§6.4.7, ISO-week `period`
+    `YYYY-Www`, weekly V1 cadence) and completion of **both** deferred
+    FKs: `watches_featured_case` (from 0007) and `cases_featured_case`
+    (from 0008).
 - Config/env loading: `backend/rpg/src/config.rs`
 - Character-creation bootstrap: `PostgresContentStore::bootstrap_single_character`
   (persistence.rs) — one transaction, idempotent: resolves the single account's
@@ -57,7 +64,7 @@ commit it when the session asks.
   connect → `migrate()` → serve. Run: `cargo run -- [path/to/.env]`
   (defaults to `../.env`). End-to-end smoke-tested with curl against a
   scratch Postgres; HTTP flow also covered in the live-DB proof (§6 below).
-- Fixtures + full test suite: **57 tests, all passing**
+- Fixtures + full test suite: **59 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -65,10 +72,9 @@ commit it when the session asks.
 
 ### Next steps (spec §6.4.11 migration order, after character state)
 
-1. **Migration 0008 — cases** (§6.4.6), then **0009 — featured_cases**
-   (§6.4.7) — 0009 must also `ALTER TABLE watches ADD CONSTRAINT
-   watches_featured_case FOREIGN KEY (featured_case_id) REFERENCES
-   featured_cases(id)` to complete the FK deferred in 0007.
+1. ~~Migration 0008 — cases (§6.4.6), then 0009 — featured_cases (§6.4.7)~~
+   **Done:** both landed (0008, 0009), including the deferred
+   `watches_featured_case` FK and the `cases_featured_case` FK.
 2. Then: `achievements` + `character_achievements` (§6.4.8) and the
    §5.5 achievement-list seed.
 3. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
@@ -80,7 +86,7 @@ commit it when the session asks.
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 51+ passing
+cd backend/rpg && cargo test        # expect 59 passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
 

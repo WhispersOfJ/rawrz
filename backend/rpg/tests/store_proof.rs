@@ -2,7 +2,7 @@
 //! RPG_DB_URL points at a scratch database (see
 //! scripts/scratch_pg_proof.sh for the disposable one-command harness).
 //!
-//! Exercises the real surface: migrate() over all six migrations, the
+//! Exercises the real surface: migrate() over all nine migrations, the
 //! locked/set/verify PIN flows, row-level seed assertions for the bootstrap
 //! (character_state, horror genre_access, all 13 settings defaults),
 //! idempotency by execution (set + seed twice, zero duplicates), and a
@@ -55,7 +55,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("store connects to scratch database");
     let summary = store.migrate().await.expect("migrate() succeeds");
-    assert_eq!(summary.applied, 7, "all seven migrations apply on a fresh database");
+    assert_eq!(summary.applied, 9, "all nine migrations apply on a fresh database");
     assert_eq!(summary.already_applied, 0);
 
     // (2a) verify with no account yet: locked.
@@ -216,7 +216,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // (5) re-run migrate() on an already-migrated database: clean no-op.
     let summary = store.migrate().await.expect("re-migrate succeeds");
     assert_eq!(summary.applied, 0, "re-migrate applies nothing");
-    assert_eq!(summary.already_applied, 7, "re-migrate recognizes all seven versions");
+    assert_eq!(summary.already_applied, 9, "re-migrate recognizes all nine versions");
 
     // (6) HTTP surface: serve the real router on an ephemeral port and drive
     // the full gate flow over TCP (spec §7.3 session mechanics).

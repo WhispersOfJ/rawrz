@@ -15,6 +15,11 @@ pub const SETTINGS_VERSION: &str = "0006_settings";
 pub const SETTINGS_MIGRATION: &str = include_str!("../migrations/0006_settings.sql");
 pub const WATCHES_VERSION: &str = "0007_watches";
 pub const WATCHES_MIGRATION: &str = include_str!("../migrations/0007_watches.sql");
+pub const CASES_VERSION: &str = "0008_cases";
+pub const CASES_MIGRATION: &str = include_str!("../migrations/0008_cases.sql");
+pub const FEATURED_CASES_VERSION: &str = "0009_featured_cases";
+pub const FEATURED_CASES_MIGRATION: &str =
+    include_str!("../migrations/0009_featured_cases.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -30,14 +35,17 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (CHARACTER_STATE_VERSION, CHARACTER_STATE_MIGRATION),
     (SETTINGS_VERSION, SETTINGS_MIGRATION),
     (WATCHES_VERSION, WATCHES_MIGRATION),
+    (CASES_VERSION, CASES_MIGRATION),
+    (FEATURED_CASES_VERSION, FEATURED_CASES_MIGRATION),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ACCOUNTS_CHARACTERS_MIGRATION, CHARACTER_STATE_MIGRATION, GENRES_MIGRATION,
-        INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
-        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
+        ACCOUNTS_CHARACTERS_MIGRATION, CASES_MIGRATION, CHARACTER_STATE_MIGRATION,
+        FEATURED_CASES_MIGRATION, GENRES_MIGRATION, INITIAL_CONTENT_PROVIDER_CACHE as SQL,
+        MIGRATIONS, SETTINGS_MIGRATION, SYNC_STATE_MIGRATION, SYNC_STATE_VERSION,
+        WATCHES_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -63,7 +71,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 7);
+        assert_eq!(MIGRATIONS.len(), 9);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -71,9 +79,12 @@ mod tests {
         assert_eq!(MIGRATIONS[4].0, super::CHARACTER_STATE_VERSION);
         assert_eq!(MIGRATIONS[5].0, super::SETTINGS_VERSION);
         assert_eq!(MIGRATIONS[6].0, super::WATCHES_VERSION);
+        assert_eq!(MIGRATIONS[7].0, super::CASES_VERSION);
+        assert_eq!(MIGRATIONS[8].0, super::FEATURED_CASES_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
+        assert!(MIGRATIONS[6].0 < MIGRATIONS[7].0 && MIGRATIONS[7].0 < MIGRATIONS[8].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -328,6 +339,84 @@ mod tests {
                 "genre_xp_ledger table is missing {field:?}"
             );
         }
+    }
+
+    #[test]
+    fn creates_case_board_with_deferred_featured_fk() {
+        let statement = statement_containing(CASES_MIGRATION, "CREATE TABLE cases (");
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "content_id bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE",
+            "case_type text NOT NULL",
+            "status text NOT NULL DEFAULT 'available'",
+            "taken_at timestamptz",
+            "completed_at timestamptz",
+            "completion_watch_id bigint REFERENCES watches(id)",
+            "bonus_flags jsonb NOT NULL DEFAULT '[]'",
+            "featured_case_id bigint",
+            "created_at timestamptz NOT NULL DEFAULT now()",
+        ] {
+            assert!(
+                contains_sql(statement, field),
+                "cases table is missing {field:?}"
+            );
+        }
+        // The featured_cases FK is deferred to 0009 — the column must be a
+        // plain bigint here.
+        assert!(
+            !statement.contains("REFERENCES featured_cases"),
+            "cases must not reference featured_cases before it exists"
+        );
+        for index in [
+            "CREATE INDEX cases_character ON cases(character_id)",
+            "CREATE INDEX cases_status ON cases(character_id, status)",
+        ] {
+            assert!(CASES_MIGRATION.contains(index), "cases migration is missing {index:?}");
+        }
+    }
+
+    #[test]
+    fn creates_featured_cases_and_completes_both_deferred_foreign_keys() {
+        let table_position = FEATURED_CASES_MIGRATION
+            .find("CREATE TABLE featured_cases (")
+            .expect("migration is missing the featured_cases table");
+        let watches_fk_position = FEATURED_CASES_MIGRATION
+            .find("ALTER TABLE watches")
+            .expect("migration is missing the watches featured-case foreign key");
+        let cases_fk_position = FEATURED_CASES_MIGRATION
+            .find("ALTER TABLE cases")
+            .expect("migration is missing the cases featured-case foreign key");
+        assert!(
+            table_position < watches_fk_position && table_position < cases_fk_position,
+            "the deferred foreign keys must be added after the table exists"
+        );
+
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "period text NOT NULL",
+            "content_id bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE",
+            "selection_mode text NOT NULL",
+            "bonus_xp bigint NOT NULL DEFAULT 10",
+            "created_at timestamptz NOT NULL DEFAULT now()",
+            "UNIQUE (character_id, period)",
+        ] {
+            assert!(
+                contains_sql(
+                    statement_containing(FEATURED_CASES_MIGRATION, "CREATE TABLE featured_cases ("),
+                    field
+                ),
+                "featured_cases table is missing {field:?}"
+            );
+        }
+        assert!(FEATURED_CASES_MIGRATION.contains(
+            "FOREIGN KEY (featured_case_id) REFERENCES featured_cases(id)"
+        ));
+        // Both deferred columns are completed: watches (0007) and cases (0008).
+        assert_eq!(
+            FEATURED_CASES_MIGRATION.matches("FOREIGN KEY (featured_case_id)").count(),
+            2,
+            "0009 must complete both deferred featured_case_id foreign keys"
+        );
     }
 
     #[test]
