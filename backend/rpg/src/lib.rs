@@ -1,4 +1,5 @@
 pub mod achievements;
+pub mod awards;
 pub mod auth;
 pub mod game;
 pub mod config;
@@ -7,6 +8,7 @@ pub mod migrations;
 pub mod normalization;
 pub mod persistence;
 pub mod pipeline;
+pub mod poll;
 pub mod providers;
 pub mod server;
 pub mod stack;

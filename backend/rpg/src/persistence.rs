@@ -87,7 +87,7 @@ VALUES (
   $1, $2, $3, $4, $5, $6, $7,
   (SELECT parent.id FROM content AS parent
    WHERE parent.source = $8 AND parent.source_id = $9),
-  $10, $11, $12, $13::text::date, $14::text::date, $15, $16, $17, $18, $19, $20,
+  $10, $11, $12, $13::text::date, $14::text::date, $15, $16, $17::double precision, $18, $19, $20,
   $21, $22, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb,
   CASE WHEN $26::jsonb <> '{}'::jsonb THEN now() ELSE NULL END
 )
@@ -132,7 +132,8 @@ VALUES (
   (SELECT content.id FROM content
    WHERE content.source = $1 AND content.source_id = $2),
   $3, $4, $5::jsonb, to_timestamp($6),
-  CASE WHEN $7 IS NULL THEN NULL ELSE to_timestamp($7) END,
+  CASE WHEN $7::double precision IS NULL THEN NULL
+       ELSE to_timestamp($7::double precision) END,
   $8, $9
 )
 ON CONFLICT (content_id, provider, provider_id) DO UPDATE SET
@@ -1111,6 +1112,91 @@ impl PostgresContentStore {
         Ok(SkipOutcome::Skipped { position })
     }
 
+    /// Phase 1 (§9.1): detect completed watches from Plex watch state and
+    /// award them — `watches` rows (award-once), then XP/counters/streak/
+    /// level in the same pass. `today` is injected for testability. Returns
+    /// how many new watches were awarded.
+    pub async fn award_plex_watches(
+        &mut self,
+        states: &[crate::awards::PlexWatchState],
+        today: chrono::NaiveDate,
+    ) -> Result<usize> {
+        use std::collections::HashMap;
+
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(0);
+        };
+
+        // The catalog view of the Plex library: ratingKey → content id/type.
+        let mut keys = HashMap::new();
+        let mut types: HashMap<i64, String> = HashMap::new();
+        for row in self.client.query(PLEX_CATALOG_SQL, &[]).await? {
+            let id: i64 = row.get(1);
+            keys.insert(row.get::<_, String>(0), id);
+            types.insert(id, row.get(2));
+        }
+
+        let awards = crate::awards::detect_watches(states, &keys, &types);
+        let mut awarded = 0;
+        for award in awards {
+            // Award-once is the insert's guard: only a row that actually
+            // landed costs state deltas.
+            let Some(watch_row) = self
+                .client
+                .query_opt(
+                    WATCH_INSERT_SQL,
+                    &[&account_id, &award.watch.content_type, &award.watch.pct_viewed, &award.xp, &award.watch.rating_key],
+                )
+                .await?
+            else {
+                continue;
+            };
+            let _ = watch_row;
+
+            let state = self
+                .client
+                .query_one(CHARACTER_AWARD_STATE_SQL, &[&account_id])
+                .await?;
+            let xp_so_far: i64 = state.get(0);
+            let current_streak: i64 = state.get(1);
+            let last_watch_date: Option<chrono::NaiveDate> = state.get(2);
+
+            let (streak_delta, milestone) =
+                match crate::awards::streak_advance(last_watch_date, today) {
+                    crate::awards::StreakAdvance::Neutral => (0, 0),
+                    crate::awards::StreakAdvance::Restart => {
+                        (1 - current_streak, crate::awards::streak_milestone_bonus(1))
+                    }
+                    crate::awards::StreakAdvance::Continue { .. } => {
+                        let grown = current_streak + 1;
+                        (1, crate::awards::streak_milestone_bonus(grown))
+                    }
+                };
+            let new_streak = current_streak + streak_delta;
+            let total_xp = xp_so_far + award.xp + milestone;
+            let new_level = crate::awards::level_for_xp(total_xp);
+            let date_delta = match streak_delta {
+                0 => None,
+                _ => Some(today),
+            };
+
+            let new_streak_i32 = i32::try_from(new_streak).map_err(|_| {
+                crate::ProbeError::Xml(format!("streak out of int4 range: {new_streak}"))
+            })?;
+            let new_level_i32 = i32::try_from(new_level).map_err(|_| {
+                crate::ProbeError::Xml(format!("level out of int4 range: {new_level}"))
+            })?;
+            self.client
+                .execute(
+                    AWARD_STATE_SQL,
+                    &[&account_id, &(award.xp + milestone), &award.watch.content_type, &new_streak_i32, &date_delta, &new_level_i32],
+                )
+                .await?;
+            awarded += 1;
+        }
+        Ok(awarded)
+    }
+
     /// The single account id, or `None` pre-set-PIN.
     async fn single_account_id(&self) -> Result<Option<i64>> {
         let row = self
@@ -1441,6 +1527,61 @@ WHERE ch.account_id = $1 AND wo.status = 'active'
 ORDER BY wo.created_at DESC
 "#;
 
+// ---- Phase 1: watch award (§9.1 detection semantics finalized 2026-09-08;
+// pure math in awards.rs, this is the application layer) ----
+
+/// Known catalog entries keyed by their Plex ratingKey (content.source =
+/// 'plex', source_id = ratingKey) with their type.
+pub const PLEX_CATALOG_SQL: &str = r#"
+SELECT c.source_id, c.id, c.content_type
+FROM content c
+WHERE c.source = 'plex'
+"#;
+
+/// Awarded-watch insert: the §5.7 award-once rule as a NOT EXISTS guard, so
+/// a repeat detection (or a concurrent tick) cannot double-award.
+pub const WATCH_INSERT_SQL: &str = r#"
+INSERT INTO watches (
+  character_id, content_id, content_type, pct_viewed,
+  xp_awarded, normal_xp, via_plex
+)
+SELECT $1, c.id, $2, $3::int::numeric, $4, $4, true
+FROM content c
+WHERE c.source = 'plex' AND c.source_id = $5
+  AND NOT EXISTS (
+    SELECT 1 FROM watches w
+    WHERE w.character_id = $1 AND w.content_id = c.id
+  )
+RETURNING id
+"#;
+
+/// The single character's award-relevant state (xp for level math, streak
+/// fields for the §5.1 advance).
+pub const CHARACTER_AWARD_STATE_SQL: &str = r#"
+SELECT cs.xp::bigint, cs.current_streak_days::bigint, cs.streak_last_watch_date
+FROM character_state cs
+JOIN characters c ON c.id = cs.character_id
+WHERE c.account_id = $1
+"#;
+
+/// Applies one award's state deltas atomically: XP (normal + milestone),
+/// watch counters, streak fields, and level re-evaluated from §5.2 by the
+/// caller-computed level. Same-day detections pass streak delta 0 + no date
+/// change (§5.1 neutrality).
+pub const AWARD_STATE_SQL: &str = r#"
+UPDATE character_state cs
+SET xp = cs.xp + $2,
+    total_watches = cs.total_watches + 1,
+    episode_watches = cs.episode_watches + CASE WHEN $3 = 'episode' THEN 1 ELSE 0 END,
+    movie_watches = cs.movie_watches + CASE WHEN $3 = 'movie' THEN 1 ELSE 0 END,
+    current_streak_days = $4,
+    best_streak_days = GREATEST(cs.best_streak_days, $4),
+    streak_last_watch_date = COALESCE($5, cs.streak_last_watch_date),
+    level = $6
+FROM characters c
+WHERE cs.character_id = c.id AND c.account_id = $1
+"#;
+
 /// One item in an order view. Locked items serialize as position + locked
 /// only (§5.7 mystery): the identity fields are Options, skipped entirely
 /// (not null) when None so the JSON carries no hint of the hidden title.
@@ -1499,8 +1640,10 @@ mod tests {
         MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL, PROVIDER_CACHE_HYDRATE_SQL,
         PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
         SINGLE_ACCOUNT_PIN_SQL, SINGLE_CHARACTER_ID_SQL,
-        ORDER_CANDIDATES_SQL, ORDER_COMPLETE_SQL, ORDER_INSERT_SQL, ORDER_VIEW_SQL,
+        AWARD_STATE_SQL, CHARACTER_AWARD_STATE_SQL, ORDER_CANDIDATES_SQL,
+        ORDER_COMPLETE_SQL, ORDER_INSERT_SQL, ORDER_VIEW_SQL, PLEX_CATALOG_SQL,
         REVEAL_STAMP_SQL, SKIP_GRANT_SQL, SKIP_ITEM_SQL, SKIP_SPEND_SQL,
+        WATCH_INSERT_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -1656,6 +1799,24 @@ mod tests {
         // The audit stamp is bookkeeping only — the view derives visibility.
         assert!(REVEAL_STAMP_SQL.contains("prev.skipped_at IS NOT NULL"));
         assert!(!ORDER_VIEW_SQL.contains("revealed_at"));
+    }
+
+    #[test]
+    fn award_statements_enforce_award_once_and_atomic_state_deltas() {
+        // Detection matches Plex rows by ratingKey.
+        assert!(PLEX_CATALOG_SQL.contains("WHERE c.source = 'plex'"));
+        // The award-once rule: NOT EXISTS guard on the single watch row.
+        assert!(WATCH_INSERT_SQL.contains("NOT EXISTS ("));
+        assert!(WATCH_INSERT_SQL.contains("WHERE w.character_id = $1 AND w.content_id = c.id"));
+        assert!(WATCH_INSERT_SQL.contains("via_plex"));
+        // State deltas carry streak fields, best-streak protection, and a
+        // caller-computed level (§5.2 math stays in the pure module).
+        assert!(AWARD_STATE_SQL.contains("best_streak_days = GREATEST(cs.best_streak_days, $4)"));
+        assert!(AWARD_STATE_SQL.contains("level = $6"));
+        assert!(AWARD_STATE_SQL.contains("streak_last_watch_date = COALESCE($5, cs.streak_last_watch_date)"));
+        // The state read gives the caller everything the pure math needs.
+        assert!(CHARACTER_AWARD_STATE_SQL.contains("cs.xp::bigint"));
+        assert!(CHARACTER_AWARD_STATE_SQL.contains("cs.streak_last_watch_date"));
     }
 
     #[test]

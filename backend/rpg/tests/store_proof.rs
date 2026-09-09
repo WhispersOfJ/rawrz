@@ -8,8 +8,9 @@
 //! idempotency by execution (set + seed twice, zero duplicates), and a
 //! no-op re-migrate on an already-migrated database.
 
-use movie_rpg::persistence::{PostgresContentStore, SETTINGS_V1_DEFAULTS, SkipOutcome};
 use movie_rpg::auth::PinVerifyOutcome;
+use movie_rpg::persistence::{PostgresContentStore, SETTINGS_V1_DEFAULTS, SkipOutcome};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const SCRATCH_DB_URL_ENV: &str = "RPG_DB_URL";
 
@@ -114,6 +115,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         SETTINGS_V1_DEFAULTS.len() as i64,
         "all settings defaults land"
     );
+
 
     let state = probe
         .query_one(
@@ -235,6 +237,76 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(summary.applied, 0, "re-migrate applies nothing");
     assert_eq!(summary.already_applied, 11, "re-migrate recognizes all eleven versions");
 
+    // (5b-prev) Plex-shaped fixture for tick phase 1 (§9.1 detection): two
+    // catalog rows joined to ratingKeys, one fully watched movie, one 96%
+    // in-progress movie, one below-threshold item, one unknown key.
+    probe
+        .execute(
+            "INSERT INTO content (source, source_id, title, content_type, genres)
+             VALUES ('plex', 'fixture-movie-1', 'Fixture Movie One', 'movie', '[\"Horror\"]'::jsonb),
+                    ('plex', 'fixture-movie-2', 'Fixture Movie Two', 'movie', '[\"Horror\"]'::jsonb)
+             ON CONFLICT (source, source_id) DO NOTHING",
+            &[],
+        )
+        .await
+        .unwrap();
+    let plex_fixture = vec![
+        movie_rpg::awards::PlexWatchState {
+            rating_key: "fixture-movie-1".into(),
+            view_count: Some(1),
+            view_offset_ms: Some(0),
+            duration_ms: Some(600_000),
+            item_type: "movie".into(),
+        },
+        movie_rpg::awards::PlexWatchState {
+            rating_key: "fixture-movie-2".into(),
+            view_count: None,
+            view_offset_ms: Some(960_000),
+            duration_ms: Some(1_000_000),
+            item_type: "movie".into(),
+        },
+        movie_rpg::awards::PlexWatchState {
+            rating_key: "fixture-below".into(),
+            view_count: None,
+            view_offset_ms: Some(500_000),
+            duration_ms: Some(1_000_000),
+            item_type: "movie".into(),
+        },
+        movie_rpg::awards::PlexWatchState {
+            rating_key: "fixture-unknown".into(),
+            view_count: Some(1),
+            view_offset_ms: Some(0),
+            duration_ms: Some(600_000),
+            item_type: "movie".into(),
+        },
+    ];
+    let today = chrono::Local::now().date_naive();
+    let awarded = store
+        .award_plex_watches(&plex_fixture, today)
+        .await
+        .expect("award pass succeeds");
+    assert_eq!(awarded, 2, "two completions, one below threshold, one unknown");
+    // Award-once: the same state again awards nothing.
+    let awarded = store
+        .award_plex_watches(&plex_fixture, today)
+        .await
+        .expect("second award pass succeeds");
+    assert_eq!(awarded, 0, "no re-watch credit in V1");
+    // State deltas landed: two movies → 40 XP, movie_watches = 2, streak = 1.
+    let state = probe
+        .query_one(
+            "SELECT xp, movie_watches, total_watches, current_streak_days, level
+             FROM character_state",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(state.get::<_, i64>(0), 40, "2 × movie XP (§5.1)");
+    assert_eq!(state.get::<_, i32>(1), 2);
+    assert_eq!(state.get::<_, i32>(2), 2);
+    assert_eq!(state.get::<_, i32>(3), 1, "first ever watch starts the streak");
+    assert_eq!(state.get::<_, i32>(4), 1, "40 XP stays level 1 (§5.2)");
+
     // (5b) Achievement engine (§6.4.8 contract): fresh state evaluates every
     // definition, unlocks nothing, and reports the honest not-evaluable set.
     let evaluation = store
@@ -317,6 +389,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .get(0);
     assert_eq!(unlock_rows, 3, "exactly the three unlocks are stored");
 
+
     // (5c) Mystery watch orders (§5.7): generation, derived reveals, leakage
     // guard, completion → skip grant → next cycle, and skip spends.
     // A candidate pool: ten horror movies with distinct ratings so the
@@ -332,7 +405,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .unwrap();
     // Every order action below goes through the game tick (§9.1 phases).
-    let tick = movie_rpg::game::run_game_tick(&mut store).await.expect("tick succeeds");
+    let tick = movie_rpg::game::run_game_tick(&mut store, None).await.expect("tick succeeds");
     assert_eq!(tick.watches_awarded, 0, "phase 1 is the documented V1 slot");
     assert_eq!(tick.orders.orders_created.len(), 1, "horror is the only accessible genre");
     assert_eq!(tick.orders.orders_created[0].genre, "Horror");
@@ -340,7 +413,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert!(tick.achievements.expect("phase 3 ran").unlocked.is_empty());
 
     // Generation is deterministic and five movies long.
-    let tick = movie_rpg::game::run_game_tick(&mut store).await.expect("idempotent tick");
+    let tick = movie_rpg::game::run_game_tick(&mut store, None).await.expect("idempotent tick");
     assert!(tick.orders.orders_created.is_empty(), "no duplicate generation");
 
     let board = store
@@ -403,7 +476,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     let skip = store.skip_order_item(board[0].id).await.expect("skip succeeds");
     assert_eq!(skip, SkipOutcome::NothingToSkip, "everything is already resolved");
 
-    let tick = movie_rpg::game::run_game_tick(&mut store).await.expect("tick completes");
+    let tick = movie_rpg::game::run_game_tick(&mut store, None).await.expect("tick completes");
     assert_eq!(tick.orders.skips_granted, 1, "cycle 1 completion grants one skip");
     let grant_rows: i64 = probe
         .query_one("SELECT count(*) FROM skip_grants WHERE spent_at IS NULL", &[])
@@ -413,7 +486,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(grant_rows, 1, "the grant is one unspent ledger row");
 
     // Cycle 2 generates for the genre (excludes cycle-1 content by rule).
-    let tick = movie_rpg::game::run_game_tick(&mut store).await.expect("cycle 2 generates");
+    let tick = movie_rpg::game::run_game_tick(&mut store, None).await.expect("cycle 2 generates");
     assert_eq!(tick.orders.orders_created.len(), 1, "one new cycle for horror");
     assert_eq!(tick.orders.orders_created[0].cycle_number, 2);
     let board = store
@@ -451,14 +524,140 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .get(0);
     assert_eq!(stamped, 1, "the spent row carries its audit stamp");
 
-    // Skips never earn XP: the character's xp is untouched by the skip flow.
+    // Skips never earn XP: the pre-skip XP is unchanged by the skip flow.
     let xp: i64 = probe
         .query_one("SELECT xp FROM character_state", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(xp, 0, "skips award no XP");
+    assert_eq!(xp, 40, "watch-award XP only — the skip added nothing");
+
+    // (5e) Poll cycle (§9.1, poll.rs): a real `run_poll_cycle` against a
+    // Plex-shaped mock stack (Plex healthy; Sonarr/Radarr unreachable;
+    // providers failing) proves the unattended cycle end-to-end on real
+    // Postgres: sync tolerates partial stack failure and persists the
+    // catalog, tick phase 1 awards through the same client surface the
+    // loop uses, phases 2–3 cascade, and the degraded-sync rule holds —
+    // the two earlier fixture watches are not re-awarded, while the newly
+    // synced completed movie earns its one normal movie award.
+    let pre_content_rows = count(&probe, "content").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock stack bind succeeds");
+    let mock_addr = listener.local_addr().unwrap();
+    let mock_server = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut request = [0_u8; 8192];
+            let bytes_read = stream.read(&mut request).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..bytes_read]);
+            let (status, body, content_type) = if request.contains("/library/sections")
+                && !request.contains("/all")
+            {
+                (200, include_str!("../fixtures/plex_sections.xml"), "application/xml")
+            } else if request.contains("/library/sections/1/all") {
+                (200, include_str!("../fixtures/plex_library.xml"), "application/xml")
+            } else if request.contains("/library/sections/2/all") {
+                (200, "<MediaContainer size=\"0\"></MediaContainer>", "application/xml")
+            } else if request.contains("/api/v3/") {
+                // Sonarr/Radarr unreachable: non-retryable status.
+                (404, "not found", "text/plain")
+            } else {
+                // Every metadata provider fails (retryable): the sync must
+                // still succeed with zero provider-cache rows.
+                (503, "temporary", "text/plain")
+            };
+            let reason = if status == 200 { "OK" } else { "Error" };
+            let response = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status,
+                reason,
+                content_type,
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let mock_base = format!("http://{mock_addr}");
+    let stack = movie_rpg::poll::PollStack {
+        plex: movie_rpg::stack::PlexClient::with_base_url(&mock_base, "plex-token"),
+        sonarr: movie_rpg::stack::SonarrClient::with_base_url(&mock_base, "sonarr-key"),
+        radarr: movie_rpg::stack::RadarrClient::with_base_url(&mock_base, "radarr-key"),
+        tmdb: movie_rpg::providers::TmdbClient::with_base_url(format!("{mock_base}/tmdb"), "k"),
+        tvdb: movie_rpg::providers::TvdbClient::with_base_url(format!("{mock_base}/tvdb"), "k"),
+        omdb: movie_rpg::providers::OmdbClient::with_base_url(format!("{mock_base}/omdb"), "k"),
+        fanart: movie_rpg::providers::FanartClient::with_base_url(format!("{mock_base}/fanart"), "k"),
+    };
+    let summary = movie_rpg::poll::run_poll_cycle(&mut store, &stack).await;
+    let sync = summary.sync.as_ref().expect("sync tolerates stack+provider failures");
+    assert_eq!(
+        sync.persistence.content_rows,
+        2,
+        "the two Plex fixture items sync into the catalog"
+    );
+    assert_eq!(
+        sync.persistence.provider_cache_rows,
+        2,
+        "failed provider attempts persist auditable cache failure rows"
+    );
+    assert_eq!(sync.prepared.outcome.stack_failures.len(), 2, "sonarr + radarr failures logged");
+    let tick = summary.tick.as_ref().expect("tick runs after degraded sync");
+    assert_eq!(tick.watches_awarded, 1, "movie 271 completes (viewCount), the show does not");
+    assert_eq!(
+        tick.orders.orders_created.len(), 0,
+        "existing orders are active; refresh generates nothing"
+    );
+    let line = movie_rpg::poll::format_cycle_log(&summary);
+    assert!(line.contains("+2 content/2 cache rows (2 stack"), "{line}");
+    assert!(line.contains("1 watches awarded"), "{line}");
+    let probe = fresh_connection(&database_url).await;
+    let total_content = count(&probe, "content").await;
+    assert_eq!(
+        total_content,
+        pre_content_rows + 2,
+        "sync added exactly the two Plex rows"
+    );
+    let watch_rows: i64 = probe
+        .query_one(
+            "SELECT count(*) FROM watches WHERE content_id = (
+                 SELECT id FROM content WHERE source = 'plex' AND source_id = '271')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(watch_rows, 1, "tick phase 1 awarded the synced movie once");
+    let xp: i64 = probe
+        .query_one("SELECT xp FROM character_state", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(xp, 60, "the synced, newly completed movie adds 20 XP");
     drop(probe);
+
+    // (5f) Loop-level contract on the real store: an already-signalled
+    // shutdown runs zero cycles and returns the completed-cycle count.
+    let store_handle = std::sync::Arc::new(tokio::sync::Mutex::new(store));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    shutdown_tx
+        .send(true)
+        .expect("shutdown receiver is alive");
+    let cycles = movie_rpg::poll::run_poll_loop(
+        store_handle.clone(),
+        stack,
+        std::time::Duration::from_millis(50),
+        shutdown_rx,
+    )
+    .await;
+    assert_eq!(cycles, 0, "pre-signalled shutdown completes zero cycles");
+    let store = std::sync::Arc::try_unwrap(store_handle)
+        .ok()
+        .expect("sole store owner")
+        .into_inner();
+    mock_server.abort();
 
     // (6) HTTP surface: serve the real router on an ephemeral port and drive
     // the full gate flow over TCP (spec §7.3 session mechanics).
@@ -545,9 +744,11 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .unwrap();
     assert_eq!(overview["name"], "The Investigator");
-    // The engine phase leveled the character to 2.
-    assert_eq!(overview["level"], 2);
-    assert_eq!(overview["xp"], 0);
+    // The phase-1 fixture adds 60 movie XP in total, so the persisted level
+    // is correctly recomputed as level 1 (the earlier manual achievement
+    // fixture's level-2 unlock remains recorded independently).
+    assert_eq!(overview["level"], 1);
+    assert_eq!(overview["xp"], 60);
     assert_eq!(overview["genres"], serde_json::json!(["Horror"]));
 
     // The badge wall reflects the stored unlocks and live progress.
@@ -571,7 +772,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(find("episode_100")["unlocked"], false);
     assert_eq!(find("episode_100")["progress"], 10);
     assert_eq!(find("episode_100")["target"], 100);
-    assert_eq!(find("genre_explorer_3")["progress"], 1);
+    assert_eq!(find("genre_explorer_3")["progress"], 2);
 
     // The order endpoint serves the mystery-safe JSON shape: a locked item
     // has no title/content fields at all (not just null).

@@ -6,9 +6,9 @@
 ## Status (updated 2026-09-08)
 
 **Latest pushed commit on `main`:** `8b15e56` — test: prove persistence
-surface against scratch postgres. The HTTP server work (binary, PIN gate,
-sessions, port correction to 46532) is **uncommitted local work** on top —
-commit it when the session asks.
+surface against scratch postgres. The RPG progression, HTTP server, watch
+awards, and unattended poll-loop work are **uncommitted local work** on top;
+commit them when the session asks.
 
 ### Done so far
 
@@ -61,22 +61,33 @@ commit it when the session asks.
   tokens, `rpg_session` HttpOnly/SameSite=Lax cookie, in-memory sessions,
   7-day TTL. Public: `/healthz`, `/auth/status`, `/auth/set-pin`,
   `/auth/login`; gated: `/auth/logout`, `/api/character`. Startup: `.env` →
-  connect → `migrate()` → serve. Run: `cargo run -- [path/to/.env]`
+  connect → `migrate()` → serve. The binary also starts the shared 5-minute
+  poll loop (`poll.rs`): `SyncPipeline::run` precedes `run_game_tick`, one
+  cycle at a time under the shared store lock; Ctrl-C drains the HTTP server,
+  then signals the loop to finish its current cycle. Each cycle logs sync
+  persistence and all tick phase counts. Run: `cargo run -- [path/to/.env]`
   (defaults to `../.env`). End-to-end smoke-tested with curl against a
-  scratch Postgres; HTTP flow also covered in the live-DB proof (§6 below).
+  scratch Postgres; HTTP and poll flows are covered in the live-DB proof.
 - Game tick (§9.1, phase order finalized): `backend/rpg/src/game.rs` —
-  `run_game_tick` runs the ordered phases in one place: watch award
-  (documented V1 slot for Plex watch-state detection) → order reveals
-  (`refresh_watch_orders`) → achievement evaluation.
-  `POST /api/orders/refresh` is the tick's UI entry; skips advance
-  reveals + evaluation for their order.
-- Fixtures + full test suite: **70 tests, all passing**
-  (`cd backend/rpg && cargo test`)
+  `run_game_tick(store, Option<&PlexClient>)` runs the ordered phases in
+  one place: watch award (`awards.rs` pure computation +
+  `award_plex_watches` store flow — dedupes on `(character_id, content_id)`,
+  XP 20/10 per §5.1, streak rules per §5.1.1) → order reveals
+  (`refresh_watch_orders`) → achievement evaluation. A Plex detection/award
+  failure is logged and does not prevent phases 2–3. `POST
+  /api/orders/refresh` is the stack-less tick UI entry; skips advance reveals
+  + evaluation for their order.
+- Unattended polling (§9.1): `poll.rs` owns `PollStack`, `run_poll_cycle`,
+  fixed `POLL_INTERVAL` (300 seconds), one-line cycle logging, non-fatal sync
+  and phase-1 degradation, and watch-channel shutdown. `main.rs` shares one
+  `Arc<Mutex<PostgresContentStore>>` with Axum and the poll task.
+- Fixtures + full test suite: **80 tests, all passing**
+  (`cd backend/rpg && cargo test --all-targets`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
   blockers, not introduced by recent work.
 
-### Next steps (spec §6.4.11 migration order, after character state)
+### Next steps
 
 1. ~~Migration 0008 — cases (§6.4.6), then 0009 — featured_cases (§6.4.7)~~
    **Done:** both landed (0008, 0009), including the deferred
@@ -90,26 +101,29 @@ commit it when the session asks.
    `evaluate_achievements`/`badge_wall` store flows + gated
    `GET /api/achievements`. Evaluates counter/streak/level shapes from
    live aggregates; combo/once/metadata-dependent rows honestly stay
-   unevaluated. Unlocks idempotent; wired for the future poll/sync hook.
-4. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
-5. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
-   set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
-   `server.rs`, `main.rs`. Sessions are in-memory (restart logs everyone
-   out) — acceptable for V1; revisit if restarts become frequent.
-3. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
-4. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
-   set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
-   `server.rs`, `main.rs`. Sessions are in-memory (restart logs everyone
-   out) — acceptable for V1; revisit if restarts become frequent.
+   unevaluated. Unlocks are idempotent and run in the game tick.
+4. ~~PIN hashing, session mechanics, and game-tick phase 1~~ **Done:**
+   Argon2id PIN gate, in-memory sessions, Plex watch-state awards, XP,
+   streaks, reveals, and achievements are all wired and proven on real
+   Postgres.
+5. ~~Unattended 5-minute poll loop~~ **Done:** `poll.rs` owns
+   `SyncPipeline::run` → `run_game_tick`, fixed cadence, per-cycle logging,
+   non-fatal sync/phase-1 degradation, and shutdown coordination; `main.rs`
+   shares the store with Axum and waits for the poll task after the server
+   drains.
+6. **Next:** Svelte frontend (§8.4) consuming `/auth/*`,
+   `/api/character`, `/api/achievements`, and `/api/orders`. The
+   wizard-theme brainstorm remains intentionally out of scope for this
+   poll-loop pass.
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 70 passing
-cargo clippy --all-targets          # expect only the 3 known warnings
+cd backend/rpg && cargo test --all-targets  # expect 80 unit + 1 live-proof passing
+cargo clippy --all-targets                 # expect only the 3 known warnings
 ```
 
-Live-DB proof (disposable postgres container, ~3s run):
+Live-DB proof (disposable postgres container, ~4s run):
 
 ```bash
 ./scripts/scratch_pg_proof.sh       # migrations + PIN flows + seeds on real PG

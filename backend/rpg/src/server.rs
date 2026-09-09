@@ -237,7 +237,9 @@ async fn orders(State(app): State<AppState>) -> Response {
 /// The game tick's UI entry point (§9.1): ordered phases — watch award
 /// (slot) → order reveals → achievement evaluation.
 async fn orders_refresh(State(app): State<AppState>) -> Response {
-    match crate::game::run_game_tick(&mut *app.store.lock().await).await {
+    // V1: the UI-refresh entry runs the tick without the stack (the poll
+    // loop owns stack access); phase 1 is skipped when plex is None.
+    match crate::game::run_game_tick(&mut *app.store.lock().await, None).await {
         Ok(report) => Json(report).into_response(),
         Err(error) => internal_error(error),
     }

@@ -2,12 +2,16 @@
 //! (Port finalized 2026-09-08: the originally resolved 86532 exceeds the
 //! 16-bit TCP limit of 65535 and could never bind — see spec §12 Q9.)
 //! Startup: load the shared `.env`, connect to Postgres, run migrations,
-//! then serve the PIN-gated router. Shutdown on Ctrl-C.
+//! then serve the PIN-gated router beside the 5-minute poll loop (§9.1:
+//! content sync + game tick — the one owner of unattended play). Shutdown
+//! on Ctrl-C: the server drains, the poll loop finishes its current cycle,
+//! then the process returns.
 
 use movie_rpg::persistence::PostgresContentStore;
+use movie_rpg::poll::{PollStack, StoreHandle, run_poll_loop, POLL_INTERVAL};
 use movie_rpg::{config::ProbeConfig, server};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 const BIND_ADDRESS: &str = "0.0.0.0:46532";
 
@@ -45,7 +49,8 @@ async fn main() {
         }
     }
 
-    let app = server::router(Arc::new(Mutex::new(store)));
+    let store: StoreHandle = Arc::new(Mutex::new(store));
+    let app = server::router(store.clone());
     let listener = match tokio::net::TcpListener::bind(BIND_ADDRESS).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -53,6 +58,18 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Poll loop (§9.1): content sync + game tick every 5 minutes, sharing
+    // the store with the HTTP server. Failures inside a cycle are logged
+    // and non-fatal; the loop never exits on them.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let poll_loop = tokio::spawn(run_poll_loop(
+        store.clone(),
+        PollStack::from_config(&config),
+        POLL_INTERVAL,
+        shutdown_rx,
+    ));
+
     println!("RPG backend listening on http://{BIND_ADDRESS}");
 
     if let Err(error) = axum::serve(listener, app)
@@ -64,5 +81,13 @@ async fn main() {
     {
         eprintln!("server error: {error}");
         std::process::exit(1);
+    }
+
+    // Server drained: stop the loop after its current cycle and wait for
+    // it, so no in-flight write is abandoned on the way out.
+    let _ = shutdown_tx.send(true);
+    match poll_loop.await {
+        Ok(cycles) => println!("poll loop stopped after {cycles} completed cycle(s)"),
+        Err(error) => eprintln!("poll loop panicked: {error}"),
     }
 }
