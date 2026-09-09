@@ -1,4 +1,6 @@
+pub mod achievements;
 pub mod auth;
+pub mod game;
 pub mod config;
 pub mod enrichment;
 pub mod migrations;

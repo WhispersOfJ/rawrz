@@ -64,7 +64,13 @@ commit it when the session asks.
   connect → `migrate()` → serve. Run: `cargo run -- [path/to/.env]`
   (defaults to `../.env`). End-to-end smoke-tested with curl against a
   scratch Postgres; HTTP flow also covered in the live-DB proof (§6 below).
-- Fixtures + full test suite: **61 tests, all passing**
+- Game tick (§9.1, phase order finalized): `backend/rpg/src/game.rs` —
+  `run_game_tick` runs the ordered phases in one place: watch award
+  (documented V1 slot for Plex watch-state detection) → order reveals
+  (`refresh_watch_orders`) → achievement evaluation.
+  `POST /api/orders/refresh` is the tick's UI entry; skips advance
+  reveals + evaluation for their order.
+- Fixtures + full test suite: **70 tests, all passing**
   (`cd backend/rpg && cargo test`)
 - Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
   from_sources too_many_arguments, config.rs items_after_test_module) — not
@@ -79,8 +85,12 @@ commit it when the session asks.
    achievement-list seed~~ **Done:** migration 0010 lands both tables
    plus the full first-cut seed (101 rows, kinds/targets/metadata
    finalized — see spec §6.4.8 implementation notes).
-3. Achievement **evaluation engine** (poll/sync + case-completion hooks
-   writing `character_achievements`).
+3. ~~Achievement **evaluation engine**~~ **Done:** `achievements.rs`
+   (pure kind-dispatch engine over a `ProgressSnapshot`) +
+   `evaluate_achievements`/`badge_wall` store flows + gated
+   `GET /api/achievements`. Evaluates counter/streak/level shapes from
+   live aggregates; combo/once/metadata-dependent rows honestly stay
+   unevaluated. Unlocks idempotent; wired for the future poll/sync hook.
 4. Frontend (Svelte, §8.4) consuming `/auth/*` + `/api/character`.
 5. ~~Open design call~~ **Resolved:** PIN hashing (argon2/Argon2id/PHC),
    set/verify flows, and session mechanics (§7.3) — all wired: `auth.rs`,
@@ -95,7 +105,7 @@ commit it when the session asks.
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test        # expect 61 passing
+cd backend/rpg && cargo test        # expect 70 passing
 cargo clippy --all-targets          # expect only the 3 known warnings
 ```
 

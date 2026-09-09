@@ -23,6 +23,9 @@ pub const FEATURED_CASES_MIGRATION: &str =
 pub const ACHIEVEMENTS_VERSION: &str = "0010_achievements";
 pub const ACHIEVEMENTS_MIGRATION: &str =
     include_str!("../migrations/0010_achievements.sql");
+pub const WATCH_ORDERS_VERSION: &str = "0011_watch_orders";
+pub const WATCH_ORDERS_MIGRATION: &str =
+    include_str!("../migrations/0011_watch_orders.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -41,6 +44,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (CASES_VERSION, CASES_MIGRATION),
     (FEATURED_CASES_VERSION, FEATURED_CASES_MIGRATION),
     (ACHIEVEMENTS_VERSION, ACHIEVEMENTS_MIGRATION),
+    (WATCH_ORDERS_VERSION, WATCH_ORDERS_MIGRATION),
 ];
 
 #[cfg(test)]
@@ -50,6 +54,7 @@ mod tests {
         CHARACTER_STATE_MIGRATION, FEATURED_CASES_MIGRATION, GENRES_MIGRATION,
         INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
         SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
+        WATCH_ORDERS_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -75,7 +80,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 10);
+        assert_eq!(MIGRATIONS.len(), 11);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -86,11 +91,12 @@ mod tests {
         assert_eq!(MIGRATIONS[7].0, super::CASES_VERSION);
         assert_eq!(MIGRATIONS[8].0, super::FEATURED_CASES_VERSION);
         assert_eq!(MIGRATIONS[9].0, super::ACHIEVEMENTS_VERSION);
+        assert_eq!(MIGRATIONS[10].0, super::WATCH_ORDERS_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
         assert!(MIGRATIONS[6].0 < MIGRATIONS[7].0 && MIGRATIONS[7].0 < MIGRATIONS[8].0);
-        assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0);
+        assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0 && MIGRATIONS[9].0 < MIGRATIONS[10].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
@@ -573,6 +579,72 @@ mod tests {
             assert!(
                 metadata.get("metadata_dependent").is_some() || metadata.get("cumulative").is_some(),
                 "{slug} must carry its finalized metadata flag"
+            );
+        }
+    }
+
+    #[test]
+    fn creates_watch_orders_with_derived_resolution_and_skip_ledger() {
+        let orders_position = WATCH_ORDERS_MIGRATION
+            .find("CREATE TABLE watch_orders (")
+            .expect("migration is missing the watch_orders table");
+        let items_position = WATCH_ORDERS_MIGRATION
+            .find("CREATE TABLE watch_order_items (")
+            .expect("migration is missing the watch_order_items table");
+        let grants_position = WATCH_ORDERS_MIGRATION
+            .find("CREATE TABLE skip_grants (")
+            .expect("migration is missing the skip_grants table");
+        assert!(orders_position < items_position && items_position < grants_position);
+
+        for field in [
+            "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
+            "genre_id bigint NOT NULL REFERENCES genres(id) ON DELETE CASCADE",
+            "cycle_number int NOT NULL",
+            "status text NOT NULL DEFAULT 'active'",
+            "UNIQUE (character_id, genre_id, cycle_number)",
+        ] {
+            assert!(
+                contains_sql(statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_orders ("), field),
+                "watch_orders table is missing {field:?}"
+            );
+        }
+        let items = statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_order_items (");
+        for field in [
+            "order_id bigint NOT NULL REFERENCES watch_orders(id) ON DELETE CASCADE",
+            "position int NOT NULL",
+            "content_id bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE",
+            "revealed_at timestamptz NOT NULL DEFAULT now()",
+            "skipped_at timestamptz",
+            "UNIQUE (order_id, position)",
+        ] {
+            assert!(contains_sql(items, field), "watch_order_items table is missing {field:?}");
+        }
+        // The mystery invariant: item resolution is derived from the watches
+        // ledger (or skipped_at) — never stored on the item row.
+        assert!(
+            !items.contains("completed") && !items.contains("resolved"),
+            "watch_order_items must not store resolution state"
+        );
+        for field in [
+            "source_order_id bigint NOT NULL REFERENCES watch_orders(id) ON DELETE CASCADE",
+            "earned_at timestamptz NOT NULL DEFAULT now()",
+            "spent_at timestamptz",
+            "spent_item_id bigint REFERENCES watch_order_items(id)",
+        ] {
+            assert!(
+                contains_sql(statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE skip_grants ("), field),
+                "skip_grants table is missing {field:?}"
+            );
+        }
+        for index in [
+            "CREATE INDEX watch_orders_character ON watch_orders(character_id)",
+            "CREATE INDEX watch_order_items_order ON watch_order_items(order_id, position)",
+            "CREATE INDEX skip_grants_character ON skip_grants(character_id) WHERE spent_at IS NULL",
+            "CREATE INDEX watch_order_items_content ON watch_order_items(content_id)",
+        ] {
+            assert!(
+                WATCH_ORDERS_MIGRATION.contains(index),
+                "watch orders migration is missing {index:?}"
             );
         }
     }

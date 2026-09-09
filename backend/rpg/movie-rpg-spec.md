@@ -426,6 +426,17 @@ Both feed the same XP/level system. They differ in *granularity and framing*, no
 
 **V1 = single-player only.** The opt-in shared quest concept (post a shared case, another accepts, co-op bonus) is noted as a V2 extension. Not built in V1. Documented in the spec for future reference.
 
+### 5.7 Mystery watch orders (finalized 2026-09-08)
+
+A **mystery watch order** is a per-genre, numbered sequence of movies where the player only ever sees the current item. The next title is not revealed until the previous one is resolved.
+
+- **The loop:** one active order per genre per character (its `cycle_number` increments on completion). An order has an ordered item list; the **first item is revealed on creation**. Item `n+1` reveals when item `n` is resolved.
+- **Reveal rule (single source of truth):** an item is *resolved* when the player has an awarded watch for it — exactly the §6.4.5 award, i.e. a `watches` row at ≥95% `pct_viewed`. Completion/progress is **always derived** from `watches` (never stored on the item), so there is one threshold, one ledger, and no drift between the mystery rule and the XP rule.
+- **Rewards:** completing an order grants **skips** (V1: 1 skip per completed order) recorded in an audited grant ledger. A skip resolves the **current** item without watching it — no XP, no watch row, and **the final item of an order can never be skipped** (the finale must be watched). A skipped item still counts toward order completion. Skips are spendable in any active order of the **next** cycle of that genre (and any later one — banked skips persist).
+- **Mystery is enforced at the API:** a locked item serializes as `{position, locked: true}` and nothing else — no title, no poster, no content id. The reveal timestamps (`revealed_at`) exist for audit and achievement triggers, not for display.
+- **Finalized decisions:** (1) **Authoring** — V1 generates orders algorithmically from the library (deterministic per cycle: genre-matching content the character has no awarded watch for, ranked by provider score per §5.4); curated JSON pick-lists are a noted V1.1 extension, not a V1 dependency. (2) **Pre-watched items** — content the character already completed is **excluded at generation** (the honest-mystery rule; consistent with §5.5 Ghost Completer). (3) **Movies only** in V1 (`content_type = 'movie'`) — episode orders fight natural binge behavior. (4) **Per-genre achievements** extend the §5.5 list in a `watch_orders` category (completion trophies per genre, no-skip completions, streaks of consecutive cycles) with a per-genre **awards shelf** on the badge wall — the shelf rendering is a frontend concern.
+- **Where it hooks:** generation and reveals run inside the game tick (poll/sync + refresh, §9) — detect watches → award → **reveal next item (and grant skips on completion)** → evaluate achievements.
+
 ---
 
 ## 6. Data Model (PostgreSQL)
@@ -446,6 +457,7 @@ PostgreSQL is introduced as a **shared metadata store** — the RPG uses it as i
 - `featured_cases` — periodic featured case assignments (period, content ref, bonus).
 - `achievements` — achievement definitions (id, name, description, category, visible/hidden, trigger condition).
 - `character_achievements` — which character unlocked which achievement and when.
+- `watch_orders` — per-genre mystery watch orders (§5.7) with ordered, progressively revealed items and an audited skip-grant ledger.
 - `genre_unlocks` / `genre_progress` — which genres are unlocked at current level, coverage counts.
 - `sync_state` — poll cursors / last-sync markers for Plex/Sonarr/Radarr incremental syncs.
 
@@ -551,6 +563,7 @@ The UI remains **game-like** (character sheet, quest log, maps, case-board aesth
   - Sync content metadata incrementally from Plex/Sonarr/Radarr into the RPG's Postgres content table.
   - Check Plex watch-state changes and award points for newly completed watches.
   - Check Sonarr/Radarr import history for new arrivals → generate case cards as appropriate.
+- **Game tick phase order (finalized 2026-09-08):** each poll (and each UI refresh) runs the game state forward as **one `GameTick` with ordered phases**, in one place — not scattered hooks: **(1) watch award** — detect newly completed (≥95%) watches from Plex watch-state and write `watches` rows + XP/streak updates (V1 slot: the detection query lands with the Plex watch-state integration); **(2) order reveals** — `refresh_watch_orders` (§5.7): stamp reveals, complete finished cycles, grant skips, generate next cycles; **(3) achievement evaluation** — `evaluate_achievements` (§6.4.8) reads the post-award, post-reveal state so unlocks reflect the same pass. Later phases (case generation from imports, featured cases) append after these. `POST /api/orders/refresh` is the tick's UI entry point; skipping a skip-ahead item also advances phases 2–3 for its order.
 - 5-minute polling is sufficient; near-real-time is not required. Exact timer implementation (tokio async timer, interval jitter, back-off on API errors) is an implementation detail.
 
 ### 9.2 Why polling, not push/webhooks
@@ -920,6 +933,7 @@ CREATE INDEX achievements_visible ON achievements(visible);
 - `metadata` jsonb holds per-achievement evaluation parameters (e.g. a genre-coverage achievement's required genre count, a themed achievement's required genre + day-of-week + hour range, a holiday achievement's window, a director achievement's director id filter). Finalize each achievement's metadata during implementation — the list in §5.5 is the first cut.
 - `character_achievements` = which character unlocked which achievement + when, plus current progress for progress/counter kinds. Visible achievements read progress from here for the badge wall.
 - **Implementation notes (2026-09-08, migration 0010):** the §5.5 first-cut list is seeded verbatim as 101 rows. Tiered achievements sharing a display name get distinct slugs (`genre_explorer_3/5/8/10`, `horror_homeground_10/25`, `level_up_2/3/5/10`, …). Kind mapping: counted thresholds → `counter` + `target_value`, day-streaks → `streak` + `target_value`, single-fire conditions → `once`, multi-condition → `combo`. Finalized ambiguities: **Spooky Season** counts cumulatively across years; **Actor's Playground** and **Rainy Day** carry a `metadata_dependent` flag and stay unevaluated until their metadata is confirmed mirrored; **First Banked Day** / **First Fame Tick** are gated on their optional features being enabled.
+- **Evaluation contract (finalized 2026-09-08):** evaluation is a **pure function** of an achievement definition plus a `ProgressSnapshot` (episode/movie watch totals, current streak, level from `character_state`; distinct genres, horror watches, distinct holiday-bonus windows, new-arrival titles from `watches`+`content`; purchases from `sub_genre_xp`; completed featured cases from `cases`). Kind dispatch: `counter`/`progress` compare the metadata-selected metric against `target_value` (at target → unlock, below → report progress); plain `streak` (metadata `{}`) compares `current_streak_days`; `once` checks its single evaluable condition; `combo` and metadata-qualified streaks, plus achievements whose inputs the V1 snapshot lacks (per-day breakdowns, arrival timestamps, series/season completion scopes), are **not evaluable in V1** and stay unchanged — not silently unlocked. `character_achievements` rows are written **only at unlock** (`progress` records the value at unlock); live progress for the badge wall is computed from the snapshot, not stored. Unlocks are idempotent (`ON CONFLICT DO NOTHING`).
 
 ### 6.4.9 Sync state (poll cursors)
 
@@ -964,6 +978,8 @@ CREATE TABLE settings (
 
 ### 6.4.11 Migration approach
 
+- **Watch-order placement (2026-09-08):** `watch_orders`, `watch_order_items`, and `skip_grants` land in migration **0011** (§6.4.13) — they depend only on `characters`/`genres`/`content`/`watches` (0001–0007), so they could have been earlier; 0011 keeps them adjacent to the achievements work they feed.
+
 - **Migration layer:** use SQLx migrations (or a lightweight migrations table) to version the schema. Each migration is a versioned SQL file applied in order on first run / upgrade.
 - **Initial migration (V1 schema):** the tables above, in dependency order: `accounts` → `characters` → `genres` (seed horror + the genre list order) → `sub_genres` (seed from library mirror on first sync, or a small starter set) → `character_state` (one row, seeded at character creation with horror accessed, level 1, xp 0) → `genre_access` (seed horror row for the character) → `sub_genre_xp` (empty buckets, created per sub-genre on first watch in that sub-genre or pre-created from the library's sub-genre list) → `content` → `watches` → `cases` → `featured_cases` → `achievements` (seed the §5.5 achievement list) → `character_achievements` (empty) → `sync_state` (one row per source, seeded at first sync) → `settings` (seed V1 defaults).
 - **Seed data (first run):**
@@ -976,6 +992,54 @@ CREATE TABLE settings (
 - **Migration placement (2026-09-08):** `settings` is created in migration **0006** (right after `character_state`), not last — it has no dependency beyond `characters` and is required by the character-creation bootstrap seeding. `sync_state` similarly landed early as 0002. The §6.4.11 list order remains the logical dependency order, not the file numbering.
 - **Character-creation bootstrap (finalized 2026-09-08):** character creation is performed by the **application** (not migrations), as one transaction, idempotently: ensure the account's single character exists, insert the `character_state` row (level 1, xp 0, streak 0, `genres_accessed` = 1), insert the `genre_access` horror row, and insert any **missing** `settings` V1 defaults (§6.4.10 samples verbatim, including the winter window scope = Comedy+Drama as a configurable default). With no account yet (PIN not set), bootstrap is a no-op; the PIN-set flow triggers it after account creation.
 - **Schema evolution:** future migrations add columns/tables for V2 features (manual claims → add `via_manual` handling, shared quests → add multi-character + shared_cases tables, economy → add inventory/spending tables, fame → add fame table + state). The `metadata_blob` + `bonuses`/ `holiday_bonus`/`metadata` jsonb columns already give room to add data without early schema churn.
+
+### 6.4.13 Mystery watch orders (finalized 2026-09-08, §5.7)
+
+```sql
+CREATE TABLE watch_orders (
+  id           bigserial PRIMARY KEY,
+  character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  genre_id     bigint NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+  cycle_number int NOT NULL,                     -- 1, 2, 3… per (character, genre)
+  status       text NOT NULL DEFAULT 'active',   -- 'active' | 'completed'
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  UNIQUE (character_id, genre_id, cycle_number)
+);
+
+CREATE TABLE watch_order_items (
+  id           bigserial PRIMARY KEY,
+  order_id     bigint NOT NULL REFERENCES watch_orders(id) ON DELETE CASCADE,
+  position     int NOT NULL,                     -- 1-based within the order
+  content_id   bigint NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  revealed_at  timestamptz NOT NULL DEFAULT now(),  -- item 1 at creation; others at reveal
+  skipped_at   timestamptz,                      -- set when resolved via skip (no watch)
+  UNIQUE (order_id, position)
+);
+
+-- Item resolution is DERIVED: an item is resolved when a `watches` row exists
+-- for its content (the ≥95% award, §6.4.5) or skipped_at IS NOT NULL. No
+-- stored completion column — one threshold, one ledger.
+
+CREATE TABLE skip_grants (
+  id              bigserial PRIMARY KEY,
+  character_id    bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  source_order_id bigint NOT NULL REFERENCES watch_orders(id) ON DELETE CASCADE,
+  earned_at       timestamptz NOT NULL DEFAULT now(),
+  spent_at        timestamptz,
+  spent_item_id   bigint REFERENCES watch_order_items(id) -- the current item skipped
+);
+
+CREATE INDEX watch_orders_character ON watch_orders(character_id);
+CREATE INDEX watch_order_items_order ON watch_order_items(order_id, position);
+CREATE INDEX skip_grants_character ON skip_grants(character_id) WHERE spent_at IS NULL;
+CREATE INDEX watch_order_items_content ON watch_order_items(content_id);
+```
+
+- **Reveal derivation (the invariant):** item `n+1` is visible iff item `n` is resolved — `EXISTS (SELECT 1 FROM watches w JOIN watch_order_items i ON i.content_id = w.content_id WHERE i.order_id = … AND i.position = n) OR i_n.skipped_at IS NOT NULL`. The store's order-flow computes this; it must never trust a client or store a completion flag.
+- **Skip ledger semantics:** balance = unspent rows (`spent_at IS NULL`). Spending stamps `spent_at`/`spent_item_id` on one row (audit of what was spent where), never deletes. Grants are per completed order (V1: exactly 1); the grant's `source_order_id` links the reward to its earning order for the awards shelf.
+- **Generation (V1, algorithmic):** at creation, pick N movies (V1: 5) matching the genre that the character has no awarded watch for, ranked by provider score per §5.4; ties broken by id for determinism. Item 1 revealed at creation. Re-generation for cycle n+1 happens at completion, inside the game tick.
+- **Integration notes:** `cases` stays untouched (a case is one content card; an order is a sequence — overloading `case_type` would muddy §6.4.6 status semantics). `ProgressSnapshot` (§6.4.8 contract) gains `orders_completed`, `orders_completed_by_genre`, `skips_earned`, `skips_used` for the §5.7 achievement batch in category `watch_orders`.
 
 ### 6.4.12 Design notes / rationale
 
@@ -1172,3 +1236,6 @@ The V1 unlock model uses TMDb/TVDB enrichment and sub-genre XP purchase:
 > **Change log (2026-09-08, during implementation, watches):** migration 0007 lands `watches` (§6.4.5) + the deferred `genre_xp_ledger` (§6.4.3 placement note corrected 0006 → 0007). `watches.featured_case_id` is created as a plain column — its FK to `featured_cases` is deferred to that table's migration (0009), which must `ALTER TABLE watches ADD CONSTRAINT watches_featured_case`.
 > **Change log (2026-09-08, during implementation, cases):** migration 0008 lands `cases` (§6.4.6) with `featured_case_id` created plain (FK deferred); migration 0009 lands `featured_cases` (§6.4.7) and completes **both** deferred FKs (`watches_featured_case`, `cases_featured_case`). §6.4.7 period format finalized: ISO week label `YYYY-Www` (V1 cadence weekly, §5.4).
 > **Change log (2026-09-08, during implementation, achievements):** migration 0010 lands `achievements` + `character_achievements` (§6.4.8) and seeds the full §5.5 first-cut list (101 rows) with slugs, kinds, targets, and evaluation metadata finalized per §6.4.8 implementation notes.
+> **Change log (2026-09-08, during implementation, achievements engine):** §6.4.8 evaluation contract finalized (pure snapshot evaluation, kind dispatch, V1 non-evaluable set, unlock-only writes). Implemented as `achievements.rs` (pure engine) + `evaluate_achievements`/`badge_wall` store flows + gated `GET /api/achievements`.
+> **Change log (2026-09-08, during implementation, watch orders):** §5.7 and §6.4.13 added and finalized — mystery watch orders (per-genre cycles, reveal derived from the §6.4.5 watch ledger, audited skip-grant ledger, algorithmic V1 generation, movies-only, pre-watched exclusion, API-enforced mystery); migration 0011 placement noted in §6.4.11.
+> **Change log (2026-09-08, during implementation, game tick):** §9.1 game-tick phase order finalized (watch award → order reveals → achievement evaluation). Implemented as `game.rs` (`run_game_tick`: `refresh_watch_orders` → `evaluate_achievements`, phase 1 a documented slot) wired into `POST /api/orders/refresh`.

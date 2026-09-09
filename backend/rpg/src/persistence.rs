@@ -800,6 +800,325 @@ impl PostgresContentStore {
             genres: row.get(9),
         }))
     }
+
+    /// One evaluation pass (§6.4.8 contract): load definitions, build the
+    /// snapshot, run the pure engine, write only new unlocks (idempotent).
+    /// Returns `None` when no character exists (pre-set-PIN).
+    pub async fn evaluate_achievements(&self) -> Result<Option<EvaluationSummary>> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(None);
+        };
+
+        let definitions = self
+            .client
+            .query(ACHIEVEMENT_DEFINITIONS_SQL, &[])
+            .await?
+            .into_iter()
+            .map(|row| AchievementDefinition {
+                slug: row.get(0),
+                kind: row.get(1),
+                target_value: row.get::<_, Option<i64>>(2),
+            // tokio-postgres maps jsonb → serde_json::Value directly.
+                metadata: row.get(3),
+            })
+            .collect::<Vec<_>>();
+
+        let unlocked_before = self
+            .client
+            .query(UNLOCKED_SLUGS_SQL, &[&account_id])
+            .await?
+            .into_iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect::<std::collections::HashSet<_>>();
+
+        let snapshot = match self.progress_snapshot(account_id).await? {
+            Some(snapshot) => snapshot,
+            None => return Ok(None),
+        };
+
+        let mut summary = EvaluationSummary {
+            evaluated: 0,
+            unlocked: Vec::new(),
+            not_evaluable: 0,
+        };
+        for definition in &definitions {
+            let evaluation = crate::achievements::evaluate(
+                &definition.kind,
+                definition.target_value,
+                &definition.metadata,
+                &snapshot,
+            );
+            match evaluation {
+                crate::achievements::Evaluation::Unlock { progress } => {
+                    summary.evaluated += 1;
+                    if unlocked_before.contains(&definition.slug) {
+                        continue;
+                    }
+                    self.client
+                        .execute(ACHIEVEMENT_UNLOCK_SQL, &[&account_id, &definition.slug, &progress])
+                        .await?;
+                    summary.unlocked.push(definition.slug.clone());
+                }
+                crate::achievements::Evaluation::InProgress { .. } => {
+                    summary.evaluated += 1;
+                }
+                crate::achievements::Evaluation::NotEvaluable => {
+                    summary.not_evaluable += 1;
+                }
+            }
+        }
+        Ok(Some(summary))
+    }
+
+    /// The badge wall: every definition with unlock state and live progress.
+    /// Returns `None` when no character exists (pre-set-PIN).
+    pub async fn badge_wall(&self) -> Result<Option<Vec<BadgeEntry>>> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(None);
+        };
+        let snapshot = self.progress_snapshot(account_id).await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(None);
+        };
+        let mut entries = Vec::new();
+        for row in self.client.query(BADGE_WALL_SQL, &[&account_id]).await? {
+            let unlocked_at: Option<String> = row.get(6);
+            let stored_progress: Option<i64> = row.get(7);
+            let target: Option<i64> = row.get(8);
+            let (unlocked, progress) = if unlocked_at.is_some() {
+                (true, stored_progress.unwrap_or(0))
+            } else {
+                // Live progress for locked rows: evaluate this one definition.
+                let evaluation = crate::achievements::evaluate(
+                    &row.get::<_, String>(5),
+                    target,
+                    &row.get::<_, serde_json::Value>(9),
+                    &snapshot,
+                );
+                match evaluation {
+                    crate::achievements::Evaluation::Unlock { progress } => (true, progress),
+                    crate::achievements::Evaluation::InProgress { progress, .. } => (false, progress),
+                    crate::achievements::Evaluation::NotEvaluable => (false, 0),
+                }
+            };
+            entries.push(BadgeEntry {
+                slug: row.get(0),
+                name: row.get(1),
+                description: row.get(2),
+                category: row.get(3),
+                visible: row.get(4),
+                kind: row.get(5),
+                unlocked,
+                unlocked_at,
+                progress,
+                target,
+            });
+        }
+        Ok(Some(entries))
+    }
+
+    /// The snapshot builder shared by both flows.
+    async fn progress_snapshot(
+        &self,
+        account_id: i64,
+    ) -> Result<Option<crate::achievements::ProgressSnapshot>> {
+        let Some(row) = self
+            .client
+            .query_opt(PROGRESS_SNAPSHOT_SQL, &[&account_id])
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(crate::achievements::ProgressSnapshot {
+            episode_watches: row.get(0),
+            movie_watches: row.get(1),
+            current_streak_days: row.get(2),
+            level: row.get(3),
+            distinct_genres: row.get(4),
+            horror_watches: row.get(5),
+            distinct_holiday_windows: row.get(6),
+            distinct_new_arrival_titles: row.get(7),
+            purchased_sub_genres: row.get(8),
+            completed_featured_cases: row.get(9),
+        }))
+    }
+
+    /// Creates a new order cycle for each accessible genre that has none and
+    /// has not exhausted its two-cycle V1 supply (§6.4.11 ORDER_GENRES), then
+    /// advances reveals and completes/grants for all active orders. Safe to
+    /// call on every tick and from the refresh endpoint.
+    pub async fn refresh_watch_orders(&mut self) -> Result<OrderRefreshSummary> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(OrderRefreshSummary {
+                orders_created: Vec::new(),
+                skips_granted: 0,
+            });
+        };
+        let mut summary = OrderRefreshSummary {
+            orders_created: Vec::new(),
+            skips_granted: 0,
+        };
+
+        for row in self.client.query(ORDER_GENRES_SQL, &[&account_id]).await? {
+            let genre_id: i64 = row.get(0);
+            let genre: String = row.get(1);
+            let candidates: Vec<i64> = self
+                .client
+                .query(
+                    ORDER_CANDIDATES_SQL,
+                    &[&account_id, &genre, &genre_id, &WATCH_ORDER_SIZE],
+                )
+                .await?
+                .into_iter()
+                .map(|row| row.get(0))
+                .collect();
+            if candidates.len() < WATCH_ORDER_SIZE as usize {
+                continue;
+            }
+
+            let transaction = self.client.transaction().await?;
+            let created = transaction
+                .query_one(ORDER_INSERT_SQL, &[&account_id, &genre_id])
+                .await?;
+            let order_id: i64 = created.get(0);
+            let cycle: i32 = created.get(1);
+            let positions: Vec<i32> = (1..=WATCH_ORDER_SIZE as i32).collect();
+            transaction
+                .execute(
+                    ORDER_ITEMS_INSERT_SQL,
+                    &[&order_id, &positions, &candidates],
+                )
+                .await?;
+            transaction.commit().await?;
+            summary.orders_created.push(OrderCreated {
+                order_id,
+                genre,
+                cycle_number: cycle,
+            });
+        }
+
+        summary.skips_granted = self.advance_watch_orders(account_id).await?;
+        Ok(summary)
+    }
+
+    /// Advances reveal stamps, completes finished orders, and grants their
+    /// skip rewards. Returns how many skips were granted.
+    async fn advance_watch_orders(&self, account_id: i64) -> Result<usize> {
+        self.client
+            .execute(REVEAL_STAMP_SQL, &[&account_id])
+            .await?;
+        let mut granted = 0;
+        for row in self.client.query(OPEN_ORDERS_SQL, &[&account_id]).await? {
+            let order_id: i64 = row.get(0);
+            if self
+                .client
+                .query_opt(ORDER_COMPLETE_SQL, &[&order_id])
+                .await?
+                .is_some()
+                && self
+                    .client
+                    .query_opt(SKIP_GRANT_SQL, &[&order_id])
+                    .await?
+                    .is_some()
+            {
+                granted += 1;
+            }
+        }
+        Ok(granted)
+    }
+
+    /// The player-facing order view. Locked items carry position + locked
+    /// only — title, year, and content id are None (§5.7 mystery).
+    pub async fn order_view(&self) -> Result<Option<Vec<OrderView>>> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(None);
+        };
+        let mut orders: Vec<OrderView> = Vec::new();
+        let mut current: Option<OrderView> = None;
+        for row in self.client.query(ORDER_VIEW_SQL, &[&account_id]).await? {
+            let position: i32 = row.get(4);
+            let previous_resolved: bool = row.get(10);
+            let locked = position != 1 && !previous_resolved;
+            let item = OrderItemView {
+                position,
+                locked,
+                content_id: if locked { None } else { Some(row.get(5)) },
+                title: if locked { None } else { row.get(6) },
+                year: if locked { None } else { row.get(7) },
+                watched: row.get(9),
+                skipped: row.get(8),
+            };
+            let (id, genre, cycle): (i64, String, i32) = (row.get(0), row.get(1), row.get(2));
+            if current.as_ref().map(|view| view.id) != Some(id) {
+                if let Some(view) = current.take() {
+                    orders.push(view);
+                }
+                current = Some(OrderView {
+                    id,
+                    genre,
+                    cycle_number: cycle,
+                    items: Vec::new(),
+                });
+            }
+            current.as_mut().unwrap().items.push(item);
+        }
+        if let Some(view) = current.take() {
+            orders.push(view);
+        }
+        Ok(Some(orders))
+    }
+
+    /// Spends a skip on the current item of one open order.
+    pub async fn skip_order_item(&mut self, order_id: i64) -> Result<SkipOutcome> {
+        let Some(account_id) = self.single_account_id().await? else {
+            return Ok(SkipOutcome::NothingToSkip);
+        };
+        let Some(current) = self
+            .client
+            .query_opt(ORDER_CURRENT_ITEM_SQL, &[&account_id, &order_id])
+            .await?
+        else {
+            return Ok(SkipOutcome::NothingToSkip);
+        };
+        let item_id: i64 = current.get(0);
+        let position: i32 = current.get(1);
+
+        // One transaction: the skip stamp and the ledger spend succeed
+        // together or not at all (a dropped transaction rolls back, so a
+        // missing balance can never leave a stamped-but-unpaid skip).
+        let transaction = self.client.transaction().await?;
+        // The finale guard is the position predicate inside SKIP_ITEM_SQL.
+        if transaction
+            .query_opt(SKIP_ITEM_SQL, &[&account_id, &item_id])
+            .await?
+            .is_none()
+        {
+            return Ok(SkipOutcome::FinaleNotSkippable);
+        }
+        if transaction
+            .query_opt(SKIP_SPEND_SQL, &[&account_id, &item_id])
+            .await?
+            .is_none()
+        {
+            return Ok(SkipOutcome::NoSkipsAvailable);
+        }
+        transaction.commit().await?;
+
+        // The skip may have completed the order — advance the tick's later
+        // phases for it (§9.1: reveals, then achievement evaluation).
+        self.advance_watch_orders(account_id).await?;
+        self.evaluate_achievements().await?;
+        Ok(SkipOutcome::Skipped { position })
+    }
+
+    /// The single account id, or `None` pre-set-PIN.
+    async fn single_account_id(&self) -> Result<Option<i64>> {
+        let row = self
+            .client
+            .query_opt("SELECT id FROM accounts ORDER BY id LIMIT 1", &[])
+            .await?;
+        Ok(row.map(|row| row.get(0)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -816,6 +1135,359 @@ pub struct CharacterOverview {
     pub genres: Vec<String>,
 }
 
+// ---- Achievement evaluation (§6.4.8, evaluation contract finalized
+// 2026-09-08; engine in achievements.rs, writes only at unlock) ----
+
+/// One row per loadable achievement definition, as the store reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AchievementDefinition {
+    pub slug: String,
+    pub kind: String,
+    pub target_value: Option<i64>,
+    pub metadata: serde_json::Value,
+}
+
+/// A badge-wall row (visible + hidden, unlocked + locked with progress).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BadgeEntry {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub visible: bool,
+    pub kind: String,
+    pub unlocked: bool,
+    pub unlocked_at: Option<String>,
+    pub progress: i64,
+    pub target: Option<i64>,
+}
+
+/// The result of one evaluation pass over all definitions.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EvaluationSummary {
+    pub evaluated: usize,
+    pub unlocked: Vec<String>,
+    pub not_evaluable: usize,
+}
+
+/// All definitions, ordered for deterministic evaluation.
+pub const ACHIEVEMENT_DEFINITIONS_SQL: &str = r#"
+SELECT slug, kind, target_value, metadata
+FROM achievements
+ORDER BY id
+"#;
+
+/// Existing unlocks for the single character (idempotency guard).
+pub const UNLOCKED_SLUGS_SQL: &str = r#"
+SELECT a.slug
+FROM character_achievements ca
+JOIN achievements a ON a.id = ca.achievement_id
+JOIN characters c ON c.id = ca.character_id
+WHERE c.account_id = $1
+"#;
+
+/// Unlock write: idempotent, records the value at unlock, server timestamp.
+pub const ACHIEVEMENT_UNLOCK_SQL: &str = r#"
+INSERT INTO character_achievements (character_id, achievement_id, progress)
+SELECT c.id, a.id, $3
+FROM characters c
+CROSS JOIN achievements a
+WHERE c.account_id = $1 AND a.slug = $2
+ON CONFLICT DO NOTHING
+"#;
+
+/// Snapshot aggregates: character_state totals plus watch/genre/purchase
+/// facts for the metrics the engine can evaluate in V1. Horror watches and
+/// genre distinctness come from content metadata; holiday windows and new
+/// arrivals from the watches audit flags (jsonb keys).
+pub const PROGRESS_SNAPSHOT_SQL: &str = r#"
+SELECT
+  cs.episode_watches::bigint,
+  cs.movie_watches::bigint,
+  cs.current_streak_days::bigint,
+  cs.level::bigint,
+  (SELECT count(DISTINCT g.name)
+     FROM watches w
+     JOIN content c ON c.id = w.content_id,
+     jsonb_array_elements_text(c.genres) AS g(name)
+    WHERE w.character_id = cs.character_id)::bigint AS distinct_genres,
+  (SELECT count(*)
+     FROM watches w
+     JOIN content c ON c.id = w.content_id
+    WHERE w.character_id = cs.character_id
+      AND c.genres ? 'Horror')::bigint AS horror_watches,
+  (SELECT count(DISTINCT wb.holiday_window)
+     FROM watches w
+     CROSS JOIN LATERAL jsonb_object_keys(w.holiday_bonus) AS wb(holiday_window)
+    WHERE w.character_id = cs.character_id
+      AND w.holiday_bonus IS NOT NULL)::bigint AS distinct_holiday_windows,
+  (SELECT count(DISTINCT w.content_id)
+     FROM watches w
+    WHERE w.character_id = cs.character_id
+      AND w.new_arrival)::bigint AS distinct_new_arrival_titles,
+  (SELECT count(*) FROM sub_genre_xp sgx
+    WHERE sgx.character_id = cs.character_id AND sgx.purchased)::bigint
+    AS purchased_sub_genres,
+  (SELECT count(*)
+     FROM cases ca
+    WHERE ca.character_id = cs.character_id
+      AND ca.case_type = 'featured'
+      AND ca.status = 'completed')::bigint AS completed_featured_cases
+FROM character_state cs
+JOIN characters c ON c.id = cs.character_id
+WHERE c.account_id = $1
+"#;
+
+/// Badge-wall read: every definition left-joined to the character's unlock.
+pub const BADGE_WALL_SQL: &str = r#"
+SELECT a.slug, a.name, a.description, a.category, a.visible, a.kind,
+       ca.unlocked_at::text AS unlocked_at, ca.progress::bigint AS progress,
+       a.target_value, a.metadata
+FROM achievements a
+LEFT JOIN (
+  character_achievements ca
+  JOIN characters c ON c.id = ca.character_id
+) ON ca.achievement_id = a.id AND c.account_id = $1
+ORDER BY a.visible DESC, a.category, a.id
+"#;
+
+// ---- Mystery watch orders (§5.7, §6.4.13). Item resolution is DERIVED
+// from the watches ledger (the ≥95% award) or a spent skip — never stored. ----
+
+/// V1 order shape: five movies per cycle (§6.4.13 generation).
+pub const WATCH_ORDER_SIZE: i64 = 5;
+
+/// Genres the character can access that have no active order and fewer than
+/// two total cycles (the current cycle plus the one skips are earned for).
+pub const ORDER_GENRES_SQL: &str = r#"
+SELECT g.id, g.name
+FROM genre_access ga
+JOIN genres g ON g.id = ga.genre_id
+WHERE ga.character_id = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM watch_orders wo
+    WHERE wo.character_id = ga.character_id AND wo.genre_id = g.id AND wo.status = 'active'
+  )
+  AND (
+    SELECT count(*) FROM watch_orders wo
+    WHERE wo.character_id = ga.character_id AND wo.genre_id = g.id
+  ) < 2
+ORDER BY g.list_order
+"#;
+
+/// Deterministic candidate pick (§6.4.13 generation): genre movies the
+/// character has no awarded watch for and that no prior cycle of this genre
+/// already used, ranked by provider score with id as the tiebreaker.
+pub const ORDER_CANDIDATES_SQL: &str = r#"
+SELECT c.id
+FROM content c
+WHERE c.content_type = 'movie'
+  AND c.genres ? $2
+  AND NOT EXISTS (
+    SELECT 1 FROM watches w
+    WHERE w.character_id = $1 AND w.content_id = c.id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM watch_order_items i
+    JOIN watch_orders wo ON wo.id = i.order_id
+    WHERE wo.character_id = $1 AND wo.genre_id = $3 AND i.content_id = c.id
+  )
+ORDER BY c.rating DESC NULLS LAST, c.id
+LIMIT $4
+"#;
+
+/// Creates the next cycle for one genre; cycle_number derives from the rows
+/// that exist (count + 1), not from client input.
+pub const ORDER_INSERT_SQL: &str = r#"
+INSERT INTO watch_orders (character_id, genre_id, cycle_number)
+SELECT c.id, $2, (
+  SELECT count(*) + 1 FROM watch_orders wo
+  WHERE wo.character_id = c.id AND wo.genre_id = $2
+)
+FROM characters c
+WHERE c.account_id = $1
+RETURNING id, cycle_number
+"#;
+
+/// Item rows in one statement; item 1 carries the creation-time reveal.
+pub const ORDER_ITEMS_INSERT_SQL: &str = r#"
+INSERT INTO watch_order_items (order_id, position, content_id)
+SELECT $1, position, content_id
+FROM unnest($2::int[], $3::bigint[]) AS items(position, content_id)
+"#;
+
+/// The load-bearing reveal query: an item is visible when it is resolved
+/// (watched per §6.4.5 or skipped) or when its predecessor is resolved — the
+/// mystery is what this query does NOT return for locked items.
+pub const ORDER_VIEW_SQL: &str = r#"
+SELECT
+  wo.id, g.name AS genre, wo.cycle_number, wo.status,
+  i.position, i.content_id, c.title, c.year::text AS year,
+  i.skipped_at IS NOT NULL AS skipped,
+  EXISTS (
+    SELECT 1 FROM watches w
+    WHERE w.character_id = wo.character_id AND w.content_id = i.content_id
+  ) AS watched,
+  EXISTS (
+    SELECT 1
+    FROM watch_order_items p
+    LEFT JOIN watches pw
+      ON pw.character_id = wo.character_id AND pw.content_id = p.content_id
+    WHERE p.order_id = wo.id AND p.position = i.position - 1
+      AND (pw.id IS NOT NULL OR p.skipped_at IS NOT NULL)
+  ) AS previous_resolved
+FROM watch_orders wo
+JOIN genres g ON g.id = wo.genre_id
+JOIN characters ch ON ch.id = wo.character_id
+JOIN watch_order_items i ON i.order_id = wo.id
+JOIN content c ON c.id = i.content_id
+WHERE ch.account_id = $1 AND wo.status = 'active'
+ORDER BY g.list_order, wo.cycle_number, i.position
+"#;
+
+/// The current (first unresolved) item of one active order.
+pub const ORDER_CURRENT_ITEM_SQL: &str = r#"
+SELECT i.id, i.position
+FROM watch_order_items i
+JOIN watch_orders wo ON wo.id = i.order_id
+JOIN characters ch ON ch.id = wo.character_id
+LEFT JOIN watches w
+  ON w.character_id = wo.character_id AND w.content_id = i.content_id
+WHERE ch.account_id = $1 AND wo.id = $2 AND wo.status = 'active'
+  AND i.skipped_at IS NULL AND w.id IS NULL
+ORDER BY i.position
+LIMIT 1
+"#;
+
+/// Completes an order only when every item is resolved (watched or skipped).
+pub const ORDER_COMPLETE_SQL: &str = r#"
+UPDATE watch_orders wo
+SET status = 'completed', completed_at = now()
+WHERE wo.id = $1 AND wo.status = 'active'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM watch_order_items i
+    LEFT JOIN watches w
+      ON w.character_id = wo.character_id AND w.content_id = i.content_id
+    WHERE i.order_id = wo.id AND i.skipped_at IS NULL AND w.id IS NULL
+  )
+RETURNING wo.id
+"#;
+
+/// Grants the completion skip exactly once per order (V1: 1 per completion).
+pub const SKIP_GRANT_SQL: &str = r#"
+INSERT INTO skip_grants (character_id, source_order_id)
+SELECT wo.character_id, wo.id
+FROM watch_orders wo
+WHERE wo.id = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM skip_grants sg WHERE sg.source_order_id = wo.id
+  )
+RETURNING id
+"#;
+
+/// Spends one unspent skip; the ledger row is stamped, never deleted.
+pub const SKIP_SPEND_SQL: &str = r#"
+UPDATE skip_grants sg
+SET spent_at = now(), spent_item_id = $2
+FROM characters ch
+WHERE sg.character_id = ch.id AND ch.account_id = $1
+  AND sg.spent_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM skip_grants other WHERE other.spent_item_id = $2
+  )
+RETURNING sg.id
+"#;
+
+/// Stamps a skip on the current item. The final item can never be skipped
+/// (§5.7: the finale must be watched) — enforced by position, not by trust.
+pub const SKIP_ITEM_SQL: &str = r#"
+UPDATE watch_order_items i
+SET skipped_at = now()
+FROM watch_orders wo
+JOIN characters ch ON ch.id = wo.character_id
+WHERE i.order_id = wo.id AND ch.account_id = $1
+  AND i.id = $2 AND wo.status = 'active'
+  AND i.skipped_at IS NULL
+  AND i.position < (
+    SELECT max(position) FROM watch_order_items fin WHERE fin.order_id = i.order_id
+  )
+RETURNING i.id
+"#;
+
+/// Stamps the audit reveal time on newly revealed items (predecessor now
+/// resolved). Visibility itself is always derived, never read from here.
+pub const REVEAL_STAMP_SQL: &str = r#"
+UPDATE watch_order_items cur
+SET revealed_at = now()
+FROM watch_orders wo
+JOIN characters ch ON ch.id = wo.character_id
+JOIN watch_order_items prev ON prev.order_id = wo.id
+LEFT JOIN watches pw
+  ON pw.character_id = wo.character_id AND pw.content_id = prev.content_id
+WHERE ch.account_id = $1 AND wo.status = 'active'
+  AND cur.order_id = wo.id
+  AND prev.position = cur.position - 1
+  AND (pw.id IS NOT NULL OR prev.skipped_at IS NOT NULL)
+"#;
+
+/// The player's open orders, newest first.
+pub const OPEN_ORDERS_SQL: &str = r#"
+SELECT wo.id, g.name
+FROM watch_orders wo
+JOIN genres g ON g.id = wo.genre_id
+JOIN characters ch ON ch.id = wo.character_id
+WHERE ch.account_id = $1 AND wo.status = 'active'
+ORDER BY wo.created_at DESC
+"#;
+
+/// One item in an order view. Locked items serialize as position + locked
+/// only (§5.7 mystery): the identity fields are Options, skipped entirely
+/// (not null) when None so the JSON carries no hint of the hidden title.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OrderItemView {
+    pub position: i32,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<String>,
+    pub watched: bool,
+    pub skipped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OrderView {
+    pub id: i64,
+    pub genre: String,
+    pub cycle_number: i32,
+    pub items: Vec<OrderItemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OrderCreated {
+    pub order_id: i64,
+    pub genre: String,
+    pub cycle_number: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OrderRefreshSummary {
+    pub orders_created: Vec<OrderCreated>,
+    pub skips_granted: usize,
+}
+
+/// Skip action outcomes (§6.4.1-style explicitness).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipOutcome {
+    Skipped { position: i32 },
+    NoSkipsAvailable,
+    FinaleNotSkippable,
+    NothingToSkip,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -827,6 +1499,8 @@ mod tests {
         MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL, PROVIDER_CACHE_HYDRATE_SQL,
         PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
         SINGLE_ACCOUNT_PIN_SQL, SINGLE_CHARACTER_ID_SQL,
+        ORDER_CANDIDATES_SQL, ORDER_COMPLETE_SQL, ORDER_INSERT_SQL, ORDER_VIEW_SQL,
+        REVEAL_STAMP_SQL, SKIP_GRANT_SQL, SKIP_ITEM_SQL, SKIP_SPEND_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -843,7 +1517,7 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 10);
+        assert_eq!(MIGRATIONS.len(), 11);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
@@ -854,6 +1528,7 @@ mod tests {
         assert_eq!(MIGRATIONS[7].0, "0008_cases");
         assert_eq!(MIGRATIONS[8].0, "0009_featured_cases");
         assert_eq!(MIGRATIONS[9].0, "0010_achievements");
+        assert_eq!(MIGRATIONS[10].0, "0011_watch_orders");
 
         assert_eq!(
             migration_summary(0, 1),
@@ -953,6 +1628,34 @@ mod tests {
                 settings_seeded: 0,
             }
         );
+    }
+
+    #[test]
+    fn watch_order_statements_derive_resolution_and_guard_the_finale() {
+        // Generation is deterministic and excludes pre-watched content.
+        assert!(ORDER_CANDIDATES_SQL.contains("c.content_type = 'movie'"));
+        assert!(ORDER_CANDIDATES_SQL.contains("NOT EXISTS ("));
+        assert!(ORDER_CANDIDATES_SQL.contains("ORDER BY c.rating DESC NULLS LAST, c.id"));
+        assert!(ORDER_CANDIDATES_SQL.contains("LIMIT $4"));
+        // Cycle numbers derive from rows, never from client input.
+        assert!(ORDER_INSERT_SQL.contains("count(*) + 1"));
+        assert!(ORDER_INSERT_SQL.contains("RETURNING id, cycle_number"));
+        // The reveal derivation: previous item watched (§6.4.5 ledger) or skipped.
+        assert!(ORDER_VIEW_SQL.contains("previous_resolved"));
+        assert!(ORDER_VIEW_SQL.contains("p.skipped_at IS NOT NULL"));
+        assert!(ORDER_VIEW_SQL.contains("WHERE ch.account_id = $1 AND wo.status = 'active'"));
+        // Completion requires every item resolved; the grant fires once.
+        assert!(ORDER_COMPLETE_SQL.contains("i.skipped_at IS NULL AND w.id IS NULL"));
+        assert!(SKIP_GRANT_SQL.contains("NOT EXISTS ("));
+        assert!(SKIP_SPEND_SQL.contains("sg.spent_at IS NULL"));
+        assert!(SKIP_SPEND_SQL.contains("spent_item_id = $2"));
+        // The finale guard: position strictly before the last item.
+        assert!(SKIP_ITEM_SQL.contains("i.position < ("));
+        // Spend stamps the item; nothing is ever deleted from the ledger.
+        assert!(SKIP_SPEND_SQL.contains("SET spent_at = now(), spent_item_id = $2"));
+        // The audit stamp is bookkeeping only — the view derives visibility.
+        assert!(REVEAL_STAMP_SQL.contains("prev.skipped_at IS NOT NULL"));
+        assert!(!ORDER_VIEW_SQL.contains("revealed_at"));
     }
 
     #[test]

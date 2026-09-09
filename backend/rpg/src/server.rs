@@ -207,6 +207,72 @@ async fn character(State(app): State<AppState>) -> Response {
     }
 }
 
+/// Badge wall (§5.5.13): every definition with unlock state and progress.
+async fn achievements(State(app): State<AppState>) -> Response {
+    match app.store.lock().await.badge_wall().await {
+        Ok(Some(entries)) => Json(entries).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no character" })),
+        )
+            .into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+/// The mystery order board (§5.7): locked items serialize as position +
+/// locked only — no title, no content id.
+async fn orders(State(app): State<AppState>) -> Response {
+    match app.store.lock().await.order_view().await {
+        Ok(Some(orders)) => Json(orders).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no character" })),
+        )
+            .into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+/// The game tick's UI entry point (§9.1): ordered phases — watch award
+/// (slot) → order reveals → achievement evaluation.
+async fn orders_refresh(State(app): State<AppState>) -> Response {
+    match crate::game::run_game_tick(&mut *app.store.lock().await).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+/// Spends a skip on the current item of one order (§5.7: finale excluded).
+async fn order_skip(
+    State(app): State<AppState>,
+    axum::extract::Path(order_id): axum::extract::Path<i64>,
+) -> Response {
+    match app.store.lock().await.skip_order_item(order_id).await {
+        Ok(outcome) => match outcome {
+            crate::persistence::SkipOutcome::Skipped { position } => {
+                Json(json!({ "skipped": true, "position": position })).into_response()
+            }
+            crate::persistence::SkipOutcome::NoSkipsAvailable => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "no skips available" })),
+            )
+                .into_response(),
+            crate::persistence::SkipOutcome::FinaleNotSkippable => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "the final item cannot be skipped" })),
+            )
+                .into_response(),
+            crate::persistence::SkipOutcome::NothingToSkip => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "nothing to skip in this order" })),
+            )
+                .into_response(),
+        },
+        Err(error) => internal_error(error),
+    }
+}
+
 fn internal_error(error: crate::ProbeError) -> Response {
     eprintln!("request failed: {error}");
     (
@@ -254,6 +320,10 @@ pub fn router(store: Arc<tokio::sync::Mutex<PostgresContentStore>>) -> Router {
     let gated = Router::new()
         .route("/auth/logout", post(logout))
         .route("/api/character", get(character))
+        .route("/api/achievements", get(achievements))
+        .route("/api/orders", get(orders))
+        .route("/api/orders/refresh", post(orders_refresh))
+        .route("/api/orders/{id}/skip", post(order_skip))
         .layer(middleware::from_fn_with_state(app.clone(), require_session))
         .with_state(app);
 
