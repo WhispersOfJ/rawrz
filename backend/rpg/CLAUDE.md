@@ -25,6 +25,7 @@ container, separate lifecycle).
 - Reads: Plex (X-Plex-Token, :32400), Sonarr (X-Api-Key, :8989),
   Radarr (X-Api-Key, :7878) over LAN.
 - Owns: Postgres (host install, not a compose container), Rust/Axum backend,
+
   Svelte frontend, port 46532, PIN gate.
 - Does NOT: add a container to docker-compose.yml, modify *arr/Plex services,
   expose remotely by default, use webhooks (polling only, 5-min cadence).
