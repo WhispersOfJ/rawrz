@@ -16,6 +16,10 @@ pub struct PreparedSync {
     pub plan: ContentPersistencePlan,
 }
 
+/// F-16 retention grace: expired cache rows stay for 7 days as stale-
+/// fallback payloads before the retention pass deletes them.
+const PROVIDER_CACHE_GRACE_SECONDS: u64 = 7 * 24 * 60 * 60;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SyncRunResult {
     pub prepared: PreparedSync,
@@ -88,13 +92,17 @@ impl<'a> SyncPipeline<'a> {
 
     pub async fn run(
         &mut self,
-        store: &mut PostgresContentStore,
+        store: &PostgresContentStore,
         now: u64,
     ) -> Result<SyncRunResult> {
-        store.migrate().await?;
+        // F-21: migrations run once at startup, not on each of the 288 daily
+        // cycles. Hydration fills the in-memory cache from persisted rows.
         store.hydrate_cache(self.cache).await?;
         let prepared = self.prepare(now).await;
         let persistence = store.persist(&prepared.plan).await?;
+        // F-16 retention: expired rows are pruned after a grace period
+        // (kept for stale-fallback), so the cache table cannot grow forever.
+        store.prune_provider_cache(PROVIDER_CACHE_GRACE_SECONDS).await?;
         Ok(SyncRunResult {
             prepared,
             persistence,

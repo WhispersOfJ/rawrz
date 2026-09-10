@@ -28,14 +28,16 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::sync::watch;
 
-/// Spec §9.1: 5 minutes between full poll cycles.
+/// Spec §9.1: 5 minutes between full poll cycles (the seeded
+/// `poll_interval_seconds` setting default; F-25).
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Spec §6.4.10 settings default `provider_cache_ttl_seconds` = 86400.
 const PROVIDER_CACHE_TTL_SECONDS: u64 = 86_400;
 
-/// Store handle shared between the HTTP server and the poll loop.
-pub type StoreHandle = std::sync::Arc<tokio::sync::Mutex<PostgresContentStore>>;
+/// Store handle shared between the HTTP server and the poll loop. The pool
+/// inside makes clones cheap and contention-free (F-19).
+pub type StoreHandle = std::sync::Arc<PostgresContentStore>;
 
 /// The stack clients one poll cycle talks to. Constructed once at startup;
 /// `with_base_url` constructors exist for tests and mocks.
@@ -78,7 +80,7 @@ pub struct PollCycleSummary {
 /// failure is returned in the summary (logged by the caller) and must not
 /// stop the tick — phases 2–3 advance on known state (§9.1).
 pub async fn run_poll_cycle(
-    store: &mut PostgresContentStore,
+    store: &PostgresContentStore,
     stack: &PollStack,
 ) -> PollCycleSummary {
     let now = std::time::SystemTime::now()
@@ -144,7 +146,8 @@ pub fn format_cycle_log(summary: &PollCycleSummary) -> String {
 /// number of completed cycles. The shutdown receiver is checked between
 /// cycles only — a cycle in flight finishes (no mid-write abandonment).
 /// Cycle failures are logged and non-fatal; the loop itself never exits on
-/// them.
+/// them. F-24: every cycle counts (run vs failed) so the exit line is a
+/// real health signal instead of a success-only count.
 pub async fn run_poll_loop(
     store: StoreHandle,
     stack: PollStack,
@@ -156,7 +159,8 @@ pub async fn run_poll_loop(
     // them in a burst — skip to the next scheduled slot.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let mut completed = 0_usize;
+    let mut cycles_run = 0_usize;
+    let mut cycles_failed = 0_usize;
     loop {
         if *shutdown.borrow() {
             break;
@@ -168,16 +172,21 @@ pub async fn run_poll_loop(
         if *shutdown.borrow() {
             break;
         }
-        let mut guard = store.lock().await;
-        let summary = run_poll_cycle(&mut guard, &stack).await;
+        let summary = run_poll_cycle(&store, &stack).await;
         // Every cycle gets one structured line, including a failed tick. The
         // next interval retries a failed cycle; the loop itself stays alive.
         println!("{}", format_cycle_log(&summary));
-        if summary.tick.is_ok() {
-            completed += 1;
+        cycles_run += 1;
+        if summary.sync.is_err() || summary.tick.is_err() {
+            cycles_failed += 1;
         }
     }
-    completed
+    if cycles_failed > 0 {
+        println!(
+            "poll loop stopped after {cycles_run} cycle(s), {cycles_failed} with failures"
+        );
+    }
+    cycles_run
 }
 
 #[cfg(test)]
@@ -213,6 +222,7 @@ mod tests {
                 orders: crate::persistence::OrderRefreshSummary {
                     orders_created: Vec::new(),
                     skips_granted: 1,
+                    skipped_genres: Vec::new(),
                 },
                 achievements: Some(crate::persistence::EvaluationSummary {
                     evaluated: 101,
@@ -241,6 +251,7 @@ mod tests {
                 orders: crate::persistence::OrderRefreshSummary {
                     orders_created: Vec::new(),
                     skips_granted: 0,
+                    skipped_genres: Vec::new(),
                 },
                 achievements: None,
             }),

@@ -194,6 +194,10 @@ impl ContentSyncRecord {
         let content_type = match item.item_type.as_deref() {
             Some("movie") => ContentType::Movie,
             Some("show") => ContentType::Series,
+            // Episodes are first-class rows (§5.1: episode = 10 XP path, F-2):
+            // they link to their show so award detection can match them by
+            // ratingKey after the sync.
+            Some("episode") => ContentType::Episode,
             Some(other) => {
                 return Err(ProbeError::InvalidContent {
                     origin: "plex",
@@ -214,6 +218,17 @@ impl ContentSyncRecord {
             .and_then(Value::as_str)
             .map(rating_source_name);
 
+        // Episode linkage (F-2): Plex nests episodes under their show; the
+        // grandparent key is the show row, the parent key the season (which
+        // the sync skips as a container). Parent linking is best-effort —
+        // unknown parents upsert with a NULL parent_id until the show syncs.
+        let parent_key = match content_type {
+            ContentType::Episode => item
+                .parent_show_rating_key()
+                .map(|show_key| ContentUpsertKey::new(ContentSource::Plex, show_key)),
+            _ => None,
+        };
+
         Ok(Self {
             key: ContentUpsertKey::new(ContentSource::Plex, source_id),
             external_id: first_attr(&attrs, &["tmdbId", "tvdbId"]),
@@ -227,9 +242,15 @@ impl ContentSyncRecord {
             title,
             year: item.year,
             content_type,
-            parent_key: None,
-            season_number: None,
-            episode_number: None,
+            parent_key,
+            season_number: item
+                .attr("parentIndex")
+                .and_then(|value| value.parse().ok())
+                .filter(|_| content_type == ContentType::Episode),
+            episode_number: item
+                .attr("index")
+                .and_then(|value| value.parse().ok())
+                .filter(|_| content_type == ContentType::Episode),
             runtime_seconds: attrs
                 .get("duration")
                 .and_then(Value::as_str)
@@ -594,6 +615,11 @@ impl<'a> StackSyncOrchestrator<'a> {
                     match self.plex.library_items(section_key).await {
                         Ok(items) => {
                             for item in items {
+                                // Season rows are containers, not content (F-2):
+                                // the sync mirrors shows, movies, and episodes.
+                                if item.item_type.as_deref() == Some("season") {
+                                    continue;
+                                }
                                 match ContentSyncRecord::from_plex(&item) {
                                     Ok(mut record) => {
                                         record.section_key = section.key.clone();
@@ -1475,6 +1501,7 @@ mod tests {
     fn rejects_records_without_required_stack_identity() {
         let item = PlexLibraryItem {
             rating_key: None,
+            parent_rating_key: None,
             title: Some("Untitled".to_owned()),
             year: None,
             item_type: Some("movie".to_owned()),

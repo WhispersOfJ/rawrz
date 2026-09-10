@@ -51,6 +51,29 @@ impl ProbeConfig {
     }
 }
 
+fn parse_env_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let line = line.strip_prefix("export ").unwrap_or(line);
+    let (name, value) = line.split_once('=')?;
+    let value = value.trim();
+    // F-27: a quoted value may contain '#' safely; an unquoted one ends at
+    // a whitespace-separated ' # ' comment marker (dotenv convention), so
+    // `KEY=value # comment` keeps the comment out of the value while
+    // `KEY=abc#123` stays intact.
+    let value = if value.starts_with(['\'', '"']) {
+        value.trim_matches(['\'', '"'])
+    } else {
+        match value.find(" #") {
+            Some(index) => value[..index].trim_end(),
+            None => value,
+        }
+    };
+    Some((name.trim().to_owned(), value.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::ProbeConfig;
@@ -109,16 +132,15 @@ mod tests {
         );
         assert_eq!(super::parse_env_line("# comment"), None);
         assert_eq!(super::parse_env_line(""), None);
+        // F-27: inline comments strip from unquoted values, survive in
+        // quoted ones.
+        assert_eq!(
+            super::parse_env_line("PLEX_URL=http://plex:32400 # the main server"),
+            Some(("PLEX_URL".to_owned(), "http://plex:32400".to_owned()))
+        );
+        assert_eq!(
+            super::parse_env_line("OMDB_API_KEY=abc#123"),
+            Some(("OMDB_API_KEY".to_owned(), "abc#123".to_owned()))
+        );
     }
-}
-
-fn parse_env_line(line: &str) -> Option<(String, String)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let line = line.strip_prefix("export ").unwrap_or(line);
-    let (name, value) = line.split_once('=')?;
-    let value = value.trim().trim_matches(['\'', '"']);
-    Some((name.trim().to_owned(), value.to_owned()))
 }

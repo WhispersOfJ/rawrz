@@ -19,7 +19,9 @@ use crate::persistence::{EvaluationSummary, OrderRefreshSummary, PostgresContent
 use crate::Result;
 use serde::Serialize;
 
-/// What one tick did, phase by phase.
+/// What one tick did, phase by phase. The internal details (phase counters,
+/// internal order ids) stay server-side: the HTTP surface serializes only
+/// the counts the UI needs (F-34).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GameTickReport {
     /// Newly awarded watches (phase 1).
@@ -30,11 +32,40 @@ pub struct GameTickReport {
     pub achievements: Option<EvaluationSummary>,
 }
 
+/// The UI-facing tick payload (F-34): counts + skipped-genre explanations,
+/// with no internal ids or per-phase bookkeeping.
+#[derive(Debug, Clone, Serialize)]
+pub struct TickSummary {
+    pub watches_awarded: usize,
+    pub orders_created: usize,
+    pub skips_granted: usize,
+    pub skipped_genres: Vec<crate::persistence::SkippedGenre>,
+    pub achievements_unlocked: usize,
+    pub achievements_evaluated: usize,
+}
+
+impl GameTickReport {
+    /// Projects the full report onto the trimmed UI payload.
+    pub fn summary(&self) -> TickSummary {
+        TickSummary {
+            watches_awarded: self.watches_awarded,
+            orders_created: self.orders.orders_created.len(),
+            skips_granted: self.orders.skips_granted,
+            skipped_genres: self.orders.skipped_genres.clone(),
+            achievements_unlocked: self
+                .achievements
+                .as_ref()
+                .map_or(0, |a| a.unlocked.len()),
+            achievements_evaluated: self.achievements.as_ref().map_or(0, |a| a.evaluated),
+        }
+    }
+}
+
 /// Runs one game tick: the ordered phases, in order. `plex` is `None` when
 /// the stack is unreachable — phases 2–3 still run so the game advances on
 /// what is already known.
 pub async fn run_game_tick(
-    store: &mut PostgresContentStore,
+    store: &PostgresContentStore,
     plex: Option<&crate::stack::PlexClient>,
 ) -> Result<GameTickReport> {
     // Wizard loadout boundary: pending selection is applied before any
@@ -46,6 +77,7 @@ pub async fn run_game_tick(
         orders: OrderRefreshSummary {
             orders_created: Vec::new(),
             skips_granted: 0,
+            skipped_genres: Vec::new(),
         },
         achievements: None,
     };
@@ -134,6 +166,7 @@ mod tests {
             orders: OrderRefreshSummary {
                 orders_created: Vec::new(),
                 skips_granted: 0,
+                skipped_genres: Vec::new(),
             },
             achievements: None,
         }

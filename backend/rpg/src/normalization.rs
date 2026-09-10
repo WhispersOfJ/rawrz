@@ -54,6 +54,7 @@ pub struct NormalizedMetadata {
 }
 
 impl NormalizedMetadata {
+    #[allow(clippy::too_many_arguments)] // one slot per stack/provider source
     pub fn from_sources(
         plex: Option<&PlexLibraryItem>,
         sonarr: Option<&SonarrSeries>,

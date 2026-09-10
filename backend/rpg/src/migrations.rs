@@ -29,6 +29,9 @@ pub const WATCH_ORDERS_MIGRATION: &str =
 pub const WIZARD_ARCHETYPES_VERSION: &str = "0012_wizard_archetypes";
 pub const WIZARD_ARCHETYPES_MIGRATION: &str =
     include_str!("../migrations/0012_wizard_archetypes.sql");
+pub const WATCHES_UNIQUE_AWARD_VERSION: &str = "0013_watches_unique_award";
+pub const WATCHES_UNIQUE_AWARD_MIGRATION: &str =
+    include_str!("../migrations/0013_watches_unique_award.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -49,6 +52,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (ACHIEVEMENTS_VERSION, ACHIEVEMENTS_MIGRATION),
     (WATCH_ORDERS_VERSION, WATCH_ORDERS_MIGRATION),
     (WIZARD_ARCHETYPES_VERSION, WIZARD_ARCHETYPES_MIGRATION),
+    (
+        WATCHES_UNIQUE_AWARD_VERSION,
+        WATCHES_UNIQUE_AWARD_MIGRATION,
+    ),
 ];
 
 #[cfg(test)]
@@ -84,7 +91,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 12);
+        assert_eq!(MIGRATIONS.len(), 13);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -97,12 +104,14 @@ mod tests {
         assert_eq!(MIGRATIONS[9].0, super::ACHIEVEMENTS_VERSION);
         assert_eq!(MIGRATIONS[10].0, super::WATCH_ORDERS_VERSION);
         assert_eq!(MIGRATIONS[11].0, super::WIZARD_ARCHETYPES_VERSION);
+        assert_eq!(MIGRATIONS[12].0, super::WATCHES_UNIQUE_AWARD_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
         assert!(MIGRATIONS[6].0 < MIGRATIONS[7].0 && MIGRATIONS[7].0 < MIGRATIONS[8].0);
         assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0 && MIGRATIONS[9].0 < MIGRATIONS[10].0);
         assert!(MIGRATIONS[10].0 < MIGRATIONS[11].0);
+        assert!(MIGRATIONS[11].0 < MIGRATIONS[12].0);
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }

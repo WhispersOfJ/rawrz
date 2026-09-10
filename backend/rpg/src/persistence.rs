@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use crate::Result;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::NoTls;
 
 pub const SCHEMA_MIGRATIONS_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -71,9 +71,7 @@ async fn seed_rows_for(
     // 0012 starter loadout: the neutral archetype is permanent and seeded
     // alongside the existing character bootstrap, without changing neutral
     // progression history.
-    transaction
-        .execute(ARCHETYPE_BOOTSTRAP_SQL, &[&character_id])
-        .await?;
+    crate::wizard_store::seed_starter_archetype(transaction, character_id).await?;
 
     Ok(bootstrap_summary(
         character_state_seeded as usize,
@@ -82,67 +80,130 @@ async fn seed_rows_for(
     ))
 }
 
+/// F-22 batched content upsert: one statement per sync instead of one per
+/// row. Parameter order matches the old per-row statement exactly. Rows
+/// arrive pre-sorted parents-first (see `ContentPersistencePlan::from_outcome`),
+/// and parent linking happens in the trailing UPDATE pass, which re-joins
+/// the content table on (source, source_id): a parent inserted earlier in
+/// the same statement — and one from a previous cycle — is both visible.
 pub const CONTENT_UPSERT_SQL: &str = r#"
-INSERT INTO content (
-  source, source_id, external_id, external_id_type, title, year, content_type,
-  parent_id, season_number, episode_number, runtime_seconds, release_date,
-  first_air_date, status, summary, rating, rating_source, poster_url, fanart_url,
-  section_key, section_title, genres, sub_genres, metadata_blob, provider_metadata,
-  last_enriched_at
+WITH batch AS (
+  SELECT
+    r.source, r.source_id, r.external_id, r.external_id_type, r.title,
+    r.year, r.content_type, r.parent_source, r.parent_source_id,
+    r.season_number, r.episode_number, r.runtime_seconds, r.release_date,
+    r.first_air_date, r.status, r.summary, r.rating, r.rating_source,
+    r.poster_url, r.fanart_url, r.section_key, r.section_title, r.genres,
+    r.sub_genres, r.metadata_blob, r.provider_metadata
+  FROM unnest(
+    $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::int[],
+    $7::text[], $8::text[], $9::text[], $10::int[], $11::int[], $12::int[],
+    $13::text[], $14::text[], $15::text[], $16::text[], $17::float8[],
+    $18::text[], $19::text[], $20::text[], $21::text[], $22::text[],
+    $23::jsonb[], $24::jsonb[], $25::jsonb[], $26::jsonb[]
+  ) AS r(
+    source, source_id, external_id, external_id_type, title, year,
+    content_type, parent_source, parent_source_id, season_number,
+    episode_number, runtime_seconds, release_date, first_air_date, status,
+    summary, rating, rating_source, poster_url, fanart_url, section_key,
+    section_title, genres, sub_genres, metadata_blob, provider_metadata
+  )
+), upserted AS (
+  INSERT INTO content (
+    source, source_id, external_id, external_id_type, title, year, content_type,
+    parent_id, season_number, episode_number, runtime_seconds, release_date,
+    first_air_date, status, summary, rating, rating_source, poster_url, fanart_url,
+    section_key, section_title, genres, sub_genres, metadata_blob, provider_metadata,
+    last_enriched_at
+  )
+  SELECT
+    b.source, b.source_id, b.external_id, b.external_id_type, b.title, b.year,
+    b.content_type,
+    NULL, -- parent linking happens in the second pass below
+    b.season_number, b.episode_number, b.runtime_seconds,
+    b.release_date::text::date, b.first_air_date::text::date, b.status,
+    b.summary, b.rating, b.rating_source, b.poster_url, b.fanart_url,
+    b.section_key, b.section_title, b.genres, b.sub_genres, b.metadata_blob,
+    b.provider_metadata,
+    CASE WHEN b.provider_metadata <> '{}'::jsonb THEN now() ELSE NULL END
+  FROM batch b
+  ON CONFLICT (source, source_id) DO UPDATE SET
+    external_id = EXCLUDED.external_id,
+    external_id_type = EXCLUDED.external_id_type,
+    title = EXCLUDED.title,
+    year = EXCLUDED.year,
+    content_type = EXCLUDED.content_type,
+    parent_id = EXCLUDED.parent_id,
+    season_number = EXCLUDED.season_number,
+    episode_number = EXCLUDED.episode_number,
+    runtime_seconds = EXCLUDED.runtime_seconds,
+    release_date = EXCLUDED.release_date,
+    first_air_date = EXCLUDED.first_air_date,
+    status = EXCLUDED.status,
+    summary = EXCLUDED.summary,
+    rating = EXCLUDED.rating,
+    rating_source = EXCLUDED.rating_source,
+    poster_url = EXCLUDED.poster_url,
+    fanart_url = EXCLUDED.fanart_url,
+    section_key = EXCLUDED.section_key,
+    section_title = EXCLUDED.section_title,
+    genres = EXCLUDED.genres,
+    sub_genres = EXCLUDED.sub_genres,
+    metadata_blob = EXCLUDED.metadata_blob,
+    provider_metadata = EXCLUDED.provider_metadata,
+    last_synced_at = now(),
+    last_enriched_at = CASE
+      WHEN EXCLUDED.provider_metadata <> '{}'::jsonb THEN now()
+      ELSE content.last_enriched_at
+    END
 )
-VALUES (
-  $1, $2, $3, $4, $5, $6, $7,
-  (SELECT parent.id FROM content AS parent
-   WHERE parent.source = $8 AND parent.source_id = $9),
-  $10, $11, $12, $13::text::date, $14::text::date, $15, $16, $17::double precision, $18, $19, $20,
-  $21, $22, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb,
-  CASE WHEN $26::jsonb <> '{}'::jsonb THEN now() ELSE NULL END
-)
-ON CONFLICT (source, source_id) DO UPDATE SET
-  external_id = EXCLUDED.external_id,
-  external_id_type = EXCLUDED.external_id_type,
-  title = EXCLUDED.title,
-  year = EXCLUDED.year,
-  content_type = EXCLUDED.content_type,
-  parent_id = EXCLUDED.parent_id,
-  season_number = EXCLUDED.season_number,
-  episode_number = EXCLUDED.episode_number,
-  runtime_seconds = EXCLUDED.runtime_seconds,
-  release_date = EXCLUDED.release_date,
-  first_air_date = EXCLUDED.first_air_date,
-  status = EXCLUDED.status,
-  summary = EXCLUDED.summary,
-  rating = EXCLUDED.rating,
-  rating_source = EXCLUDED.rating_source,
-  poster_url = EXCLUDED.poster_url,
-  fanart_url = EXCLUDED.fanart_url,
-  section_key = EXCLUDED.section_key,
-  section_title = EXCLUDED.section_title,
-  genres = EXCLUDED.genres,
-  sub_genres = EXCLUDED.sub_genres,
-  metadata_blob = EXCLUDED.metadata_blob,
-  provider_metadata = EXCLUDED.provider_metadata,
-  last_synced_at = now(),
-  last_enriched_at = CASE
-    WHEN EXCLUDED.provider_metadata <> '{}'::jsonb THEN now()
-    ELSE content.last_enriched_at
-  END
-RETURNING id, source, source_id;
+-- The upsert above guarantees every batch row now has a content row, so the
+-- child side re-joins on the natural key. The INSERT completed before this
+-- UPDATE pass runs, so parents inserted in this same batch are visible.
+UPDATE content c
+SET parent_id = parent.id
+FROM batch b
+JOIN content child ON child.source = b.source AND child.source_id = b.source_id
+LEFT JOIN content parent
+  ON parent.source = b.parent_source AND parent.source_id = b.parent_source_id
+WHERE c.id = child.id
+  AND b.parent_source IS NOT NULL
+  AND parent.id IS NOT NULL
+  AND c.parent_id IS DISTINCT FROM parent.id
 "#;
 
+/// F-22 batched cache upsert: one statement per sync, keyed by (source,
+/// source_id) lookups against the content table (already persisted earlier
+/// in the same transaction).
 pub const PROVIDER_CACHE_UPSERT_SQL: &str = r#"
+WITH batch AS (
+  SELECT
+    r.content_source, r.content_source_id, r.provider, r.provider_id,
+    r.payload, r.fetched_at, r.expires_at, r.http_status, r.error
+  FROM unnest(
+    $1::text[], $2::text[], $3::text[], $4::text[], $5::jsonb[],
+    $6::float8[], $7::float8[], $8::int[], $9::text[]
+  ) WITH ORDINALITY AS r(
+    content_source, content_source_id, provider, provider_id, payload,
+    fetched_at, expires_at, http_status, error
+  )
+), resolved AS (
+  SELECT
+    b.*, content.id AS content_id
+  FROM batch b
+  JOIN content ON content.source = b.content_source
+              AND content.source_id = b.content_source_id
+)
 INSERT INTO content_provider_cache (
   content_id, provider, provider_id, payload, fetched_at, expires_at,
   http_status, error
 )
-VALUES (
-  (SELECT content.id FROM content
-   WHERE content.source = $1 AND content.source_id = $2),
-  $3, $4, $5::jsonb, to_timestamp($6),
-  CASE WHEN $7::double precision IS NULL THEN NULL
-       ELSE to_timestamp($7::double precision) END,
-  $8, $9
-)
+SELECT
+  content_id, provider, provider_id, payload, to_timestamp(fetched_at),
+  CASE WHEN expires_at IS NULL THEN NULL
+       ELSE to_timestamp(expires_at) END,
+  http_status, error
+FROM resolved
 ON CONFLICT (content_id, provider, provider_id) DO UPDATE SET
   payload = EXCLUDED.payload,
   fetched_at = EXCLUDED.fetched_at,
@@ -168,7 +229,17 @@ SELECT
   cache.error
 FROM content_provider_cache AS cache
 JOIN content ON content.id = cache.content_id
+WHERE cache.expires_at IS NULL OR cache.expires_at > now()
 ORDER BY cache.id;
+"#;
+
+/// Cache retention (F-16): expired rows are deleted only after a grace
+/// period, so the stale-fallback path (used_stale) can still read a payload
+/// after its TTL lapses but the table does not grow without bound.
+pub const PROVIDER_CACHE_RETENTION_SQL: &str = r#"
+DELETE FROM content_provider_cache
+WHERE expires_at IS NOT NULL
+  AND expires_at < now() - make_interval(secs => $1::double precision)
 "#;
 
 // Character-creation bootstrap (spec §6.4.11): V1 is a single account with a
@@ -206,14 +277,6 @@ WHERE NOT EXISTS (
 )
 "#;
 
-pub const ARCHETYPE_BOOTSTRAP_SQL: &str = r#"
-INSERT INTO character_archetypes (character_id, archetype_id, unlock_source_event_key)
-SELECT $1, id, 'bootstrap:lantern_scholar'
-FROM wizard_archetypes
-WHERE slug = 'lantern_scholar'
-ON CONFLICT (character_id, archetype_id) DO NOTHING
-"#;
-
 // PIN gate account flows (spec §6.4.1 / §7.3): set-PIN creates the single
 // account exactly once; verify reads the single account's PHC pin_hash.
 pub const ACCOUNT_EXISTS_SQL: &str = "SELECT EXISTS (SELECT 1 FROM accounts)";
@@ -243,94 +306,6 @@ WHERE archetypes.slug = 'lantern_scholar'
 ORDER BY accounts.id
 LIMIT 1
 RETURNING id
-"#;
-
-pub const ARCHETYPE_UNLOCK_SQL: &str = r#"
-INSERT INTO character_archetypes (character_id, archetype_id, unlock_source_event_key)
-SELECT c.id, a.id, 'unlock:' || a.slug
-FROM characters c
-JOIN wizard_archetypes a ON (
-  a.unlock_kind = 'bootstrap'
-  OR (a.unlock_kind = 'level' AND EXISTS (
-    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.level >= a.unlock_target
-  ))
-  OR (a.unlock_kind = 'completed_order' AND (
-    SELECT count(*) FROM watch_orders wo WHERE wo.character_id = c.id AND wo.status = 'completed'
-  ) >= a.unlock_target)
-  OR (a.unlock_kind = 'achievements' AND (
-    SELECT count(*) FROM character_achievements ca WHERE ca.character_id = c.id
-  ) >= a.unlock_target)
-  OR (a.unlock_kind = 'streak' AND EXISTS (
-    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.best_streak_days >= a.unlock_target
-  ))
-  OR (a.unlock_kind = 'genres_accessed' AND EXISTS (
-    SELECT 1 FROM character_state cs WHERE cs.character_id = c.id AND cs.genres_accessed >= a.unlock_target
-  ))
-)
-ON CONFLICT (character_id, archetype_id) DO NOTHING
-"#;
-
-pub const ARCHETYPE_STATE_SQL: &str = r#"
-SELECT a.slug, a.display_name, a.description, a.portrait_key,
-       a.primary_effect, a.secondary_effect, a.unlock_kind, a.unlock_target,
-       a.strengths, a.weaknesses, ca.character_id IS NOT NULL AS unlocked,
-       active.slug, pending.slug, c.archetype_selected_local_date::text
-FROM characters c
-JOIN wizard_archetypes active ON active.id = c.active_archetype_id
-LEFT JOIN wizard_archetypes pending ON pending.id = c.pending_archetype_id
-CROSS JOIN wizard_archetypes a
-LEFT JOIN character_archetypes ca
-  ON ca.character_id = c.id AND ca.archetype_id = a.id
-WHERE c.account_id = $1
-ORDER BY a.id
-"#;
-
-pub const SELECT_ARCHETYPE_TARGET_SQL: &str = r#"
-SELECT a.id, c.id, active.slug, pending.slug,
-       c.archetype_selected_local_date, ca.character_id IS NOT NULL AS unlocked
-FROM characters c
-JOIN wizard_archetypes active ON active.id = c.active_archetype_id
-LEFT JOIN wizard_archetypes pending ON pending.id = c.pending_archetype_id
-JOIN wizard_archetypes a ON a.slug = $1
-LEFT JOIN character_archetypes ca
-  ON ca.character_id = c.id AND ca.archetype_id = a.id
-WHERE c.account_id = (SELECT id FROM accounts ORDER BY id LIMIT 1)
-FOR UPDATE OF c
-"#;
-
-pub const QUEUE_ARCHETYPE_SELECTION_SQL: &str = r#"
-UPDATE characters
-SET pending_archetype_id = $2,
-    pending_archetype_requested_at = now(),
-    pending_archetype_event_key = $3,
-    archetype_selected_local_date = $4
-WHERE id = $1
-  AND pending_archetype_id IS NULL
-"#;
-
-pub const APPLY_PENDING_ARCHETYPE_SQL: &str = r#"
-SELECT c.id, c.pending_archetype_id, c.pending_archetype_event_key
-FROM characters c
-WHERE c.pending_archetype_id IS NOT NULL
-ORDER BY c.id
-LIMIT 1
-FOR UPDATE
-"#;
-
-pub const APPLY_ARCHETYPE_SQL: &str = r#"
-UPDATE characters
-SET active_archetype_id = $2,
-    pending_archetype_id = NULL,
-    pending_archetype_requested_at = NULL,
-    pending_archetype_event_key = NULL
-WHERE id = $1
-"#;
-
-pub const ARCHETYPE_EVENT_SQL: &str = r#"
-INSERT INTO character_archetype_events
-  (character_id, archetype_id, event_type, source, source_event_key, outcome, reason)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (character_id, event_type, source_event_key) DO NOTHING
 "#;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -599,7 +574,50 @@ pub struct PersistenceSummary {
 }
 
 pub struct PostgresContentStore {
-    client: Client,
+    pool: deadpool_postgres::Pool,
+}
+
+/// One checked-out pooled connection. Dereferences to `tokio_postgres::Client`
+/// so reads use it directly; `transaction()` borrows it mutably for writes.
+/// The pool re-establishes connections after a Postgres restart (F-17): a
+/// dead client fails its health check on recycle and the next checkout gets
+/// a fresh one.
+pub(crate) struct StoreConnection {
+    object: deadpool_postgres::Object,
+}
+
+impl StoreConnection {
+    /// `deadpool_postgres::Transaction` derefs to the tokio-postgres one, so
+    /// every call site uses it identically; it also rolls back on drop, so
+    /// an error return never leaves a half-applied transaction open.
+    pub async fn transaction(&mut self) -> Result<deadpool_postgres::Transaction<'_>> {
+        Ok(self.object.transaction().await?)
+    }
+}
+
+impl std::ops::Deref for StoreConnection {
+    type Target = tokio_postgres::Client;
+
+    fn deref(&self) -> &tokio_postgres::Client {
+        &self.object
+    }
+}
+
+impl PostgresContentStore {
+    /// Checks out one pooled connection for the duration of an await.
+    pub(crate) async fn connection(&self) -> Result<StoreConnection> {
+        self.pool
+            .get()
+            .await
+            .map(|object| StoreConnection { object })
+            .map_err(|error| crate::ProbeError::Pool(error.to_string()))
+    }
+
+    /// Convenience read handle for tests that want a one-shot pool checkout.
+    #[allow(dead_code)]
+    pub(crate) fn query_client(&self) -> &deadpool_postgres::Pool {
+        &self.pool
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -612,29 +630,6 @@ pub struct BootstrapSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct AccountPinOutcome {
     pub account_created: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ArchetypeView {
-    pub slug: String,
-    pub display_name: String,
-    pub description: String,
-    pub portrait_key: String,
-    pub primary_effect: Value,
-    pub secondary_effect: Option<Value>,
-    pub unlock_kind: String,
-    pub unlock_target: Option<i64>,
-    pub strengths: Value,
-    pub weaknesses: Value,
-    pub unlocked: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ArchetypeState {
-    pub active_archetype: String,
-    pub pending_archetype: Option<String>,
-    pub archetype_selected_local_date: Option<String>,
-    pub archetypes: Vec<ArchetypeView>,
 }
 
 /// V1 settings defaults (§6.4.10), verbatim. Missing keys are seeded at
@@ -672,15 +667,36 @@ impl PostgresContentStore {
 
     pub async fn connect(database_url: &str) -> Result<Self> {
         Self::validate_database_url(database_url)?;
-        let (client, connection) = tokio_postgres::connect(database_url, NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        Ok(Self { client })
+        let manager = deadpool_postgres::Manager::from_config(
+            database_url
+                .parse::<tokio_postgres::Config>()
+                .map_err(|error| crate::ProbeError::Pool(error.to_string()))?,
+            NoTls,
+            deadpool_postgres::ManagerConfig {
+                recycling_method: deadpool_postgres::RecyclingMethod::Verified,
+            },
+        );
+        let pool = deadpool_postgres::Pool::builder(manager)
+            .max_size(8)
+            .build()
+            .map_err(|error| crate::ProbeError::Pool(error.to_string()))?;
+        Ok(Self { pool })
     }
 
-    pub async fn migrate(&mut self) -> Result<MigrationSummary> {
-        let transaction = self.client.transaction().await?;
+    /// Explicit rollback helper (F-38): early returns inside open
+    /// transactions roll back here instead of relying on drop semantics.
+    /// Takes the deadpool transaction (all store transactions come from
+    /// `StoreConnection::transaction`), which derefs to the tokio-postgres
+    /// one and rolls the underlying transaction back.
+    async fn rollback(
+        transaction: deadpool_postgres::Transaction<'_>,
+    ) {
+        let _ = transaction.rollback().await;
+    }
+
+    pub async fn migrate(&self) -> Result<MigrationSummary> {
+        let mut connection = self.connection().await?;
+        let transaction = connection.transaction().await?;
         transaction.batch_execute(SCHEMA_MIGRATIONS_SQL).await?;
         let mut applied = 0;
         let mut already_applied = 0;
@@ -710,15 +726,16 @@ impl PostgresContentStore {
     /// missing V1 `settings` defaults for the account's single character —
     /// all in one transaction, idempotently. A no-op when no account exists
     /// yet (the PIN-set flow calls this after account creation).
-    pub async fn bootstrap_single_character(&mut self) -> Result<BootstrapSummary> {
-        let transaction = self.client.transaction().await?;
+    pub async fn bootstrap_single_character(&self) -> Result<BootstrapSummary> {
+        let mut connection = self.connection().await?;
+        let transaction = connection.transaction().await?;
 
         let Some(character_id) = transaction
             .query_opt(SINGLE_CHARACTER_ID_SQL, &[])
             .await?
             .map(|row| row.get::<_, i64>(0))
         else {
-            transaction.rollback().await?;
+            Self::rollback(transaction).await;
             return Ok(bootstrap_summary(0, 0, 0));
         };
 
@@ -733,11 +750,22 @@ impl PostgresContentStore {
     /// the full bootstrap seed, all in one transaction. Returns
     /// `account_created: false` when an account already exists (V1 has no
     /// PIN change flow; bootstrap is then still run, idempotently).
-    pub async fn set_account_pin(&mut self, pin: &str) -> Result<(AccountPinOutcome, BootstrapSummary)> {
+    pub async fn set_account_pin(&self, pin: &str) -> Result<(AccountPinOutcome, BootstrapSummary)> {
         crate::auth::validate_pin(pin)?;
-        let hashed = crate::auth::hash_pin(pin)?;
+        // The Argon2id cost is paid on a blocking thread (F-20) and before
+        // any store work, so an unauthenticated caller cannot hold pooled
+        // connections or hash on the async runtime.
+        let hashed = {
+            let pin = pin.to_owned();
+            tokio::task::spawn_blocking(move || crate::auth::hash_pin(&pin))
+                .await
+                .map_err(|error| {
+                    crate::ProbeError::PinHashing(format!("hash task panicked: {error}"))
+                })?
+        }?;
 
-        let transaction = self.client.transaction().await?;
+        let mut connection = self.connection().await?;
+        let transaction = connection.transaction().await?;
 
         let existing: bool = transaction
             .query_one(ACCOUNT_EXISTS_SQL, &[])
@@ -774,7 +802,8 @@ impl PostgresContentStore {
 
     /// Whether any account exists (drives `GET /auth/status` gate state).
     pub async fn account_exists(&self) -> Result<bool> {
-        let row = self.client.query_one(ACCOUNT_EXISTS_SQL, &[]).await?;
+        let connection = self.connection().await?;
+        let row = connection.query_one(ACCOUNT_EXISTS_SQL, &[]).await?;
         Ok(row.get(0))
     }
 
@@ -783,22 +812,32 @@ impl PostgresContentStore {
     /// PIN is `Rejected`, not an error; a malformed stored hash is an
     /// operational error.
     pub async fn verify_account_pin(&self, pin: &str) -> Result<Option<crate::auth::PinVerifyOutcome>> {
-        let Some(stored) = self
-            .client
+        let connection = self.connection().await?;
+        let Some(stored) = connection
             .query_opt(SINGLE_ACCOUNT_PIN_SQL, &[])
             .await?
             .map(|row| row.get::<_, String>(0))
         else {
             return Ok(None);
         };
-        crate::auth::verify_pin(pin, &stored).map(Some)
+        // The verify pass runs on a blocking thread (F-20) — it costs the
+        // same Argon2id work as hashing and must not stall the runtime.
+        let pin = pin.to_owned();
+        tokio::task::spawn_blocking(move || crate::auth::verify_pin(&pin, &stored).map(Some))
+            .await
+            .map_err(|error| {
+                crate::ProbeError::PinHashing(format!("verify task panicked: {error}"))
+            })?
     }
 
     pub async fn hydrate_cache(
         &self,
         cache: &mut MetadataCache,
     ) -> Result<CacheHydrationSummary> {
-        let rows = self.client.query(PROVIDER_CACHE_HYDRATE_SQL, &[]).await?;
+        // F-16: hydrate fresh rows only; expired entries are re-fetched from
+        // the provider rather than rehydrated, and retention prunes them.
+        let connection = self.connection().await?;
+        let rows = connection.query(PROVIDER_CACHE_HYDRATE_SQL, &[]).await?;
         let mut summary = CacheHydrationSummary {
             loaded: 0,
             already_present: 0,
@@ -832,58 +871,141 @@ impl PostgresContentStore {
         Ok(summary)
     }
 
-    pub async fn persist(&mut self, plan: &ContentPersistencePlan) -> Result<PersistenceSummary> {
-        let transaction = self.client.transaction().await?;
+    /// Deletes expired cache rows past a grace period (F-16 retention).
+    /// `grace_seconds` keeps recent payloads available for stale-fallback.
+    pub async fn prune_provider_cache(&self, grace_seconds: u64) -> Result<u64> {
+        let connection = self.connection().await?;
+        let grace = grace_seconds as f64;
+        let deleted = connection
+            .execute(PROVIDER_CACHE_RETENTION_SQL, &[&grace])
+            .await?;
+        Ok(deleted)
+    }
 
-        for params in &plan.content {
-            let values: [&(dyn tokio_postgres::types::ToSql + Sync); 26] = [
-                &params.source,
-                &params.source_id,
-                &params.external_id,
-                &params.external_id_type,
-                &params.title,
-                &params.year,
-                &params.content_type,
-                &params.parent_source,
-                &params.parent_source_id,
-                &params.season_number,
-                &params.episode_number,
-                &params.runtime_seconds,
-                &params.release_date,
-                &params.first_air_date,
-                &params.status,
-                &params.summary,
-                &params.rating,
-                &params.rating_source,
-                &params.poster_url,
-                &params.fanart_url,
-                &params.section_key,
-                &params.section_title,
-                &params.genres,
-                &params.sub_genres,
-                &params.metadata_blob,
-                &params.provider_metadata,
-            ];
-            transaction.query_one(CONTENT_UPSERT_SQL, &values).await?;
+    pub async fn persist(&self, plan: &ContentPersistencePlan) -> Result<PersistenceSummary> {
+        let mut connection = self.connection().await?;
+        let transaction = connection.transaction().await?;
+
+        // F-22: one batched statement per table per sync instead of one
+        // round-trip per row. Content arrives parents-first, so the second
+        // parent-linking pass in CONTENT_UPSERT_SQL resolves show parents.
+        if !plan.content.is_empty() {
+            let sources: Vec<&str> = plan.content.iter().map(|p| p.source.as_str()).collect();
+            let source_ids: Vec<&str> = plan.content.iter().map(|p| p.source_id.as_str()).collect();
+            let external_ids: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.external_id.as_deref()).collect();
+            let external_id_types: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.external_id_type.as_deref()).collect();
+            let titles: Vec<&str> = plan.content.iter().map(|p| p.title.as_str()).collect();
+            let years: Vec<Option<i32>> = plan.content.iter().map(|p| p.year).collect();
+            let content_types: Vec<&str> =
+                plan.content.iter().map(|p| p.content_type.as_str()).collect();
+            let parent_sources: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.parent_source.as_deref()).collect();
+            let parent_source_ids: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.parent_source_id.as_deref()).collect();
+            let season_numbers: Vec<Option<i32>> =
+                plan.content.iter().map(|p| p.season_number).collect();
+            let episode_numbers: Vec<Option<i32>> =
+                plan.content.iter().map(|p| p.episode_number).collect();
+            let runtimes: Vec<Option<i32>> =
+                plan.content.iter().map(|p| p.runtime_seconds).collect();
+            let release_dates: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.release_date.as_deref()).collect();
+            let first_air_dates: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.first_air_date.as_deref()).collect();
+            let statuses: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.status.as_deref()).collect();
+            let summaries: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.summary.as_deref()).collect();
+            let ratings: Vec<Option<f64>> = plan.content.iter().map(|p| p.rating).collect();
+            let rating_sources: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.rating_source.as_deref()).collect();
+            let poster_urls: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.poster_url.as_deref()).collect();
+            let fanart_urls: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.fanart_url.as_deref()).collect();
+            let section_keys: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.section_key.as_deref()).collect();
+            let section_titles: Vec<Option<&str>> =
+                plan.content.iter().map(|p| p.section_title.as_deref()).collect();
+            let genres: Vec<Value> = plan.content.iter().map(|p| p.genres.clone()).collect();
+            let sub_genres: Vec<Value> = plan.content.iter().map(|p| p.sub_genres.clone()).collect();
+            let metadata_blobs: Vec<Value> =
+                plan.content.iter().map(|p| p.metadata_blob.clone()).collect();
+            let provider_metadata: Vec<Value> =
+                plan.content.iter().map(|p| p.provider_metadata.clone()).collect();
+
+            transaction
+                .execute(
+                    CONTENT_UPSERT_SQL,
+                    &[
+                        &sources,
+                        &source_ids,
+                        &external_ids,
+                        &external_id_types,
+                        &titles,
+                        &years,
+                        &content_types,
+                        &parent_sources,
+                        &parent_source_ids,
+                        &season_numbers,
+                        &episode_numbers,
+                        &runtimes,
+                        &release_dates,
+                        &first_air_dates,
+                        &statuses,
+                        &summaries,
+                        &ratings,
+                        &rating_sources,
+                        &poster_urls,
+                        &fanart_urls,
+                        &section_keys,
+                        &section_titles,
+                        &genres,
+                        &sub_genres,
+                        &metadata_blobs,
+                        &provider_metadata,
+                    ],
+                )
+                .await?;
         }
 
-        for params in &plan.provider_cache {
-            let fetched_at = params.fetched_at_epoch as f64;
-            let expires_at = params.expires_at_epoch.map(|value| value as f64);
-            let http_status = params.http_status.map(i32::from);
-            let values: [&(dyn tokio_postgres::types::ToSql + Sync); 9] = [
-                &params.content_source,
-                &params.content_source_id,
-                &params.provider,
-                &params.provider_id,
-                &params.payload,
-                &fetched_at,
-                &expires_at,
-                &http_status,
-                &params.error,
-            ];
+        if !plan.provider_cache.is_empty() {
+            let content_sources: Vec<&str> =
+                plan.provider_cache.iter().map(|p| p.content_source.as_str()).collect();
+            let content_source_ids: Vec<&str> =
+                plan.provider_cache.iter().map(|p| p.content_source_id.as_str()).collect();
+            let providers: Vec<&str> =
+                plan.provider_cache.iter().map(|p| p.provider.as_str()).collect();
+            let provider_ids: Vec<&str> =
+                plan.provider_cache.iter().map(|p| p.provider_id.as_str()).collect();
+            let payloads: Vec<Value> =
+                plan.provider_cache.iter().map(|p| p.payload.clone()).collect();
+            let fetched_ats: Vec<f64> =
+                plan.provider_cache.iter().map(|p| p.fetched_at_epoch as f64).collect();
+            let expires_ats: Vec<Option<f64>> =
+                plan.provider_cache.iter().map(|p| p.expires_at_epoch.map(|v| v as f64)).collect();
+            let http_statuses: Vec<Option<i32>> =
+                plan.provider_cache.iter().map(|p| p.http_status.map(i32::from)).collect();
+            let errors: Vec<Option<&str>> =
+                plan.provider_cache.iter().map(|p| p.error.as_deref()).collect();
+
             transaction
-                .query_one(PROVIDER_CACHE_UPSERT_SQL, &values)
+                .execute(
+                    PROVIDER_CACHE_UPSERT_SQL,
+                    &[
+                        &content_sources,
+                        &content_source_ids,
+                        &providers,
+                        &provider_ids,
+                        &payloads,
+                        &fetched_ats,
+                        &expires_ats,
+                        &http_statuses,
+                        &errors,
+                    ],
+                )
                 .await?;
         }
 
@@ -894,159 +1016,12 @@ impl PostgresContentStore {
         })
     }
 
-    /// Returns the authoritative archetype catalog and the character's
-    /// current/pending loadout. Locked definitions remain visible.
-    pub async fn archetype_state(&self) -> Result<Option<ArchetypeState>> {
-        let Some(account_id) = self.single_account_id().await? else {
-            return Ok(None);
-        };
-        let rows = self
-            .client
-            .query(ARCHETYPE_STATE_SQL, &[&account_id])
-            .await?;
-        let Some(first) = rows.first() else {
-            return Ok(None);
-        };
-        let active_archetype: String = first.get(11);
-        let pending_archetype: Option<String> = first.get(12);
-        let archetype_selected_local_date: Option<String> = first.get(13);
-        let mut archetypes = Vec::with_capacity(rows.len());
-        for row in rows {
-            archetypes.push(ArchetypeView {
-                slug: row.get(0),
-                display_name: row.get(1),
-                description: row.get(2),
-                portrait_key: row.get(3),
-                primary_effect: row.get(4),
-                secondary_effect: row.get(5),
-                unlock_kind: row.get(6),
-                unlock_target: row.get(7),
-                strengths: row.get(8),
-                weaknesses: row.get(9),
-                unlocked: row.get(10),
-            });
-        }
-        Ok(Some(ArchetypeState {
-            active_archetype,
-            pending_archetype,
-            archetype_selected_local_date,
-            archetypes,
-        }))
-    }
-
-    /// Accepts one already-unlocked archetype selection. The active choice is
-    /// deliberately unchanged; only the pending selection is written.
-    pub async fn select_archetype(&mut self, slug: &str) -> Result<ArchetypeState> {
-        let transaction = self.client.transaction().await?;
-        transaction.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
-        let row = transaction
-            .query_opt(SELECT_ARCHETYPE_TARGET_SQL, &[&slug])
-            .await?;
-        let Some(row) = row else {
-            return Err(crate::ProbeError::InvalidArchetypeSelection(
-                "unknown archetype".to_owned(),
-            ));
-        };
-        let archetype_id: i64 = row.get(0);
-        let character_id: i64 = row.get(1);
-        let active_slug: String = row.get(2);
-        let pending_slug: Option<String> = row.get(3);
-        let selected_date: Option<chrono::NaiveDate> = row.get(4);
-        let unlocked: bool = row.get(5);
-        let today = chrono::Local::now().date_naive();
-
-        if !unlocked {
-            return Err(crate::ProbeError::ArchetypeSelectionConflict(
-                "archetype is not unlocked".to_owned(),
-            ));
-        }
-        if slug == active_slug {
-            return Err(crate::ProbeError::ArchetypeSelectionConflict(
-                "archetype is already active".to_owned(),
-            ));
-        }
-        if pending_slug.is_some() {
-            return Err(crate::ProbeError::ArchetypeSelectionConflict(
-                "another selection is already pending".to_owned(),
-            ));
-        }
-        if selected_date == Some(today) {
-            return Err(crate::ProbeError::ArchetypeSelectionConflict(
-                "one selection is already accepted today".to_owned(),
-            ));
-        }
-
-        let event_key = format!(
-            "archetype-select:{slug}:{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        );
-        transaction
-            .execute(
-                QUEUE_ARCHETYPE_SELECTION_SQL,
-                &[&character_id, &archetype_id, &event_key, &today],
-            )
-            .await?;
-        transaction
-            .execute(
-                ARCHETYPE_EVENT_SQL,
-                &[
-                    &character_id,
-                    &archetype_id,
-                    &"selection_requested",
-                    &"api",
-                    &event_key,
-                    &"accepted",
-                    &Option::<String>::None,
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
-        self.archetype_state()
-            .await?
-            .ok_or_else(|| crate::ProbeError::InvalidArchetypeSelection("character missing".to_owned()))
-    }
-
-    /// Applies one pending selection at the tick boundary, before watch
-    /// awards. It is idempotent and returns the applied/rejected event count.
-    pub async fn apply_pending_archetype(&mut self) -> Result<usize> {
-        let transaction = self.client.transaction().await?;
-        transaction.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
-        let Some(row) = transaction
-            .query_opt(APPLY_PENDING_ARCHETYPE_SQL, &[])
-            .await?
-        else {
-            transaction.commit().await?;
-            return Ok(0);
-        };
-        let character_id: i64 = row.get(0);
-        let pending_id: i64 = row.get(1);
-        let event_key: String = row.get(2);
-        transaction
-            .execute(APPLY_ARCHETYPE_SQL, &[&character_id, &pending_id])
-            .await?;
-        transaction
-            .execute(
-                ARCHETYPE_EVENT_SQL,
-                &[
-                    &character_id,
-                    &pending_id,
-                    &"selection_applied",
-                    &"game_tick",
-                    &event_key,
-                    &"applied",
-                    &Option::<String>::None,
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
-        Ok(1)
-    }
-
     /// Character-sheet payload for the gated API (§7.4): the singleton
     /// character's identity, progression state, and accessed genre names.
     pub async fn character_overview(&self) -> Result<Option<CharacterOverview>> {
         let Some(row) = self
-            .client
+            .connection()
+            .await?
             .query_opt(
                 "SELECT c.name, cs.xp, cs.level, cs.total_watches, cs.episode_watches,
                         cs.movie_watches, cs.current_streak_days, cs.best_streak_days,
@@ -1086,13 +1061,14 @@ impl PostgresContentStore {
         // Unlock facts are materialized before the read pass so the API and
         // the next tick see newly satisfied archetypes without a stale
         // one-cycle delay.
-        self.client.execute(ARCHETYPE_UNLOCK_SQL, &[]).await?;
+        self.refresh_archetype_unlocks().await?;
         let Some(account_id) = self.single_account_id().await? else {
             return Ok(None);
         };
 
         let definitions = self
-            .client
+            .connection()
+            .await?
             .query(ACHIEVEMENT_DEFINITIONS_SQL, &[])
             .await?
             .into_iter()
@@ -1106,7 +1082,8 @@ impl PostgresContentStore {
             .collect::<Vec<_>>();
 
         let unlocked_before = self
-            .client
+            .connection()
+            .await?
             .query(UNLOCKED_SLUGS_SQL, &[&account_id])
             .await?
             .into_iter()
@@ -1136,7 +1113,8 @@ impl PostgresContentStore {
                     if unlocked_before.contains(&definition.slug) {
                         continue;
                     }
-                    self.client
+                    self.connection()
+                        .await?
                         .execute(ACHIEVEMENT_UNLOCK_SQL, &[&account_id, &definition.slug, &progress])
                         .await?;
                     summary.unlocked.push(definition.slug.clone());
@@ -1163,7 +1141,7 @@ impl PostgresContentStore {
             return Ok(None);
         };
         let mut entries = Vec::new();
-        for row in self.client.query(BADGE_WALL_SQL, &[&account_id]).await? {
+        for row in self.connection().await?.query(BADGE_WALL_SQL, &[&account_id]).await? {
             let unlocked_at: Option<String> = row.get(6);
             let stored_progress: Option<i64> = row.get(7);
             let target: Option<i64> = row.get(8);
@@ -1183,12 +1161,24 @@ impl PostgresContentStore {
                     crate::achievements::Evaluation::NotEvaluable => (false, 0),
                 }
             };
+            let (slug, name, description, category): (String, String, String, String) =
+                (row.get(0), row.get(1), row.get(2), row.get(3));
+            let visible: bool = row.get(4);
+            // F-32: hidden badges are discovery content. Until unlocked,
+            // only slug + category leak through; name/description/progress
+            // are masked so the wall does not spoil what exists.
+            let (name, description) = if !visible && !unlocked {
+                ("Hidden badge".to_owned(), "Keep investigating…".to_owned())
+            } else {
+                (name, description)
+            };
+            let (progress, target) = if !visible && !unlocked { (0, None) } else { (progress, target) };
             entries.push(BadgeEntry {
-                slug: row.get(0),
-                name: row.get(1),
-                description: row.get(2),
-                category: row.get(3),
-                visible: row.get(4),
+                slug,
+                name,
+                description,
+                category,
+                visible,
                 kind: row.get(5),
                 unlocked,
                 unlocked_at,
@@ -1205,7 +1195,8 @@ impl PostgresContentStore {
         account_id: i64,
     ) -> Result<Option<crate::achievements::ProgressSnapshot>> {
         let Some(row) = self
-            .client
+            .connection()
+            .await?
             .query_opt(PROGRESS_SNAPSHOT_SQL, &[&account_id])
             .await?
         else {
@@ -1229,23 +1220,26 @@ impl PostgresContentStore {
     /// has not exhausted its two-cycle V1 supply (§6.4.11 ORDER_GENRES), then
     /// advances reveals and completes/grants for all active orders. Safe to
     /// call on every tick and from the refresh endpoint.
-    pub async fn refresh_watch_orders(&mut self) -> Result<OrderRefreshSummary> {
+    pub async fn refresh_watch_orders(&self) -> Result<OrderRefreshSummary> {
         let Some(account_id) = self.single_account_id().await? else {
             return Ok(OrderRefreshSummary {
                 orders_created: Vec::new(),
                 skips_granted: 0,
+                skipped_genres: Vec::new(),
             });
         };
         let mut summary = OrderRefreshSummary {
             orders_created: Vec::new(),
             skips_granted: 0,
+            skipped_genres: Vec::new(),
         };
 
-        for row in self.client.query(ORDER_GENRES_SQL, &[&account_id]).await? {
+        for row in self.connection().await?.query(ORDER_GENRES_SQL, &[&account_id]).await? {
             let genre_id: i64 = row.get(0);
             let genre: String = row.get(1);
             let candidates: Vec<i64> = self
-                .client
+                .connection()
+                .await?
                 .query(
                     ORDER_CANDIDATES_SQL,
                     &[&account_id, &genre, &genre_id, &WATCH_ORDER_SIZE],
@@ -1255,10 +1249,22 @@ impl PostgresContentStore {
                 .map(|row| row.get(0))
                 .collect();
             if candidates.len() < WATCH_ORDER_SIZE as usize {
+                // F-35: surface the skip instead of silently dropping the
+                // genre — candidates are unwatched, unranked movies of that
+                // genre, so a shortfall means the library is exhausted for
+                // the remaining cycles.
+                summary.skipped_genres.push(SkippedGenre {
+                    genre,
+                    reason: format!(
+                        "only {} of {} needed movies are available unwatched and unranked",
+                        candidates.len(), WATCH_ORDER_SIZE
+                    ),
+                });
                 continue;
             }
 
-            let transaction = self.client.transaction().await?;
+            let mut connection = self.connection().await?;
+            let transaction = connection.transaction().await?;
             let created = transaction
                 .query_one(ORDER_INSERT_SQL, &[&account_id, &genre_id])
                 .await?;
@@ -1286,23 +1292,37 @@ impl PostgresContentStore {
     /// Advances reveal stamps, completes finished orders, and grants their
     /// skip rewards. Returns how many skips were granted.
     async fn advance_watch_orders(&self, account_id: i64) -> Result<usize> {
-        self.client
+        let mut connection = self.connection().await?;
+        connection
             .execute(REVEAL_STAMP_SQL, &[&account_id])
             .await?;
         let mut granted = 0;
-        for row in self.client.query(OPEN_ORDERS_SQL, &[&account_id]).await? {
+        for row in connection.query(OPEN_ORDERS_SQL, &[&account_id]).await? {
             let order_id: i64 = row.get(0);
-            if self
-                .client
+            // Completion and its reward are one transaction. Without this,
+            // a process crash after ORDER_COMPLETE_SQL commits but before
+            // SKIP_GRANT_SQL runs permanently loses the player's skip because
+            // completed orders are no longer in the active-order scan.
+            let transaction = connection.transaction().await?;
+            let completed_now = transaction
                 .query_opt(ORDER_COMPLETE_SQL, &[&order_id])
                 .await?
-                .is_some()
-                && self
-                    .client
-                    .query_opt(SKIP_GRANT_SQL, &[&order_id])
+                .is_some();
+            let completed_without_grant = if completed_now {
+                true
+            } else {
+                transaction
+                    .query_opt(ORDER_COMPLETED_UNGRANTED_SQL, &[&order_id])
                     .await?
                     .is_some()
-            {
+            };
+            let reward_inserted = completed_without_grant
+                && transaction
+                    .query_opt(SKIP_GRANT_SQL, &[&order_id])
+                    .await?
+                    .is_some();
+            transaction.commit().await?;
+            if reward_inserted {
                 granted += 1;
             }
         }
@@ -1317,7 +1337,12 @@ impl PostgresContentStore {
         };
         let mut orders: Vec<OrderView> = Vec::new();
         let mut current: Option<OrderView> = None;
-        for row in self.client.query(ORDER_VIEW_SQL, &[&account_id]).await? {
+        for row in self
+            .connection()
+            .await?
+            .query(ORDER_VIEW_SQL, &[&account_id])
+            .await?
+        {
             let position: i32 = row.get(4);
             let previous_resolved: bool = row.get(10);
             let locked = position != 1 && !previous_resolved;
@@ -1330,7 +1355,8 @@ impl PostgresContentStore {
                 watched: row.get(9),
                 skipped: row.get(8),
             };
-            let (id, genre, cycle): (i64, String, i32) = (row.get(0), row.get(1), row.get(2));
+            let (id, genre, cycle, status): (i64, String, i32, String) =
+                (row.get(0), row.get(1), row.get(2), row.get(3));
             if current.as_ref().map(|view| view.id) != Some(id) {
                 if let Some(view) = current.take() {
                     orders.push(view);
@@ -1339,6 +1365,7 @@ impl PostgresContentStore {
                     id,
                     genre,
                     cycle_number: cycle,
+                    status,
                     items: Vec::new(),
                 });
             }
@@ -1351,12 +1378,13 @@ impl PostgresContentStore {
     }
 
     /// Spends a skip on the current item of one open order.
-    pub async fn skip_order_item(&mut self, order_id: i64) -> Result<SkipOutcome> {
+    pub async fn skip_order_item(&self, order_id: i64) -> Result<SkipOutcome> {
         let Some(account_id) = self.single_account_id().await? else {
             return Ok(SkipOutcome::NothingToSkip);
         };
         let Some(current) = self
-            .client
+            .connection()
+            .await?
             .query_opt(ORDER_CURRENT_ITEM_SQL, &[&account_id, &order_id])
             .await?
         else {
@@ -1368,7 +1396,8 @@ impl PostgresContentStore {
         // One transaction: the skip stamp and the ledger spend succeed
         // together or not at all (a dropped transaction rolls back, so a
         // missing balance can never leave a stamped-but-unpaid skip).
-        let transaction = self.client.transaction().await?;
+        let mut connection = self.connection().await?;
+        let transaction = connection.transaction().await?;
         // The finale guard is the position predicate inside SKIP_ITEM_SQL.
         if transaction
             .query_opt(SKIP_ITEM_SQL, &[&account_id, &item_id])
@@ -1387,8 +1416,12 @@ impl PostgresContentStore {
         transaction.commit().await?;
 
         // The skip may have completed the order — advance the tick's later
-        // phases for it (§9.1: reveals, then achievement evaluation).
+        // phases for it (§9.1: reveals, then generation, then achievement
+        // evaluation). F-31: order generation runs here too, so finishing a
+        // cycle by skip yields the next mystery immediately instead of
+        // waiting for the next tick/refresh.
         self.advance_watch_orders(account_id).await?;
+        self.refresh_watch_orders().await?;
         self.evaluate_achievements().await?;
         Ok(SkipOutcome::Skipped { position })
     }
@@ -1398,7 +1431,7 @@ impl PostgresContentStore {
     /// level in the same pass. `today` is injected for testability. Returns
     /// how many new watches were awarded.
     pub async fn award_plex_watches(
-        &mut self,
+        &self,
         states: &[crate::awards::PlexWatchState],
         today: chrono::NaiveDate,
     ) -> Result<usize> {
@@ -1411,31 +1444,52 @@ impl PostgresContentStore {
         // The catalog view of the Plex library: ratingKey → content id/type.
         let mut keys = HashMap::new();
         let mut types: HashMap<i64, String> = HashMap::new();
-        for row in self.client.query(PLEX_CATALOG_SQL, &[]).await? {
+        let mut horror: HashMap<i64, bool> = HashMap::new();
+        for row in self
+            .connection()
+            .await?
+            .query(PLEX_CATALOG_SQL, &[])
+            .await?
+        {
             let id: i64 = row.get(1);
             keys.insert(row.get::<_, String>(0), id);
             types.insert(id, row.get(2));
+            horror.insert(id, row.get(3));
         }
+        let active_archetype = self.active_archetype_slug(account_id).await?;
 
         let awards = crate::awards::detect_watches(states, &keys, &types);
         let mut awarded = 0;
         for award in awards {
-            // Award-once is the insert's guard: only a row that actually
-            // landed costs state deltas.
-            let Some(watch_row) = self
-                .client
-                .query_opt(
-                    WATCH_INSERT_SQL,
-                    &[&account_id, &award.watch.content_type, &award.watch.pct_viewed, &award.xp, &award.watch.rating_key],
-                )
-                .await?
-            else {
-                continue;
-            };
-            let _ = watch_row;
+            // F-6 ledger semantics: the ledger keeps the neutral §5.1 value
+            // in `normal_xp` and the active-loadout adjustment in
+            // `xp_awarded`, so per-watch audit rows reconcile against the
+            // pure math instead of hiding the archetype effect.
+            let neutral_xp = award.xp;
+            let adjusted_xp = crate::wizard::normal_xp_for_watch(
+                &active_archetype,
+                &award.watch.content_type,
+                horror.get(&award.watch.content_id).copied().unwrap_or(false),
+                neutral_xp,
+            );
 
-            let state = self
-                .client
+            // Award-once is the insert's guard: only a row that actually
+            // landed costs state deltas. The insert and state update share a
+            // transaction, so a partial award cannot mutate history or XP.
+            let mut connection = self.connection().await?;
+            let transaction = connection.transaction().await?;
+            // Serialize awards for one character/content pair before the
+            // NOT EXISTS guard. The 0013 UNIQUE(character_id, content_id)
+            // constraint (F-7) is the database-level backstop for any second
+            // writer; its violation below is treated as "already awarded".
+            transaction
+                .query_one(
+                    WATCH_AWARD_LOCK_SQL,
+                    &[&account_id.to_string(), &award.watch.content_id.to_string()],
+                )
+                .await?;
+
+            let state = transaction
                 .query_one(CHARACTER_AWARD_STATE_SQL, &[&account_id])
                 .await?;
             let xp_so_far: i64 = state.get(0);
@@ -1454,34 +1508,80 @@ impl PostgresContentStore {
                     }
                 };
             let new_streak = current_streak + streak_delta;
-            let total_xp = xp_so_far + award.xp + milestone;
+            let total_xp = xp_so_far + adjusted_xp + milestone;
             let new_level = crate::awards::level_for_xp(total_xp);
             let date_delta = match streak_delta {
                 0 => None,
                 _ => Some(today),
             };
+            // F-6: a paying streak milestone is recorded on the watch row so
+            // the ledger shows exactly what the watch earned, bonuses
+            // included (§5.1.1 audit).
+            let bonuses_json = if milestone > 0 {
+                serde_json::json!([
+                    {"kind": "streak_milestone", "amount": milestone}
+                ])
+            } else {
+                serde_json::json!([])
+            };
 
             let new_streak_i32 = i32::try_from(new_streak).map_err(|_| {
-                crate::ProbeError::Xml(format!("streak out of int4 range: {new_streak}"))
+                crate::ProbeError::OutOfRange(format!("streak out of int4 range: {new_streak}"))
             })?;
             let new_level_i32 = i32::try_from(new_level).map_err(|_| {
-                crate::ProbeError::Xml(format!("level out of int4 range: {new_level}"))
+                crate::ProbeError::OutOfRange(format!("level out of int4 range: {new_level}"))
             })?;
-            self.client
+
+            let insert = transaction
+                .query_opt(
+                    WATCH_INSERT_SQL,
+                    &[
+                        &account_id,
+                        &award.watch.content_type,
+                        &award.watch.pct_viewed,
+                        &adjusted_xp,
+                        &neutral_xp,
+                        &bonuses_json,
+                        &award.watch.rating_key,
+                    ],
+                )
+                .await;
+            match insert {
+                Ok(Some(_watch_row)) => {}
+                Ok(None) => {
+                    // NOT EXISTS guard: this watch was already awarded.
+                    transaction.commit().await?;
+                    continue;
+                }
+                Err(error)
+                    if error.code()
+                        == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) =>
+                {
+                    // 0013 constraint backstop: a concurrent writer awarded
+                    // first. Treat identically to the guard above.
+                    transaction.commit().await?;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+
+            transaction
                 .execute(
                     AWARD_STATE_SQL,
-                    &[&account_id, &(award.xp + milestone), &award.watch.content_type, &new_streak_i32, &date_delta, &new_level_i32],
+                    &[&account_id, &(adjusted_xp + milestone), &award.watch.content_type, &new_streak_i32, &date_delta, &new_level_i32],
                 )
                 .await?;
+            transaction.commit().await?;
             awarded += 1;
         }
         Ok(awarded)
     }
 
     /// The single account id, or `None` pre-set-PIN.
-    async fn single_account_id(&self) -> Result<Option<i64>> {
+    pub(crate) async fn single_account_id(&self) -> Result<Option<i64>> {
         let row = self
-            .client
+            .connection()
+            .await?
             .query_opt("SELECT id FROM accounts ORDER BY id LIMIT 1", &[])
             .await?;
         Ok(row.map(|row| row.get(0)))
@@ -1708,8 +1808,15 @@ JOIN genres g ON g.id = wo.genre_id
 JOIN characters ch ON ch.id = wo.character_id
 JOIN watch_order_items i ON i.order_id = wo.id
 JOIN content c ON c.id = i.content_id
-WHERE ch.account_id = $1 AND wo.status = 'active'
-ORDER BY g.list_order, wo.cycle_number, i.position
+WHERE ch.account_id = $1
+  -- F-30: completed cycles stay on the board as history; active ones sort
+  -- first so the current mystery leads per genre. (V1 caps each genre at
+  -- two cycles, so the completed set stays small.)
+  AND wo.status IN ('active', 'completed')
+ORDER BY g.list_order,
+  (wo.status = 'active') DESC,
+  wo.completed_at DESC NULLS FIRST,
+  wo.cycle_number, i.position
 "#;
 
 /// The current (first unresolved) item of one active order.
@@ -1804,8 +1911,28 @@ SELECT wo.id, g.name
 FROM watch_orders wo
 JOIN genres g ON g.id = wo.genre_id
 JOIN characters ch ON ch.id = wo.character_id
-WHERE ch.account_id = $1 AND wo.status = 'active'
+WHERE ch.account_id = $1
+  AND (
+    wo.status = 'active'
+    OR (wo.status = 'completed' AND NOT EXISTS (
+      SELECT 1 FROM skip_grants sg WHERE sg.source_order_id = wo.id
+    ))
+  )
 ORDER BY wo.created_at DESC
+"#;
+
+/// Recovery guard for an order completed before its skip grant committed.
+/// The completion and grant are normally one transaction; this also repairs
+/// any legacy interrupted transition without creating a second grant.
+pub const ORDER_COMPLETED_UNGRANTED_SQL: &str = r#"
+SELECT id
+FROM watch_orders wo
+WHERE wo.id = $1
+  AND wo.status = 'completed'
+  AND NOT EXISTS (
+    SELECT 1 FROM skip_grants sg WHERE sg.source_order_id = wo.id
+  )
+FOR UPDATE
 "#;
 
 // ---- Phase 1: watch award (§9.1 detection semantics finalized 2026-09-08;
@@ -1814,21 +1941,27 @@ ORDER BY wo.created_at DESC
 /// Known catalog entries keyed by their Plex ratingKey (content.source =
 /// 'plex', source_id = ratingKey) with their type.
 pub const PLEX_CATALOG_SQL: &str = r#"
-SELECT c.source_id, c.id, c.content_type
+SELECT c.source_id, c.id, c.content_type,
+       (c.genres @> '["Horror"]'::jsonb) AS is_horror
 FROM content c
 WHERE c.source = 'plex'
 "#;
 
 /// Awarded-watch insert: the §5.7 award-once rule as a NOT EXISTS guard, so
-/// a repeat detection (or a concurrent tick) cannot double-award.
+/// a repeat detection (or a concurrent tick) cannot double-award. The 0013
+/// UNIQUE(character_id, content_id) constraint is the database-level
+/// backstop (F-7); `normal_xp` stays the neutral value and `xp_awarded`
+/// carries the archetype adjustment (F-6 ledger semantics).
+pub const WATCH_AWARD_LOCK_SQL: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))";
+
 pub const WATCH_INSERT_SQL: &str = r#"
 INSERT INTO watches (
   character_id, content_id, content_type, pct_viewed,
-  xp_awarded, normal_xp, via_plex
+  xp_awarded, normal_xp, bonuses, via_plex
 )
-SELECT $1, c.id, $2, $3::int::numeric, $4, $4, true
+SELECT $1, c.id, $2, $3::int::numeric, $4, $5, $6::jsonb, true
 FROM content c
-WHERE c.source = 'plex' AND c.source_id = $5
+WHERE c.source = 'plex' AND c.source_id = $7
   AND NOT EXISTS (
     SELECT 1 FROM watches w
     WHERE w.character_id = $1 AND w.content_id = c.id
@@ -1885,6 +2018,8 @@ pub struct OrderView {
     pub id: i64,
     pub genre: String,
     pub cycle_number: i32,
+    /// F-30: 'active' | 'completed' — completed cycles render as history.
+    pub status: String,
     pub items: Vec<OrderItemView>,
 }
 
@@ -1899,6 +2034,18 @@ pub struct OrderCreated {
 pub struct OrderRefreshSummary {
     pub orders_created: Vec<OrderCreated>,
     pub skips_granted: usize,
+    /// F-35: genres that had no open order but could not generate one, with
+    /// the reason — the UI can explain "no new mystery available" instead of
+    /// a silent no-op.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped_genres: Vec<SkippedGenre>,
+}
+
+/// One genre that could not generate its next cycle (F-35).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SkippedGenre {
+    pub genre: String,
+    pub reason: String,
 }
 
 /// Skip action outcomes (§6.4.1-style explicitness).
@@ -1922,7 +2069,8 @@ mod tests {
         PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
         SINGLE_ACCOUNT_PIN_SQL, SINGLE_CHARACTER_ID_SQL,
         AWARD_STATE_SQL, CHARACTER_AWARD_STATE_SQL, ORDER_CANDIDATES_SQL,
-        ORDER_COMPLETE_SQL, ORDER_INSERT_SQL, ORDER_VIEW_SQL, PLEX_CATALOG_SQL,
+        ORDER_COMPLETE_SQL, ORDER_COMPLETED_UNGRANTED_SQL, ORDER_INSERT_SQL,
+        ORDER_VIEW_SQL, PLEX_CATALOG_SQL, WATCH_AWARD_LOCK_SQL,
         REVEAL_STAMP_SQL, SKIP_GRANT_SQL, SKIP_ITEM_SQL, SKIP_SPEND_SQL,
         WATCH_INSERT_SQL,
     };
@@ -1941,7 +2089,7 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 12);
+        assert_eq!(MIGRATIONS.len(), 13);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
@@ -1954,6 +2102,7 @@ mod tests {
         assert_eq!(MIGRATIONS[9].0, "0010_achievements");
         assert_eq!(MIGRATIONS[10].0, "0011_watch_orders");
         assert_eq!(MIGRATIONS[11].0, "0012_wizard_archetypes");
+        assert_eq!(MIGRATIONS[12].0, "0013_watches_unique_award");
 
         assert_eq!(
             migration_summary(0, 1),
@@ -2033,6 +2182,11 @@ mod tests {
         assert!(SETTINGS_SEED_SQL.contains("FROM unnest($2::text[], $3::text[]) AS seed(key, value)"));
         assert!(SETTINGS_SEED_SQL.contains("WHERE NOT EXISTS ("));
         assert!(SETTINGS_SEED_SQL.contains("settings.character_id = $1 AND settings.key = seed.key"));
+        assert!(crate::wizard_store::ARCHETYPE_BOOTSTRAP_EVENT_SQL.contains(
+            "event_type, source, source_event_key"
+        ));
+        assert!(crate::wizard_store::ARCHETYPE_BOOTSTRAP_EVENT_SQL
+            .contains("'bootstrap:lantern_scholar'"));
     }
 
     #[test]
@@ -2068,9 +2222,12 @@ mod tests {
         // The reveal derivation: previous item watched (§6.4.5 ledger) or skipped.
         assert!(ORDER_VIEW_SQL.contains("previous_resolved"));
         assert!(ORDER_VIEW_SQL.contains("p.skipped_at IS NOT NULL"));
-        assert!(ORDER_VIEW_SQL.contains("WHERE ch.account_id = $1 AND wo.status = 'active'"));
+        // F-30: completed cycles remain on the board as history.
+        assert!(ORDER_VIEW_SQL.contains("wo.status IN ('active', 'completed')"));
         // Completion requires every item resolved; the grant fires once.
         assert!(ORDER_COMPLETE_SQL.contains("i.skipped_at IS NULL AND w.id IS NULL"));
+        assert!(ORDER_COMPLETED_UNGRANTED_SQL.contains("status = 'completed'"));
+        assert!(ORDER_COMPLETED_UNGRANTED_SQL.contains("source_order_id = wo.id"));
         assert!(SKIP_GRANT_SQL.contains("NOT EXISTS ("));
         assert!(SKIP_SPEND_SQL.contains("sg.spent_at IS NULL"));
         assert!(SKIP_SPEND_SQL.contains("spent_item_id = $2"));
@@ -2087,6 +2244,10 @@ mod tests {
     fn award_statements_enforce_award_once_and_atomic_state_deltas() {
         // Detection matches Plex rows by ratingKey.
         assert!(PLEX_CATALOG_SQL.contains("WHERE c.source = 'plex'"));
+        assert!(PLEX_CATALOG_SQL.contains("is_horror"));
+        assert!(crate::wizard_store::ACTIVE_ARCHETYPE_SQL.contains("active_archetype_id"));
+        assert!(WATCH_AWARD_LOCK_SQL.contains("pg_advisory_xact_lock"));
+        assert!(crate::wizard_store::ARCHETYPE_REFRESH_LOCK_SQL.contains("pg_advisory_xact_lock"));
         // The award-once rule: NOT EXISTS guard on the single watch row.
         assert!(WATCH_INSERT_SQL.contains("NOT EXISTS ("));
         assert!(WATCH_INSERT_SQL.contains("WHERE w.character_id = $1 AND w.content_id = c.id"));
@@ -2248,14 +2409,18 @@ mod tests {
             "ON CONFLICT (source, source_id) DO UPDATE",
             "last_synced_at = now()",
             "last_enriched_at",
-            "$13::text::date",
-            "RETURNING id, source, source_id",
+            // F-22 batch shape: unnest arrays + parent-linking second pass.
+            "FROM unnest(",
+            "UPDATE content c",
+            "SET parent_id = parent.id",
+            // The final pass re-joins on the natural key and links parents.
+            "JOIN content child ON child.source = b.source",
         ] {
             assert!(CONTENT_UPSERT_SQL.contains(fragment), "missing {fragment:?}");
         }
         for fragment in [
             "INSERT INTO content_provider_cache",
-            "SELECT content.id FROM content",
+            "JOIN content ON content.source = b.content_source",
             "ON CONFLICT (content_id, provider, provider_id) DO UPDATE",
             "http_status = EXCLUDED.http_status",
             "RETURNING id, content_id, provider, provider_id",

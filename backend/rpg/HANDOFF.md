@@ -3,15 +3,48 @@
 > Resume point for any agent/session. Read this first, then `CLAUDE.md`, then
 > `movie-rpg-spec.md` (source of truth).
 
-## Status (updated 2026-09-10)
+## Status (updated 2026-09-10; FIX.md remediation complete)
 
 **Latest pushed commit on `main`:** `f5a5f5c` — docs: finalize Lantern Academy
-wizard contract. The progression, HTTP server, watch awards, and poll loop are
-implemented and validated. The current local work is the first backend-first
-Lantern Academy vertical slice: migration 0012, starter archetype bootstrap,
-authoritative archetype state, queued selection, and next-tick application.
-Preserve the untracked `.freebuff/` runtime directory; spell implementation,
-frontend work, and the remaining wizard economy are still deferred.
+wizard contract. Local work now **remediates every finding in FIX.md** (F-1
+through F-39; see the status block at the top of FIX.md for the per-item map)
+and extends the Lantern Academy archetype slice. The current changes are
+uncommitted; preserve the untracked `.freebuff/` runtime directory. Spell
+implementation, frontend work, and the remaining wizard economy are still
+deferred.
+
+### Review & decisions
+
+- **FIX.md** is the full-codebase review (2026-09-10): bugs, security, leaks,
+  perf, UX, hygiene — **all findings are remediated and verified** (89 unit
+  tests + 1 live scratch-Postgres proof, zero clippy warnings). Highlights:
+  - **Pool architecture (F-17/F-19):** the shared `Mutex<PostgresContentStore>`
+    is gone. `PostgresContentStore` owns a `deadpool-postgres` pool; server and
+    poll loop share `Arc<PostgresContentStore>`. Store methods take `&self`.
+  - **Security (F-10/F-11/F-39):** failed-login throttle (5 attempts → 30s×2^n
+    in-memory lockout), set-pin 409 + no-hash for existing accounts, set-pin
+    issues a session (F-29), sessions sweep on issue and renew on activity.
+  - **Data model (F-6/F-7):** migration 0013 adds `UNIQUE (character_id,
+    content_id)` on `watches`; the ledger now stores neutral `normal_xp` vs
+    adjusted `xp_awarded` and records streak milestones in `bonuses`.
+  - **API surface (F-3/F-30–F-35):** gated `POST /api/genres/{name}/access`,
+    completed orders stay on the board (`status` field), skip flow generates
+    next cycles and embeds the refreshed board, `/api/orders/refresh` returns
+    a trimmed `TickSummary` with `skipped_genres`, hidden badges masked.
+  - **Sync (F-2/F-4/F-16/F-22):** TV episodes sync with show-parent linkage
+    (stack-based XML parser, `watchable_items`), batched content/cache upserts
+    (2 statements per sync), fresh-only hydration + 7-day-grace retention.
+  - **Robustness (F-5/F-14/F-18/F-28):** TVDB 401 → re-login + retry once,
+    4 MiB body caps, one shared `reqwest::Client`, `ProbeError::OutOfRange`.
+  - **Config (F-12/F-26/F-27):** `RPG_BIND_ADDRESS`, exe-relative env-file
+    fallback, inline `#` comments in `.env` values.
+  - Deferred on purpose: `tracing` subscriber wiring (F-24 covers cycle
+    counters only; the `tracing` deps were removed until wired), `Secure`
+    cookie flag (F-13, TLS-era), `poll_interval_seconds` setting read (F-25,
+    documented as reserved — default equals `POLL_INTERVAL`).
+- **No Redis / external caching layer** — decided 2026-09-10, rationale and
+  revisit trigger documented in FIX.md §8 (cloud-only catalog options, no-new-
+  container constraint, and V1 scale make the in-process fixes the right call).
 
 ### Done so far
 
@@ -58,19 +91,27 @@ frontend work, and the remaining wizard economy are still deferred.
   transaction, idempotent on re-run), `verify_account_pin` (missing
   account = locked/`None`; wrong PIN = `Rejected`, not an error),
   `account_exists`, `character_overview` (gated API payload).
-- **HTTP server + binary** (`server.rs`, `main.rs`): Axum on **0.0.0.0:46532**
+- **HTTP server + binary** (`server.rs`, `main.rs`): Axum on port **46532**
   (port corrected from 86532 — impossible, TCP max 65535; spec §12 Q9
-  updated). Session mechanics per spec §7.3 (finalized): opaque 128-bit
-  tokens, `rpg_session` HttpOnly/SameSite=Lax cookie, in-memory sessions,
-  7-day TTL. Public: `/healthz`, `/auth/status`, `/auth/set-pin`,
-  `/auth/login`; gated: `/auth/logout`, `/api/character`. Startup: `.env` →
-  connect → `migrate()` → serve. The binary also starts the shared 5-minute
-  poll loop (`poll.rs`): `SyncPipeline::run` precedes `run_game_tick`, one
-  cycle at a time under the shared store lock; Ctrl-C drains the HTTP server,
-  then signals the loop to finish its current cycle. Each cycle logs sync
-  persistence and all tick phase counts. Run: `cargo run -- [path/to/.env]`
-  (defaults to `../.env`). End-to-end smoke-tested with curl against a
-  scratch Postgres; HTTP and poll flows are covered in the live-DB proof.
+  updated; bind address configurable via `RPG_BIND_ADDRESS`, default
+  `0.0.0.0:46532`). Session mechanics per spec §7.3 (finalized): opaque
+  128-bit tokens, `rpg_session` HttpOnly/SameSite=Lax cookie, in-memory
+  sessions, 7-day TTL with **sliding renewal** and sweep-on-issue. Public:
+  `/healthz`, `/auth/status`, `/auth/set-pin`, `/auth/login`; gated:
+  `/auth/logout`, `/api/character`, `/api/archetypes`,
+  `/api/archetypes/{slug}/select`, `/api/genres/{name}/access`,
+  `/api/achievements`, `/api/orders`, `/api/orders/refresh`,
+  `/api/orders/{id}/skip`. Login is throttled (5 failures → 30s×2^n
+  lockout); set-pin is 409 once an account exists and issues a session on
+  creation. Startup: `.env` (exe-relative fallback) → connect → `migrate()`
+  once → serve. The binary also starts the shared 5-minute poll loop
+  (`poll.rs`): `SyncPipeline::run` precedes `run_game_tick`; server and
+  loop share the pooled store, so no request ever queues behind a poll
+  cycle. Ctrl-C drains the HTTP server, then signals the loop to finish its
+  current cycle. Each cycle logs sync persistence and all tick phase counts.
+  Run: `cargo run -- [path/to/.env]` (defaults to `../.env`, falls back to
+  the exe-relative repo root). HTTP and poll flows are covered in the
+  live-DB proof.
 - Game tick (§9.1, phase order finalized): `backend/rpg/src/game.rs` —
   `run_game_tick(store, Option<&PlexClient>)` runs the ordered phases in
   one place: watch award (`awards.rs` pure computation +
@@ -82,16 +123,19 @@ frontend work, and the remaining wizard economy are still deferred.
   + evaluation for their order.
 - Unattended polling (§9.1): `poll.rs` owns `PollStack`, `run_poll_cycle`,
   fixed `POLL_INTERVAL` (300 seconds), one-line cycle logging, non-fatal sync
-  and phase-1 degradation, and watch-channel shutdown. `main.rs` shares one
-  `Arc<Mutex<PostgresContentStore>>` with Axum and the poll task.
-- Lantern Academy archetype slice (local, uncommitted): migration
-  `0012_wizard_archetypes.sql`, `wizard.rs`, starter bootstrap integration,
-  catalog/selection API, and next-tick application in `game.rs`.
-- Fixtures + full test suite: **83 unit tests + 1 live proof, all passing**
-  (`cd backend/rpg && cargo test --all-targets`)
-- Clippy: 3 pre-existing warnings (MetadataCache len_without_is_empty,
-  from_sources too_many_arguments, config.rs items_after_test_module) — not
-  blockers, not introduced by recent work.
+  and phase-1 degradation, and watch-channel shutdown. `main.rs` shares the
+  pooled `Arc<PostgresContentStore>` with Axum; the loop counts failed
+  cycles in its exit line.
+- Lantern Academy archetype slice (local, uncommitted): migration   `0012_wizard_archetypes.sql`, `wizard.rs` (pure rules), and
+   `wizard_store.rs` (Postgres adapter), with starter bootstrap integration,
+   catalog/selection API, and next-tick application in `game.rs`. The store
+  adapter owns all archetype SQL, durable unlock/event materialization, and
+  loadout reads/writes; `persistence.rs` owns neutral persistence and delegates
+  to that boundary.
+- Fixtures + full test suite: **89 unit tests + 1 live proof, all passing**
+  (`cd backend/rpg && cargo test --all-targets`). The archetype store boundary
+  is `wizard_store.rs`; the pure selection policy is in `wizard.rs`.
+- Clippy: **zero warnings** (`cargo clippy --all-targets`).
 
 ### Next steps
 
@@ -132,24 +176,38 @@ frontend work, and the remaining wizard economy are still deferred.
    `0012_wizard_archetypes.sql` seeds all six original archetypes, backfills
    existing characters to `lantern_scholar`, and adds permanent unlock rows,
    audit events, active/pending selection fields, and the starter bootstrap.
-   `wizard.rs` owns the pure unlock predicates; `persistence.rs` owns the
-   transactional catalog/read, selection queue, unlock materialization, and
-   tick-boundary application; `game.rs` applies pending selection before the
-   existing watch → order → achievement phases; `server.rs` exposes gated
+   `wizard.rs` owns pure unlock predicates and bounded normal-XP effects;
+   `wizard_store.rs` is the Postgres adapter for archetype facts, unlock/event
+   materialization, catalog reads, queued selection, and tick-boundary
+   application. `persistence.rs` delegates archetype state to that boundary
+   and applies the active archetype only to newly inserted watch rows
+   transactionally, leaving historical rows unchanged. The live proof now
+   drives its progression facts through real `award_plex_watches` completions
+   (episode/movie counts, dated streaks, XP/levels), `access_genre`
+   transactions, `evaluate_achievements`, and real watch-order generation and
+   completion; it no longer updates threshold counters or inserts completed
+   orders synthetically. It covers threshold rejection, audit idempotency,
+   queued selection, next-tick activation, active Ember XP, historical
+   immutability, and the concurrent selection conflict. `game.rs` applies
+   pending selection before the existing watch → order → achievement phases;
+   `server.rs` exposes gated
    `GET /api/archetypes` and `POST /api/archetypes/{slug}/select`.
 8. **Next implementation pass:** add the remaining 0012 resource state and
-   then migration 0013 for spells, affinity, charges, and casts; add pure
+   then migration 0014 for spells, affinity, charges, and casts (0013 is now
+   the `watches` unique-award constraint); add pure
    affinity/cap/overflow calculations, apply queued affinity at the tick
    boundary, and run live proofs for all six archetypes and five spells. Then
    build the guided Svelte UI against those APIs. Keep the existing neutral
    `watches`, XP, streak, genre, achievement, `watch_orders`, and `skip_grants`
-   ledgers authoritative.
+   ledgers authoritative. Optional reliability polish: wire a `tracing`
+   subscriber (F-24 logging half) and re-read `poll_interval_seconds` from
+   settings (F-25) when the frontend needs it.
 
 ## How to verify
 
 ```bash
-cd backend/rpg && cargo test --all-targets  # expect 83 unit + 1 live-proof passing
-cargo clippy --all-targets                 # expect only the 3 known warnings
+cd backend/rpg && cargo test --all-targets  # expect 89 unit tests + 1 live proof passing
+cargo clippy --all-targets                 # expect zero warnings
 ```
 
 Live-DB proof (disposable postgres container, ~4s run):

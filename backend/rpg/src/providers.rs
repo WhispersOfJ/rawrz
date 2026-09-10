@@ -156,7 +156,8 @@ impl TmdbClient {
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            http: Client::new(),
+            // F-18: one shared connection pool across all provider clients.
+            http: crate::shared_http_client(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key: api_key.into(),
         }
@@ -181,7 +182,7 @@ impl TmdbClient {
                 ]),
         )
         .await?;
-        Ok(response.json().await?)
+        crate::json_limited(response).await
     }
 }
 
@@ -198,7 +199,7 @@ impl OmdbClient {
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            http: Client::new(),
+            http: crate::shared_http_client(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key: api_key.into(),
         }
@@ -229,7 +230,7 @@ impl OmdbClient {
             self.http.get(&self.base_url).query(&params),
         )
         .await?;
-        let parsed: OmdbResponse = response.json().await?;
+        let parsed: OmdbResponse = crate::json_limited(response).await?;
         if parsed.response.as_deref() == Some("False") {
             return Err(ProbeError::HttpStatus {
                 provider: "omdb",
@@ -253,7 +254,7 @@ impl FanartClient {
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            http: Client::new(),
+            http: crate::shared_http_client(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key: api_key.into(),
         }
@@ -275,7 +276,7 @@ impl FanartClient {
                 .header("api-key", &self.api_key),
         )
         .await?;
-        Ok(response.json().await?)
+        crate::json_limited(response).await
     }
 }
 
@@ -293,7 +294,7 @@ impl TvdbClient {
 
     pub fn with_base_url(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            http: Client::new(),
+            http: crate::shared_http_client(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key: api_key.into(),
             token: Arc::new(Mutex::new(None)),
@@ -322,19 +323,28 @@ impl TvdbClient {
                 }),
         )
         .await?;
-        let token = response
-            .json::<serde_json::Value>()
+        let token = crate::json_limited::<serde_json::Value>(response)
             .await?
             .get("data")
             .and_then(|data| data.get("token"))
             .and_then(Value::as_str)
-            .ok_or_else(|| ProbeError::Xml("TVDB login response did not contain data.token".into()))?
+            .ok_or_else(|| {
+                ProbeError::Xml("TVDB login response did not contain data.token".into())
+            })?
             .to_owned();
         *self.token.lock().expect("TVDB token mutex poisoned") = Some(token.clone());
         Ok(token)
     }
 
+    /// One series lookup with a token-expiry recovery path (F-5): TVDB v4
+    /// tokens expire (roughly monthly), so a 401 clears the cached token,
+    /// re-logins, and retries exactly once.
     pub async fn series(&self, id: i64) -> Result<Value> {
+        self.series_with_refresh(id, true).await
+    }
+
+    async fn series_with_refresh(&self, id: i64, allow_refresh: bool) -> Result<Value> {
+        self.ensure_login().await?;
         let token = self
             .token
             .lock()
@@ -343,13 +353,29 @@ impl TvdbClient {
             .ok_or_else(|| {
                 ProbeError::MissingEnvironment("TVDB runtime token (call login first)".into())
             })?;
-        let response = crate::send_with_retry(
+        // A 401 is non-retryable and comes back as an Err from the shared
+        // send path — that is the token-expiry signal (F-5).
+        match crate::send_with_retry(
             "tvdb",
             self.http
                 .get(format!("{}/series/{}", self.base_url, id))
                 .bearer_auth(token),
         )
-        .await?;
-        Ok(response.json().await?)
+        .await
+        {
+            Err(ProbeError::HttpStatus {
+                provider: "tvdb",
+                status: 401,
+            }) if allow_refresh => {
+                *self.token.lock().expect("TVDB token mutex poisoned") = None;
+                // Box::pin breaks the async-fn recursion cycle for the single
+                // no-refresh retry; allow_refresh=false stops it from looping.
+                Box::pin(self.series_with_refresh(id, false)).await
+            }
+            outcome => {
+                let response = outcome?;
+                crate::json_limited(response).await
+            }
+        }
     }
 }

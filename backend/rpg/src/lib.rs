@@ -14,6 +14,7 @@ pub mod server;
 pub mod stack;
 pub mod sync;
 pub mod wizard;
+pub(crate) mod wizard_store;
 
 use thiserror::Error;
 
@@ -40,15 +41,99 @@ pub enum ProbeError {
     PinHashing(String),
     #[error("database operation failed: {0}")]
     Database(#[from] tokio_postgres::Error),
+    #[error("connection pool failed: {0}")]
+    Pool(String),
+    #[error("value out of range: {0}")]
+    OutOfRange(String),
     #[error("unauthenticated")]
     Unauthenticated,
     #[error("invalid archetype selection: {0}")]
     InvalidArchetypeSelection(String),
     #[error("archetype selection conflict: {0}")]
     ArchetypeSelectionConflict(String),
+    #[error("invalid genre access: {0}")]
+    InvalidGenreAccess(String),
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
+
+/// Provider responses are trusted LAN services, but a misbehaving service or
+/// a bad redirect must not OOM the process (F-14): bodies are streamed with
+/// this hard cap.
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Reads a response body with a hard size cap (F-14).
+pub(crate) async fn body_limited(response: reqwest::Response) -> Result<Vec<u8>> {
+    if let Some(length) = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        if length > MAX_BODY_BYTES {
+            return Err(ProbeError::Xml(format!(
+                "response body of {length} bytes exceeds the {MAX_BODY_BYTES} byte cap"
+            )));
+        }
+    }
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(ProbeError::Xml(format!(
+                "response body exceeds the {MAX_BODY_BYTES} byte cap"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Reads a response body as text with the hard size cap (F-14).
+pub(crate) async fn text_limited(response: reqwest::Response) -> Result<String> {
+    let body = body_limited(response).await?;
+    String::from_utf8(body)
+        .map_err(|error| ProbeError::Xml(format!("response body is not UTF-8: {error}")))
+}
+
+/// Reads and decodes a JSON response body with the hard size cap (F-14).
+pub(crate) async fn json_limited<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T> {
+    let body = body_limited(response).await?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+/// One process-wide HTTP client (F-18): all stack and provider clients share
+/// a single connection pool with uniform timeouts. `reqwest::Client` is an
+/// cheaply cloneable handle, so every caller gets the same pool.
+pub(crate) fn shared_http_client() -> reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .expect("shared HTTP client builds")
+        })
+        .clone()
+}
+
+/// 128-bit random hex string (audit event keys, collision fallbacks).
+pub(crate) fn random_token_hex() -> String {
+    use rand::RngCore;
+    let mut bytes = [0_u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(bytes.len() * 2);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    out
+}
 
 pub(crate) async fn send_with_retry(
     provider: &'static str,
@@ -104,7 +189,8 @@ mod tests {
         TmdbClient,
     };
     use super::stack::{
-        parse_plex_library_items, parse_plex_sections, PlexClient, RadarrMovie, SonarrSeries,
+        parse_plex_library_items, parse_plex_sections, parse_plex_show_items,
+        parse_plex_watchable_items, PlexClient, RadarrMovie, SonarrSeries,
     };
     use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -122,6 +208,61 @@ mod tests {
         assert_eq!(items[0].title.as_deref(), Some("Fear Street: Part One - 1994"));
         assert_eq!(items[0].genres, vec!["Horror", "Mystery"]);
         assert_eq!(items[1].item_type.as_deref(), Some("show"));
+    }
+
+    #[test]
+    fn parses_plex_episode_rows_with_show_parent() {
+        // Nested parse: show + season + two episode leaves. The watchable
+        // filter is what sync consumes — episodes only, with parent linkage.
+        let items =
+            parse_plex_library_items(include_str!("../fixtures/plex_episodes.xml")).unwrap();
+        assert_eq!(items.len(), 4, "show + season + 2 episodes");
+        let episodes =
+            parse_plex_watchable_items(include_str!("../fixtures/plex_episodes.xml")).unwrap();
+        assert_eq!(episodes.len(), 2, "episodes only; show/season rows filtered");
+        assert_eq!(episodes[0].item_type.as_deref(), Some("episode"));
+        assert_eq!(episodes[0].rating_key.as_deref(), Some("901"));
+        assert_eq!(
+            episodes[0].parent_rating_key.as_deref(),
+            Some("900"),
+            "episode rows carry their show's ratingKey"
+        );
+    }
+
+    #[test]
+    fn nested_same_name_tags_do_not_close_a_show_item_early() {
+        // A show item whose season children share the <Directory> tag name:
+        // the stack pops children first, so the show closes only at its own
+        // End event — no early close, no lost attributes.
+        let xml = r#"<MediaContainer size="1">
+  <Directory ratingKey="900" title="Fixture Show" type="show" viewCount="3">
+    <Genre tag="Comedy" />
+    <Directory ratingKey="9010" title="Season 1" type="season">
+      <Directory ratingKey="9011" title="Specials" type="season" />
+    </Directory>
+    <Directory ratingKey="9020" title="Season 2" type="season" />
+  </Directory>
+</MediaContainer>"#;
+        let items = parse_plex_library_items(xml).unwrap();
+        let shows: Vec<_> = items
+            .iter()
+            .filter(|item| item.item_type.as_deref() == Some("show"))
+            .collect();
+        assert_eq!(shows.len(), 1, "exactly one show item despite nested seasons");
+        assert_eq!(shows[0].rating_key.as_deref(), Some("900"));
+        assert_eq!(shows[0].genres, vec!["Comedy"]);
+        assert_eq!(
+            shows[0].attr("viewCount").as_deref(),
+            Some("3"),
+            "show attributes survive nested closes"
+        );
+        // The nested season fragments parse too — and never steal the show's
+        // attributes or close it early.
+        assert_eq!(
+            items.iter().filter(|i| i.item_type.as_deref() == Some("season")).count(),
+            3,
+            "nested season rows are separate items"
+        );
     }
 
     #[test]
@@ -207,6 +348,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_bodies_are_capped() {
+        // Content-Length above the cap is rejected before reading.
+        let (base_url, server) = oversize_mock_server(64 * 1024 * 1024 + 1, 0).await;
+        let response = super::send_with_retry("fixture", reqwest::Client::new().get(&base_url))
+            .await
+            .unwrap();
+        let error = super::text_limited(response).await.unwrap_err();
+        assert!(error.to_string().contains("cap"), "{error}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn clients_use_injected_base_urls_without_live_services() {
         let (base_url, server) = mock_server(
             "/library/sections",
@@ -233,6 +386,11 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[allow(dead_code)]
+    fn parse_plex_show_items_marker(items: &[super::stack::PlexLibraryItem]) -> usize {
+        parse_plex_show_items(items)
+    }
+
     async fn retry_mock_server(
         statuses: Vec<u16>,
         body: &'static str,
@@ -254,6 +412,27 @@ mod tests {
                 );
                 stream.write_all(response.as_bytes()).await.unwrap();
             }
+        });
+        (format!("http://{}", address), server)
+    }
+
+    /// Serves a response whose Content-Length claims `length` bytes but sends
+    /// only a stub body — the cap check must fire on the header.
+    async fn oversize_mock_server(
+        length: usize,
+        _body_bytes: usize,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\nstub",
+                length
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
         });
         (format!("http://{}", address), server)
     }
