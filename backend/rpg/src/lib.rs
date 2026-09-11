@@ -18,6 +18,44 @@ pub(crate) mod wizard_store;
 
 use thiserror::Error;
 
+/// Redacts credential-bearing query parameters from URLs before an error is
+/// logged or persisted. Provider clients use `api_key`/`apikey`, while some
+/// stack integrations use `token`; parameter names are matched case-insensitively.
+pub fn redact_url(value: &str) -> String {
+    let Some((prefix, query_and_fragment)) = value.split_once('?') else {
+        return value.to_owned();
+    };
+    let (query, fragment) = query_and_fragment
+        .split_once('#')
+        .map_or((query_and_fragment, None), |(query, fragment)| {
+            (query, Some(fragment))
+        });
+    let redacted_query = query
+        .split('&')
+        .map(|part| {
+            let Some((name, value)) = part.split_once('=') else {
+                return part.to_owned();
+            };
+            if matches!(name.to_ascii_lowercase().as_str(), "api_key" | "apikey" | "token") {
+                format!("{name}=[REDACTED]")
+            } else {
+                format!("{name}={value}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    match fragment {
+        Some(fragment) => format!("{prefix}?{redacted_query}#{fragment}"),
+        None => format!("{prefix}?{redacted_query}"),
+    }
+}
+
+/// Redacts URL credentials from arbitrary error text. This intentionally
+/// preserves the surrounding diagnostic while making reqwest URLs safe.
+pub fn redact_error(value: &str) -> String {
+    redact_url(value)
+}
+
 #[derive(Debug, Error)]
 pub enum ProbeError {
     #[error("{provider} returned HTTP {status}")]
@@ -53,6 +91,12 @@ pub enum ProbeError {
     ArchetypeSelectionConflict(String),
     #[error("invalid genre access: {0}")]
     InvalidGenreAccess(String),
+    #[error("invalid spell: {0}")]
+    InvalidSpell(String),
+    #[error("spell affinity conflict: {0}")]
+    SpellAffinityConflict(String),
+    #[error("invalid spell cast: {0}")]
+    InvalidSpellCast(String),
 }
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
@@ -195,6 +239,18 @@ mod tests {
     use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    #[test]
+    fn redacts_provider_keys_from_error_text() {
+        let message = "error: https://api.example.test/search?api_key=tmdb-secret&apikey=omdb-secret&token=tvdb-secret&query=matrix#fragment";
+        let redacted = super::redact_error(message);
+        assert!(!redacted.contains("tmdb-secret"));
+        assert!(!redacted.contains("omdb-secret"));
+        assert!(!redacted.contains("tvdb-secret"));
+        assert!(redacted.contains("api_key=[REDACTED]"));
+        assert!(redacted.contains("query=matrix"));
+    }
 
     #[test]
     fn parses_plex_sections_and_library_genres() {
