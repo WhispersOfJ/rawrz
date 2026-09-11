@@ -3,6 +3,25 @@
 > **Status:** Draft v1.2 — gathered from user interview; reviewed 2026-09-10. The progression engine is implemented; the original wizard-academy rebrand is now a finalized presentation and rules contract, with the backend-first vertical release defined and implementation intentionally deferred to a later migration/API task. Open questions in §12 are either resolved or explicitly deferred.
 > **Related:** The Bear Cave stack at `~/Cave` (8-service Usenet media stack: Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr). This RPG is *linked with* the stack but *not a part of it*.
 
+> **RAWRZ supersession (M0, 2026-09-11).** This is the RPG **component** spec. The RAWRZ
+> master spec ([`rawrz-megastack-spec.md`](../../rawrz-megastack-spec.md)) governs wherever
+> the two disagree. Superseded here:
+>
+> - **§1, §10.1, §10.4 — "not part of the stack", "no new container", separate Postgres:**
+>   RAWRZ containerizes everything; the RPG becomes a compose service sharing the
+>   stack's Postgres and Redis (master §1.2, §2.1, §4, §10.1, §10.4).
+> - **§11 — reverse proxy and webhooks out of scope:** nginx fronts every service and
+>   `*arr`/Seerr/Plex webhooks are in scope (master §2.1, §6, §9.2).
+> - **§7.2 — placement in `~/Cave/backend/`:** the crate now lives at `backend/rpg/`
+>   (master §1.2, §3.3).
+> - **§10.3 — `RPG_*` env naming:** renamed under the RAWRZ rebrand (master §12.3).
+> - **§2.1 — Lantern Academy as a settled presentation:** retained. The theme is settled;
+>   the RAWRZ rebrand keeps the original-IP boundary and rethemes *inside* it (master
+>   §12.1–§12.2).
+>
+> Nothing above is an M0 runtime change: M0 is documentation and layout only, and the
+> containerized cut-over is a later milestone with its own rollback (master §15).
+
 ---
 
 ## 1. Overview

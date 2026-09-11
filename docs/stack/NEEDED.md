@@ -104,7 +104,7 @@ packages that make **management, security, and maintenance** more efficient
 official `extra` repo (verified 2026-09-04) except the AUR helpers. The
 additions are deliberately CLI-first — consistent with the post-slim-down
 posture, which retired containerized observability in favor of the host-side
-`stack-*` surface (see [docs/services/lifecycle.md](docs/services/lifecycle.md)).
+`stack-*` surface (see [docs/services/lifecycle.md](services/lifecycle.md)).
 
 ### 4.1 Desired — management, security, maintenance
 
@@ -197,7 +197,7 @@ the Python standard library. So:
    unit contents are documented in the script docstrings
    (`scripts/maintenance_digest.py`, `scripts/arrival_notifier.py`,
    `scripts/activity_feed.py`) and in
-   [docs/services/bash-functions.md](docs/services/bash-functions.md).
+   [docs/services/bash-functions.md](services/bash-functions.md).
 
 ## 7. Diagnosis: which tool for which failure
 

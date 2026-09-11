@@ -1,8 +1,8 @@
 # History of The Bear Cave
 
 Everything that has already happened to this stack, in one place. Active, current-state
-documentation lives in [README.md](README.md) (overview), [AGENTS.md](AGENTS.md)
-(operational reference), and [docs/](docs/). This file exists so historical context
+documentation lives in [README.md](../../README.md) (overview), [AGENTS.md](AGENTS.md)
+(operational reference), and [docs/](../). This file exists so historical context
 doesn't leak into current-state docs — if you're reading about something that is no
 longer true of the running stack, it belongs here.
 
@@ -72,7 +72,7 @@ network security, and utility services in three phases. All decisions came from 
 
 Every service removed from `docker-compose.yml` end to end (compose, landing page
 registry, docs, tests, scripts, trivy baseline, AGENTS.md). Live tracking of
-re-adoption watchers lives in [docs/services/lifecycle.md](docs/services/lifecycle.md).
+re-adoption watchers lives in [services/lifecycle.md](services/lifecycle.md).
 
 | Service | Retired | Reason | Re-adoption watcher | Where it went |
 |---------|---------|--------|---------------------|---------------|

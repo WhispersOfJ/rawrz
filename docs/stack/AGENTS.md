@@ -12,11 +12,20 @@ A slim, robust media-acquisition-and-serving stack. **8 always-on Compose servic
 manual ImageMaid and Recyclarr maintenance profiles, published directly on host ports
 — no reverse proxy — with CI/CD via GitHub Actions. Hosted on Linux.
 
+> **RAWRZ supersession (M0, 2026-09-11).** This file documents the **current** runtime of
+> the RAWRZ Stack, which M0 preserves unchanged: eight always-on services, host ports, no
+> reverse proxy. The **target** state adds Postgres, Redis, nginx, an observability tier,
+> and the two application services, and is defined in
+> [`../../rawrz-megastack-spec.md`](../../rawrz-megastack-spec.md) (§1.3, §4, §6, §10.1).
+> Where this file and the master spec disagree about the *target*, the master spec wins;
+> where they disagree about *today*, this file wins. The landmine and safety sections
+> below remain in force verbatim.
+
 > **2026-08-30 slim-down:** after a stability incident (Bazarr OOM crash-loop, Radarr
 > API 500s from an orphaned quality-profile reference, ~19Gi of mem caps against 22Gi
 > host RAM), the stack was deliberately pared from 29 configured services down to 8.
 > The full retirement record — what was removed, why, and the re-adoption policy — is
-> in [docs/services/lifecycle.md](docs/services/lifecycle.md). Legacy files from the
+> in [docs/services/lifecycle.md](services/lifecycle.md). Legacy files from the
 > merged source repos (`media-stack`, `metacacharr`) are preserved in `archive/`.
 >
 > **2026-09-06 re-retirement:** Bazarr was removed again (8-service target;
@@ -62,8 +71,8 @@ Prowlarr indexes → Radarr/Sonarr queue → nzbdav downloads → rclone FUSE mo
 - **Bash functions** (`services/bash-functions/`) are the operational surface: queue
   management, Plex maintenance (scan/empty-trash/Butler), backlog checks, mount health,
   and the manual ImageMaid PhotoTranscoder cleanup command. See
-  [docs/services/bash-functions.md](docs/services/bash-functions.md). The retired fish
-  functions are recorded in [docs/services/FISH.md](docs/services/FISH.md).
+  [docs/services/bash-functions.md](services/bash-functions.md). The retired fish
+  functions are recorded in [docs/services/FISH.md](services/FISH.md).
 
 ---
 
@@ -107,7 +116,7 @@ There is no reverse proxy tier. Every other service is reached directly at
 
 The following were removed end to end (compose, config, env vars, docs, fish
 functions, tests). Full reasons and re-adoption policy are in
-[docs/services/lifecycle.md](docs/services/lifecycle.md):
+[docs/services/lifecycle.md](services/lifecycle.md):
 
 traefik, loki, promtail, grafana, prometheus, alertmanager, node-exporter, cadvisor,
 nzbdav-exporter, arr-dashboard, landing-page, metacache, lidarr, readarr,
@@ -133,7 +142,7 @@ audiobookshelf, komga, adguard, crowdsec, vaultwarden, watchstate, bazarr
 
 **API surfaces** — the full map of every API surface on the stack (base URLs,
 auth conventions, the endpoints each script/function exercises, and canonical
-upstream docs) lives in [docs/API.md](docs/API.md). Update it when a script
+upstream docs) lives in [docs/API.md](API.md). Update it when a script
 starts calling a new endpoint.
 
 ---
@@ -158,7 +167,7 @@ starts calling a new endpoint.
 - **Ruff** — Python linting
 
 ### CI/CD
-- **GitHub Actions** — full policy in [docs/ci-cd.md](docs/ci-cd.md)
+- **GitHub Actions** — full policy in [docs/ci-cd.md](ci-cd.md)
   - **All third-party actions are SHA-pinned** (immutable supply chain); the `# tag` comment records the version. Upgrade path: `gh api repos/{owner}/{repo}/commits/{tag} --jq .sha`, then update SHA + comment. Dependabot cannot auto-bump SHA pins.
   - **release-please only opens PRs for `feat:`/`fix:` commits.** `ci:`, `docs:`, `chore:` do not trigger a release. If you need to cut a release, ensure at least one commit uses a release-worthy type.
   - **Brand-new repo race condition:** workflows added in the initial push of a new repo may not trigger on push/PR events. Manual dispatch works. Re-adding or renaming the workflow file fixes it.
@@ -230,7 +239,7 @@ create the private rclone config, and generate secrets.
 
 6. **rclone.conf requires `rclone obscure`** — Passwords in rclone.conf must be rclone-obfuscated, not plaintext.
 
-7. **App removal checklists must be exhaustive** — Every removal touches: compose, config, env vars, Prowlarr sync, docs, tests. See the 2026-08-30 slim-down record in [docs/services/lifecycle.md](docs/services/lifecycle.md).
+7. **App removal checklists must be exhaustive** — Every removal touches: compose, config, env vars, Prowlarr sync, docs, tests. See the 2026-08-30 slim-down record in [docs/services/lifecycle.md](services/lifecycle.md).
 
 8. **Radarr orphaned quality-profile references** — A movie row pointing at a deleted quality profile makes `/api/v3/movie` return 500 for the whole collection. After deleting profiles in Radarr, verify every movie still resolves (2026-08-30 incident: movie 60308 → profile 17).
 
@@ -254,11 +263,10 @@ From this point forward, **all edits happen on dedicated git worktrees** — one
 worktree per task, named by the task, never mixed with unrelated work. This
 rule applies to every future change, including the change that introduced it.
 
-**Repository containment rule (2026-09-04):** Every worktree for this site must
-live inside `/home/bear/cave/`, preferably under
-`/home/bear/cave/.worktrees/<task-name>`. Do not create or retain site
-worktrees under `/home/bear/.worktrees/`, `/home/bear/wt-*`, or any other
-external path. Before editing, verify with `git worktree list --porcelain`; after
+**Repository containment rule (revised 2026-09-11 for RAWRZ):** The repository is now
+`rawrz`, so every worktree must live inside the RAWRZ checkout under
+`.worktrees/<task-name>`. This supersedes the earlier `/home/bear/cave/.worktrees/`
+containment rule, which belonged to the pre-move stack checkout. Before editing, verify with `git worktree list --porcelain`; after
 relocating or removing a worktree, run `git worktree prune` and verify again.
 The main checkout remains reference-only and must stay free of task edits.
 
@@ -279,7 +287,7 @@ The main checkout remains reference-only and must stay free of task edits.
    `git worktree remove <path>`.
 6. **Canonical walkthrough.** Example commands for the full lifecycle
    (create → edit → push → PR → merge → remove) live in
-   [docs/worktree-lifecycle.md](docs/worktree-lifecycle.md).
+   [docs/worktree-lifecycle.md](worktree-lifecycle.md).
 
 ### Source-Code Questions: grep `~/TRUTH` first — mandatory, effective 2026-09-05
 
@@ -371,19 +379,21 @@ Service → source map (full table incl. refs and commit SHAs:
 
 ## Linkage note
 
-The Bear Cave stack is the media backbone. A separate project — a web-based RPG
-whose mechanics revolve around watching movies/TV from this stack — is
-**linked with** the stack (reads Plex/Sonarr/Radarr APIs) but is **not a part
-of** it (no new container in `docker-compose.yml`, separate lifecycle). Its spec
-lives at [`movie-rpg-spec.md`](movie-rpg-spec.md). When working on the RPG,
-bring that spec into context; when working on the stack, do not assume the RPG
-exists.
+The Bear Cave stack is the media backbone. The former standalone RPG project is now an
+in-tree RAWRZ component at `backend/rpg/`, and the Deck control plane is at
+`backend/deck/`. Today's runtime is still the eight-service stack alone: M0 changes no
+runtime behavior, and neither component is a service in the root compose file yet. The
+master spec ([`../../rawrz-megastack-spec.md`](../../rawrz-megastack-spec.md)) defines the
+target state; the component specs live at
+[`../rpg/movie-rpg-spec.md`](../rpg/movie-rpg-spec.md) and
+[`../deck/cave-deck-spec.md`](../deck/cave-deck-spec.md). When working on the stack, do not
+assume either component runs alongside it yet.
 
 ---
 
 ## Archive
 
-Retired services and their re-adoption watchers are tracked in [docs/services/lifecycle.md](docs/services/lifecycle.md).
+Retired services and their re-adoption watchers are tracked in [docs/services/lifecycle.md](services/lifecycle.md).
 
 Legacy files from the source repos are preserved in `archive/`:
 - `archive/media-stack/` — 133+ fish functions, scripts, systemd units, CLAUDE.md, STACK.md

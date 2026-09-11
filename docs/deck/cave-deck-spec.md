@@ -4,6 +4,23 @@
 **Date:** 2026-09-06
 **Supersedes:** the interactive operational surface of `cave-scripts-spec.md` (Cave-Scripts submodule), the `stack-*`/`cave-*` bash functions, the fish host tools, the waybar integration, and `stack-tui`.
 
+> **RAWRZ supersession (M0, 2026-09-11).** This is the Deck **component** spec. The RAWRZ
+> master spec ([`rawrz-megastack-spec.md`](../../rawrz-megastack-spec.md)) governs wherever
+> the two disagree. Superseded here:
+>
+> - **§3.1 — repo/submodule model:** the `services/cave-deck` submodule is retired. Deck
+>   lives in-tree at `backend/deck/` and versions with the monorepo; in-tree components
+>   replace the "pin the submodule and bump it via PR" lifecycle (master §1.2, §3.4, §3.5).
+> - **§3.4 — LAN-only, no login:** a single PIN auth gate fronts Deck and the other RAWRZ
+>   UIs (master §7).
+> - **catalog `redis` entry:** promoted from an opt-in catalog item to a core RAWRZ
+>   service (master §2.1, §4).
+> - **This component's own CI and release line:** replaced by the unified pipeline and the
+>   single release stream (master §3.5, §13).
+>
+> M0 itself changes no runtime behavior; the compose service, auth gate, and ingress land
+> in later milestones (master §15).
+
 ---
 
 ## 1. Goal

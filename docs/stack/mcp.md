@@ -115,7 +115,7 @@ Both paths land on the same file; the consent dialog is the safety gate before
 | Server | Verdict | Why |
 |--------|---------|-----|
 | **Context7** (`@upstash/context7-mcp`) | ✅ **Add** | Up-to-date, version-specific docs for the stack's tools. No API key needed for basic use. Fixes stale-docs gap in agent sessions. |
-| **Docker MCP** (`docker-mcp` via `uvx`) | ⚠️ Skip | Container/compose/log management, but every session already has terminal access to `docker compose`/`docker ps` directly — redundant. Worse, a spawned MCP server holding the Docker socket widens the exact attack surface [HISTORY.md](../HISTORY.md#control-panel-django--archived) (writable socket, CRITICAL) is trying to close. |
+| **Docker MCP** (`docker-mcp` via `uvx`) | ⚠️ Skip | Container/compose/log management, but every session already has terminal access to `docker compose`/`docker ps` directly — redundant. Worse, a spawned MCP server holding the Docker socket widens the exact attack surface [HISTORY.md](HISTORY.md#control-panel-django--archived) (writable socket, CRITICAL) is trying to close. |
 | **Homelab MCP** (bjeans unified server) | ❌ Skip | Docker/Podman + Pi-hole/Unifi/Ollama; only the Docker slice overlaps, and that is the redundant-and-risky part. |
 | **Filesystem MCP** | ❌ Skip | Native file read/write/search tools exist in every session. |
 | **GitHub MCP** | ❌ Skip | Covered by the authenticated `gh` CLI (see `~/ECC` policy audit). |

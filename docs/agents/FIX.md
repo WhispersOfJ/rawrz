@@ -412,6 +412,13 @@ spells/affinity migration originally suggested here as 0013 is now **0014** —
 
 ## 8. Architectural decision — Redis / external caching layer (evaluated 2026-09-10)
 
+> **RAWRZ supersession (M0, 2026-09-11).** This verdict is **superseded** by the RAWRZ
+> master spec §4 (decisions D7–D12): a shared, self-hosted Redis instance is part of the
+> target state, so the revisit trigger recorded below is invoked. Two findings also close
+> with it: **F-11** (sessions are never swept) and **F-39** (a restart clears sessions)
+> are resolved by Redis-backed sessions per master spec §7. M0 itself changes no runtime
+> behavior — Redis lands in M1, not in the migration milestone.
+
 **Verdict: no Redis (or any external cache daemon) for V1.** Decision recorded
 here so it isn't re-litigated silently.
 

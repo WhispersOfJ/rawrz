@@ -1,6 +1,6 @@
 # Migrating from media-stack
 
-> **Historical** — this merge completed 2026-08-26 (see [HISTORY.md](../../HISTORY.md#pre-merge-history)).
+> **Historical** — this merge completed 2026-08-26 (see [HISTORY.md](../HISTORY.md#pre-merge-history)).
 > Kept for reference if the migration ever needs to be re-run; the stack today is 29 services.
 
 Moving an existing media-stack deployment into The Bear Cave. The goal: zero data loss,

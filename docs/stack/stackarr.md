@@ -38,7 +38,7 @@ RomM, BookOrbit, Transmission, qBittorrent, Postgres, Cloudflare.
 - **It answers the Docker-socket problem better than raw Docker MCP servers:**
   a typed, approval-gated action surface is far safer than giving an agent a
   generic `docker exec`. This is the same CRITICAL finding
-  ([HISTORY.md](../HISTORY.md#control-panel-django--archived) — the writable-socket finding) that killed the control-panel's writable socket — but
+  ([HISTORY.md](HISTORY.md#control-panel-django--archived) — the writable-socket finding) that killed the control-panel's writable socket — but
   Stackarr's design is the socket *with guardrails*.
 - **Chat-led setup** can dry-run before applying anything (the exact
   cautious-operations posture this repo requires).
@@ -61,13 +61,13 @@ RomM, BookOrbit, Transmission, qBittorrent, Postgres, Cloudflare.
 ## What adoption would take
 
 When it matures (re-evaluate at ≥1.0, or when it shows sustained release
-cadence), adoption is a standard expansion per [HISTORY.md](../HISTORY.md#the-2026-08-28-expansion):
+cadence), adoption is a standard expansion per [HISTORY.md](HISTORY.md#the-2026-08-28-expansion):
 
 1. **Compose entry** — new `stackarr` service on port 7777, bind to loopback
    first (`STACKARR_BIND_IP=127.0.0.1`), mount `/var/run/docker.sock`,
    pin `polyphonic/stackarr:<exact-version>` (no `:alpha`), `.env` vars.
 2. **Security review** — confirm the socket mount against the writable-socket
-   guidance in [HISTORY.md](../HISTORY.md#control-panel-django--archived); keep the MCP endpoint local-stdio only; no Traefik
+   guidance in [HISTORY.md](HISTORY.md#control-panel-django--archived); keep the MCP endpoint local-stdio only; no Traefik
    exposure of the dashboard until authentication exists.
 3. **CVE gate** — add the pinned image to the trivy scan workflow's image
    list and the `.github/trivy-baseline.json`; it must pass the CRITICAL gate

@@ -1,7 +1,7 @@
 # Task Worktree Lifecycle
 
 The canonical way to make any change to this repository, per the
-[AGENTS.md Worktree Discipline](../AGENTS.md): one task-named worktree per
+[AGENTS.md Worktree Discipline](AGENTS.md): one task-named worktree per
 task, never mixed with unrelated work, delivered to `main` via a pull
 request. `main` is branch-protected, so every change flows through this
 cycle.

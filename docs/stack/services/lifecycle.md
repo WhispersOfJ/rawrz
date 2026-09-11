@@ -96,7 +96,7 @@ digest's DB/footprint gates. Removed from the "Retired services" table and
   (qBittorrent / Deluge / Transmission / rTorrent). This stack is Usenet-only, and with
   no SABnzbd-compatible client there was nothing for it to monitor, so it was removed
   end to end (commit `4604423`).
-- **Watcher:** [`.github/workflows/cleanuparr-sabnzbd-watch.yml`](../../.github/workflows/cleanuparr-sabnzbd-watch.yml)
+- **Watcher:** [`.github/workflows/cleanuparr-sabnzbd-watch.yml`](../../../.github/workflows/cleanuparr-sabnzbd-watch.yml)
   — daily 06:23 UTC + manual dispatch. It reads the latest upstream
   `Cleanuparr/Cleanuparr` release; when the release notes mention SABnzbd/Usenet it
   opens a `cleanuparr-adopt` issue in this repo (with the full re-adoption checklist)
