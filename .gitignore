@@ -1,6 +1,9 @@
 # ============================================================================
-# The Bear Cave — .gitignore
+# RAWRZ — .gitignore
 # ============================================================================
+# Union of the three imported repositories' rules (The Bear Cave stack, the
+# movie-rpg crate, and cave-deck). The sections below keep each rule's purpose
+# so the consolidation is auditable.
 
 # Environment and secrets
 .env
@@ -90,3 +93,24 @@ temp/
 
 # db_growth_trend.py runtime sample history (TODO.md #5)
 .cache/
+
+# ============================================================================
+# Imported components (RAWRZ RPG at backend/rpg, RAWRZ Deck at backend/deck)
+# ============================================================================
+
+# Rust build output for both crates (backend/rpg/target,
+# backend/deck/backend/target); Cargo.lock stays tracked for applications.
+**/target/
+*.rs.bk
+
+# Node / frontend build output (backend/deck/frontend)
+**/node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Imported application runtime state (Deck env backups, scratch SQLite/WAL)
+.data/
+*.db
+*.db-wal
+*.db-shm

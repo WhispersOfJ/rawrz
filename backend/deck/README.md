@@ -13,17 +13,20 @@ Python scripts. Spec of record: `thebearcave/cave-deck-spec.md` (this repo is it
 ```
 backend/          axum server — REST + WebSocket (spec Appendix D is the contract)
 frontend/         React SPA served as embedded static assets by the backend binary
-catalog/          catalog.yaml (100 curated containers) + retired-registry.lock + validator
-parity/           parity.yaml — every retired function → GUI feature ID (spec Appendix C)
 host-shim/        (M3+) privileged systemd helper the backend calls over a Unix socket
-.github/          CI (SHA-pinned actions), release-please, dependabot
 ```
+
+After the RAWRZ M0 relocation, the shared catalog lives at the repository-root
+`catalog/`, the parity contract at `parity/parity.yaml`, and the unified CI +
+release configuration at the repository root (this directory no longer carries
+its own `.github/` or release-please files).
 
 ## Feature IDs
 
 Every route is tagged with the feature IDs it serves (header `x-cave-deck-features`)
-and every ID must be served — `catalog/validate.py` and the `api-contract` CI job
-enforce both directions against `parity/parity.yaml` (spec §D.4/D.6).
+and every ID must be served — the root `catalog/validate.py` and
+`scripts/check_api_contract.py` and the unified CI `api-contract` step enforce
+both directions against `parity/parity.yaml` (spec §D.4/D.6).
 
 ## Development
 
@@ -33,13 +36,16 @@ cd backend && cargo run            # axum on :7780 (stub mode — no docker sock
 cargo test && cargo clippy && cargo fmt --check
 
 # frontend
-cd frontend && npm install
+cd frontend && npm ci               # Node 20+ (package-lock.json is authoritative)
 npm run dev                        # vite dev server, proxies /api to :7780
-npm test && npm run build          # vitest + tsc + production bundle
+npm test -- --run && npm run build # vitest + tsc + production bundle
+```
 
-# catalog
+From the RAWRZ repository root:
+
+```bash
 python3 catalog/validate.py        # schema + port collisions + retired-registry
-python3 scripts/check_api_contract.py backend/src frontend/src parity/parity.yaml
+python3 scripts/check_api_contract.py
 ```
 
 ## Deployment (M0)

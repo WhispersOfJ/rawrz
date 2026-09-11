@@ -18,9 +18,11 @@ from pathlib import Path
 
 import yaml
 
+# The checker lives at the repository root after the M0 relocation; the Deck
+# backend and frontend it inspects are now under backend/deck/.
 ROOT = Path(__file__).parent.parent
-BACKEND_SRC = ROOT / "backend" / "src"
-FRONTEND_SRC = ROOT / "frontend" / "src"
+BACKEND_SRC = ROOT / "backend" / "deck" / "backend" / "src"
+FRONTEND_SRC = ROOT / "backend" / "deck" / "frontend" / "src"
 
 ROUTE_DECL_RE = re.compile(r"features:\s*\[([^\]]*)\]")
 # Rust doc attrs arrive with escaped quotes (\"id\") — tolerate an optional
