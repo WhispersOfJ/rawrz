@@ -4,7 +4,7 @@
 # test (backend/rpg/tests/store_proof.rs) against it, and always removes the
 # container. Idempotent: safe to re-run.
 #
-# Usage: scripts/scratch_pg_proof.sh
+# Usage: backend/rpg/scripts/scratch_pg_proof.sh (run from the RAWRZ checkout)
 set -euo pipefail
 
 CONTAINER=movie-rpg-scratch-pg
@@ -47,5 +47,5 @@ wait_ready
 docker exec "$CONTAINER" pg_isready -U "$USER_NAME" -d "$DB" >/dev/null
 
 echo "==> running the store proof against scratch postgres"
-cd "$(dirname "$0")/../backend/rpg"
+cd "$(dirname "$0")/.."
 RPG_DB_URL="$URL" cargo test --test store_proof -- --nocapture

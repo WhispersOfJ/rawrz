@@ -139,7 +139,9 @@ struct State {
 }
 
 static CATALOG: OnceLock<Mutex<Option<State>>> = OnceLock::new();
-const EMBEDDED: &str = include_str!("../../catalog/catalog.yaml");
+// The shared catalog lives at the repository root after the M0 relocation
+// (it describes the whole stack, not just the Deck).
+const EMBEDDED: &str = include_str!("../../../../catalog/catalog.yaml");
 
 fn slot() -> &'static Mutex<Option<State>> {
     CATALOG.get_or_init(|| Mutex::new(None))
