@@ -7,9 +7,417 @@
 
 use crate::persistence::PostgresContentStore;
 use crate::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_postgres::Transaction;
+
+pub const CHARACTER_WIZARD_FACTS_SQL: &str = r#"
+SELECT COALESCE(cs.level, 1)::bigint,
+       (SELECT count(*) FROM watch_orders wo
+        WHERE wo.character_id = c.id AND wo.status = 'completed')::bigint,
+       (SELECT count(*) FROM character_achievements ca
+        WHERE ca.character_id = c.id)::bigint,
+       COALESCE(cs.best_streak_days, 0)::bigint,
+       COALESCE(cs.genres_accessed, 0)::bigint
+FROM characters c
+LEFT JOIN character_state cs ON cs.character_id = c.id
+WHERE c.account_id = $1
+"#;
+
+pub const RESOURCE_STATE_SQL: &str = r#"
+SELECT preview_tokens, streak_wards, streak_ward_last_granted_local_date::text
+FROM character_wizard_resources
+WHERE character_id = $1
+"#;
+
+pub const SPELL_DEFINITIONS_SQL: &str = r#"
+SELECT id, slug, display_name, description, effect_type, parameters,
+       unlock_kind, unlock_target, charge_cap
+FROM spells
+ORDER BY id
+"#;
+
+pub const SPELL_UNLOCK_FACTS_SQL: &str = r#"
+SELECT c.id, s.id, s.slug, COALESCE(s.unlock_target, 0),
+       COALESCE(cs.level, 1),
+       (SELECT count(*) FROM watch_orders wo
+        WHERE wo.character_id = c.id AND wo.status = 'completed'),
+       (SELECT count(*) FROM character_achievements ca
+        WHERE ca.character_id = c.id),
+       COALESCE(cs.best_streak_days, 0),
+       COALESCE(cs.genres_accessed, 0)
+FROM characters c
+CROSS JOIN spells s
+LEFT JOIN character_state cs ON cs.character_id = c.id
+ORDER BY c.id, s.id
+"#;
+
+pub const SPELL_STATE_SQL: &str = r#"
+SELECT s.id, s.slug, s.display_name, s.description, s.effect_type,
+       s.parameters, s.unlock_kind, s.unlock_target, s.charge_cap,
+       EXISTS (
+         SELECT 1 FROM character_spell_events unlock_event
+         WHERE unlock_event.character_id = $1 AND unlock_event.spell_id = s.id
+           AND unlock_event.event_type = 'unlock'
+           AND unlock_event.outcome = 'unlocked'
+       ) AS unlocked,
+       sa.selected_genre_id, selected.name, sa.pending_genre_id,
+       pending.name, sa.affinity_progress_points,
+       sa.last_affinity_change_local_date::text,
+       (SELECT count(*) FROM character_spell_ledger grant_row
+        WHERE grant_row.character_id = $1 AND grant_row.spell_id = s.id
+          AND grant_row.entry_type = 'grant'
+          AND grant_row.spent_at IS NULL
+          AND grant_row.reserved_at IS NULL)::bigint,
+       (SELECT count(*) FROM character_spell_ledger reserved_row
+        WHERE reserved_row.character_id = $1 AND reserved_row.spell_id = s.id
+          AND reserved_row.entry_type = 'grant'
+          AND reserved_row.spent_at IS NULL
+          AND reserved_row.reserved_at IS NOT NULL)::bigint
+FROM spells s
+LEFT JOIN spell_affinities sa
+  ON sa.character_id = $1 AND sa.spell_id = s.id
+LEFT JOIN genres selected ON selected.id = sa.selected_genre_id
+LEFT JOIN genres pending ON pending.id = sa.pending_genre_id
+ORDER BY s.id
+"#;
+
+pub const PENDING_AFFINITIES_SQL: &str = r#"
+SELECT sa.spell_id, s.slug, sa.pending_genre_id, pending.name,
+       sa.pending_event_key
+FROM spell_affinities sa
+JOIN spells s ON s.id = sa.spell_id
+JOIN genres pending ON pending.id = sa.pending_genre_id
+WHERE sa.character_id = $1 AND sa.pending_genre_id IS NOT NULL
+ORDER BY sa.spell_id
+FOR UPDATE OF sa
+"#;
+
+pub const AVAILABLE_SPELL_GRANT_SQL: &str = r#"
+SELECT id
+FROM character_spell_ledger
+WHERE character_id = $1 AND spell_id = $2
+  AND entry_type = 'grant'
+  AND spent_at IS NULL AND reserved_at IS NULL
+ORDER BY id
+LIMIT 1
+FOR UPDATE
+"#;
+
+pub const ARMED_SPELL_CAST_SQL: &str = r#"
+SELECT cast_row.id, cast_row.grant_id, grant_row.id
+FROM character_spell_ledger cast_row
+JOIN character_spell_ledger grant_row ON grant_row.id = cast_row.grant_id
+WHERE cast_row.character_id = $1 AND cast_row.spell_id = $2
+  AND cast_row.entry_type = 'cast' AND cast_row.outcome = 'armed'
+  AND grant_row.spent_at IS NULL AND grant_row.reserved_at IS NOT NULL
+ORDER BY cast_row.id
+LIMIT 1
+FOR UPDATE OF cast_row, grant_row
+"#;
+
+pub const RESOURCE_EVENT_SQL: &str = r#"
+INSERT INTO character_resource_events
+  (character_id, resource, event_type, source, source_event_key,
+   delta, balance_after, outcome, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (character_id, resource, event_type, source_event_key) DO NOTHING
+"#;
+
+pub const SPELL_EVENT_SQL: &str = r#"
+INSERT INTO character_spell_events
+  (character_id, spell_id, event_type, source, source_event_key,
+   outcome, reason, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (character_id, spell_id, event_type, source_event_key) DO NOTHING
+"#;
+
+pub const SPELL_LEDGER_INSERT_SQL: &str = r#"
+INSERT INTO character_spell_ledger
+  (character_id, spell_id, entry_type, source, source_event_key,
+   affinity_points, spent_at, reserved_at, reserved_event_key,
+   applied_at, target_order_id, target_item_id, grant_id, outcome, metadata)
+VALUES ($1, $2, $3, $4, $5, $6,
+        CASE WHEN $7 THEN now() ELSE NULL END,
+        CASE WHEN $8 THEN now() ELSE NULL END,
+        $9, CASE WHEN $10 THEN now() ELSE NULL END,
+        $11, $12, $13, $14, $15)
+RETURNING id
+"#;
+
+pub const SPELL_AFFINITY_TARGET_SQL: &str = r#"
+SELECT g.id, g.name
+FROM genres g
+WHERE regexp_replace(lower(g.name), '[^a-z0-9]+', '-', 'g') = lower($1)
+"#;
+
+pub const SPELL_ACCESSIBLE_GENRE_SQL: &str = r#"
+SELECT g.id, g.name
+FROM genres g
+JOIN genre_access ga ON ga.genre_id = g.id AND ga.character_id = $1
+WHERE regexp_replace(lower(g.name), '[^a-z0-9]+', '-', 'g') = lower($2)
+"#;
+
+pub const SPELL_AFFINITY_ROW_SQL: &str = r#"
+SELECT sa.spell_id, sa.selected_genre_id, sa.pending_genre_id,
+       sa.last_affinity_change_local_date, sa.pending_event_key
+FROM spell_affinities sa
+WHERE sa.character_id = $1 AND sa.spell_id = $2
+FOR UPDATE
+"#;
+
+pub const ORDER_NEXT_UNRESOLVED_SQL: &str = r#"
+SELECT i.id, i.position,
+       (SELECT max(fin.position) FROM watch_order_items fin WHERE fin.order_id = i.order_id) AS final_position
+FROM watch_order_items i
+JOIN watch_orders wo ON wo.id = i.order_id
+JOIN characters ch ON ch.id = wo.character_id
+LEFT JOIN watches w
+  ON w.character_id = wo.character_id AND w.content_id = i.content_id
+WHERE ch.account_id = $1 AND wo.id = $2 AND wo.status = 'active'
+  AND i.skipped_at IS NULL AND w.id IS NULL
+ORDER BY i.position
+LIMIT 1
+FOR UPDATE OF i
+"#;
+
+pub const ORDER_NEXT_SPELL_REVEAL_SQL: &str = r#"
+SELECT i.id, i.position, i.order_id,
+       (SELECT max(fin.position) FROM watch_order_items fin WHERE fin.order_id = i.order_id) AS final_position
+FROM watch_order_items i
+JOIN watch_orders wo ON wo.id = i.order_id
+JOIN characters ch ON ch.id = wo.character_id
+LEFT JOIN watches w
+  ON w.character_id = wo.character_id AND w.content_id = i.content_id
+WHERE ch.account_id = $1 AND wo.id = $2 AND wo.status = 'active'
+  AND i.position > 1 AND i.skipped_at IS NULL AND w.id IS NULL
+  AND i.position < (SELECT max(fin.position) FROM watch_order_items fin WHERE fin.order_id = i.order_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM watch_order_spell_reveals sr
+    WHERE sr.order_id = i.order_id AND sr.item_id = i.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM watch_order_items prev
+    LEFT JOIN watches prev_watch
+      ON prev_watch.character_id = wo.character_id AND prev_watch.content_id = prev.content_id
+    WHERE prev.order_id = i.order_id AND prev.position = i.position - 1
+      AND (prev_watch.id IS NOT NULL OR prev.skipped_at IS NOT NULL)
+  )
+ORDER BY i.position
+LIMIT 1
+FOR UPDATE OF i
+"#;
+
+pub const SPELL_ORDER_TARGET_SQL: &str = r#"
+SELECT wo.id
+FROM watch_orders wo
+JOIN characters ch ON ch.id = wo.character_id
+WHERE ch.account_id = $1 AND wo.id = $2 AND wo.status = 'active'
+  AND NOT EXISTS (
+    SELECT 1 FROM watch_order_items i
+    LEFT JOIN watches w
+      ON w.character_id = wo.character_id AND w.content_id = i.content_id
+    WHERE i.order_id = wo.id AND (i.skipped_at IS NOT NULL OR w.id IS NOT NULL)
+  )
+FOR UPDATE OF wo
+"#;
+
+pub const SPELL_CAST_UPDATE_GRANT_SQL: &str = r#"
+UPDATE character_spell_ledger
+SET spent_at = now(), reserved_at = NULL, reserved_event_key = NULL,
+    applied_at = now()
+WHERE id = $1 AND entry_type = 'grant' AND spent_at IS NULL
+RETURNING id
+"#;
+
+pub const SPELL_CAST_RESERVE_GRANT_SQL: &str = r#"
+UPDATE character_spell_ledger
+SET reserved_at = now(), reserved_event_key = $2
+WHERE id = $1 AND entry_type = 'grant'
+  AND spent_at IS NULL AND reserved_at IS NULL
+RETURNING id
+"#;
+
+pub const ARMED_CASTS_FOR_WATCH_SQL: &str = r#"
+SELECT cast_row.id, cast_row.spell_id, spells.slug, cast_row.grant_id
+FROM character_spell_ledger cast_row
+JOIN spells ON spells.id = cast_row.spell_id
+JOIN character_spell_ledger grant_row ON grant_row.id = cast_row.grant_id
+WHERE cast_row.character_id = $1 AND cast_row.entry_type = 'cast'
+  AND cast_row.outcome = 'armed'
+  AND (
+    (spells.slug = 'chronicle_ward'
+      AND grant_row.spent_at IS NULL AND grant_row.reserved_at IS NOT NULL)
+    OR
+    (spells.slug = 'focus_sigil'
+      AND grant_row.spent_at IS NOT NULL)
+  )
+ORDER BY cast_row.id
+FOR UPDATE OF cast_row, grant_row
+"#;
+
+pub const ARMED_CHRONICLE_CAST_SQL: &str = r#"
+SELECT cast_row.id, cast_row.grant_id
+FROM character_spell_ledger cast_row
+JOIN spells ON spells.id = cast_row.spell_id
+JOIN character_spell_ledger grant_row ON grant_row.id = cast_row.grant_id
+WHERE cast_row.character_id = $1 AND cast_row.spell_id = spells.id
+  AND spells.slug = 'chronicle_ward'
+  AND cast_row.entry_type = 'cast' AND cast_row.outcome = 'armed'
+  AND grant_row.spent_at IS NULL AND grant_row.reserved_at IS NOT NULL
+ORDER BY cast_row.id
+LIMIT 1
+FOR UPDATE OF cast_row, grant_row
+"#;
+
+pub const FOCUS_CAST_FOR_WATCH_SQL: &str = r#"
+SELECT cast_row.id, cast_row.grant_id
+FROM character_spell_ledger cast_row
+JOIN spells ON spells.id = cast_row.spell_id
+JOIN character_spell_ledger grant_row ON grant_row.id = cast_row.grant_id
+WHERE cast_row.character_id = $1 AND spells.slug = 'focus_sigil'
+  AND cast_row.entry_type = 'cast' AND cast_row.outcome = 'armed'
+  AND grant_row.spent_at IS NOT NULL
+ORDER BY cast_row.id
+LIMIT 1
+FOR UPDATE OF cast_row, grant_row
+"#;
+
+pub const APPLY_ARMED_CAST_SQL: &str = r#"
+UPDATE character_spell_ledger
+SET spent_at = now(), reserved_at = NULL, reserved_event_key = NULL,
+    applied_at = now()
+WHERE id = $1 AND entry_type = 'grant' AND spent_at IS NULL
+"#;
+
+pub const MARK_ARMED_CAST_SQL: &str = r#"
+UPDATE character_spell_ledger
+SET outcome = 'applied', applied_at = now(), metadata = $2
+WHERE id = $1 AND entry_type = 'cast' AND outcome = 'armed'
+"#;
+
+pub const STUDY_TARGET_CLEAR_SQL: &str = r#"
+UPDATE watch_orders wo
+SET study_target = false
+FROM characters ch
+WHERE wo.character_id = ch.id AND ch.account_id = $1
+  AND wo.status = 'active'
+"#;
+
+pub const STUDY_TARGET_SET_SQL: &str = r#"
+UPDATE watch_orders wo
+SET study_target = true
+FROM characters ch
+WHERE wo.id = $2 AND wo.character_id = ch.id AND ch.account_id = $1
+  AND wo.status = 'active'
+"#;
+
+pub const PREVIEW_TARGET_SQL: &str = ORDER_NEXT_SPELL_REVEAL_SQL;
+
+pub const WATCH_AFFINITY_TARGETS_SQL: &str = r#"
+SELECT sa.spell_id, s.slug, sa.affinity_progress_points,
+       s.charge_cap,
+       (SELECT count(*) FROM character_spell_ledger grant_row
+        WHERE grant_row.character_id = sa.character_id
+          AND grant_row.spell_id = sa.spell_id
+          AND grant_row.entry_type = 'grant'
+          AND grant_row.spent_at IS NULL
+          AND grant_row.reserved_at IS NULL)::bigint
+FROM spell_affinities sa
+JOIN spells s ON s.id = sa.spell_id
+JOIN genres g ON g.id = sa.selected_genre_id
+JOIN content c ON c.id = $2
+WHERE sa.character_id = $1
+  AND sa.selected_genre_id IS NOT NULL
+  AND c.genres ? g.name
+  AND EXISTS (
+    SELECT 1 FROM character_spell_events unlock_event
+    WHERE unlock_event.character_id = sa.character_id
+      AND unlock_event.spell_id = sa.spell_id
+      AND unlock_event.event_type = 'unlock'
+      AND unlock_event.outcome = 'unlocked'
+  )
+FOR UPDATE OF sa
+"#;
+
+pub const AFFINITY_UPDATE_SQL: &str = r#"
+UPDATE spell_affinities
+SET affinity_progress_points = $3, updated_at = now()
+WHERE character_id = $1 AND spell_id = $2
+"#;
+
+pub const AFFINITY_LEDGER_INSERT_SQL: &str = r#"
+INSERT INTO character_spell_ledger
+  (character_id, spell_id, entry_type, source, source_event_key,
+   affinity_points, outcome, metadata)
+VALUES ($1, $2, 'affinity', 'watch', $3, $4, 'applied', $5)
+ON CONFLICT (character_id, spell_id, entry_type, source_event_key) DO NOTHING
+"#;
+
+pub const SPELL_GRANT_INSERT_SQL: &str = r#"
+INSERT INTO character_spell_ledger
+  (character_id, spell_id, entry_type, source, source_event_key,
+   affinity_points, outcome, metadata)
+VALUES ($1, $2, 'grant', 'affinity', $3, $4, 'granted', $5)
+ON CONFLICT (character_id, spell_id, entry_type, source_event_key) DO NOTHING
+"#;
+
+pub const SPELL_OVERFLOW_INSERT_SQL: &str = r#"
+INSERT INTO character_spell_ledger
+  (character_id, spell_id, entry_type, source, source_event_key,
+   affinity_points, outcome, metadata)
+VALUES ($1, $2, 'overflow_noop', 'affinity', $3, $4, 'dropped', $5)
+ON CONFLICT (character_id, spell_id, entry_type, source_event_key) DO NOTHING
+"#;
+
+pub const RESOURCE_SEED_SQL: &str = r#"
+INSERT INTO character_wizard_resources (character_id)
+VALUES ($1)
+ON CONFLICT (character_id) DO NOTHING
+"#;
+
+pub const RESOURCE_PREVIEW_GRANT_SQL: &str = r#"
+UPDATE character_wizard_resources
+SET preview_tokens = preview_tokens + 1, updated_at = now()
+WHERE character_id = $1 AND preview_tokens < 1
+RETURNING preview_tokens
+"#;
+
+pub const RESOURCE_WARD_GRANT_SQL: &str = r#"
+UPDATE character_wizard_resources
+SET streak_wards = streak_wards + 1,
+    streak_ward_last_granted_local_date = $2,
+    updated_at = now()
+WHERE character_id = $1 AND streak_wards < 1
+RETURNING streak_wards
+"#;
+
+pub const RESOURCE_WARD_COOLDOWN_GRANT_SQL: &str = r#"
+UPDATE character_wizard_resources
+SET streak_wards = 1,
+    streak_ward_last_granted_local_date = $2,
+    updated_at = now()
+WHERE character_id = $1
+  AND streak_wards = 0
+  AND streak_ward_last_granted_local_date IS NOT NULL
+  AND streak_ward_last_granted_local_date <= $2 - 30
+RETURNING streak_wards
+"#;
+
+pub const RESOURCE_PREVIEW_SPEND_SQL: &str = r#"
+UPDATE character_wizard_resources
+SET preview_tokens = preview_tokens - 1, updated_at = now()
+WHERE character_id = $1 AND preview_tokens > 0
+RETURNING preview_tokens
+"#;
+
+pub const RESOURCE_WARD_SPEND_SQL: &str = r#"
+UPDATE character_wizard_resources
+SET streak_wards = streak_wards - 1, updated_at = now()
+WHERE character_id = $1 AND streak_wards > 0
+RETURNING streak_wards
+"#;
 
 pub const ARCHETYPE_BOOTSTRAP_SQL: &str = r#"
 INSERT INTO character_archetypes (character_id, archetype_id, unlock_source_event_key)

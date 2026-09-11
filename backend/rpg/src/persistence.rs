@@ -2089,7 +2089,7 @@ mod tests {
         assert!(SCHEMA_MIGRATIONS_SQL.contains("CREATE TABLE IF NOT EXISTS schema_migrations"));
         assert!(MIGRATION_LOOKUP_SQL.contains("SELECT version FROM schema_migrations"));
         assert!(MIGRATION_RECORD_SQL.contains("INSERT INTO schema_migrations"));
-        assert_eq!(MIGRATIONS.len(), 13);
+        assert_eq!(MIGRATIONS.len(), 14);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, "0002_sync_state");
         assert_eq!(MIGRATIONS[2].0, "0003_accounts_characters");
@@ -2103,6 +2103,7 @@ mod tests {
         assert_eq!(MIGRATIONS[10].0, "0011_watch_orders");
         assert_eq!(MIGRATIONS[11].0, "0012_wizard_archetypes");
         assert_eq!(MIGRATIONS[12].0, "0013_watches_unique_award");
+        assert_eq!(MIGRATIONS[13].0, "0014_wizard_resources_spells");
 
         assert_eq!(
             migration_summary(0, 1),

@@ -32,6 +32,9 @@ pub const WIZARD_ARCHETYPES_MIGRATION: &str =
 pub const WATCHES_UNIQUE_AWARD_VERSION: &str = "0013_watches_unique_award";
 pub const WATCHES_UNIQUE_AWARD_MIGRATION: &str =
     include_str!("../migrations/0013_watches_unique_award.sql");
+pub const WIZARD_RESOURCES_SPELLS_VERSION: &str = "0014_wizard_resources_spells";
+pub const WIZARD_RESOURCES_SPELLS_MIGRATION: &str =
+    include_str!("../migrations/0014_wizard_resources_spells.sql");
 
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -56,6 +59,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         WATCHES_UNIQUE_AWARD_VERSION,
         WATCHES_UNIQUE_AWARD_MIGRATION,
     ),
+    (
+        WIZARD_RESOURCES_SPELLS_VERSION,
+        WIZARD_RESOURCES_SPELLS_MIGRATION,
+    ),
 ];
 
 #[cfg(test)]
@@ -66,6 +73,7 @@ mod tests {
         INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
         SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
         WATCH_ORDERS_MIGRATION, WIZARD_ARCHETYPES_MIGRATION,
+        WIZARD_RESOURCES_SPELLS_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -91,7 +99,7 @@ mod tests {
 
     #[test]
     fn exposes_ordered_migration_catalog_with_sync_state_upgrade() {
-        assert_eq!(MIGRATIONS.len(), 13);
+        assert_eq!(MIGRATIONS.len(), 14);
         assert_eq!(MIGRATIONS[0].0, "0001_content_provider_cache");
         assert_eq!(MIGRATIONS[1].0, SYNC_STATE_VERSION);
         assert_eq!(MIGRATIONS[2].0, super::ACCOUNTS_CHARACTERS_VERSION);
@@ -105,6 +113,7 @@ mod tests {
         assert_eq!(MIGRATIONS[10].0, super::WATCH_ORDERS_VERSION);
         assert_eq!(MIGRATIONS[11].0, super::WIZARD_ARCHETYPES_VERSION);
         assert_eq!(MIGRATIONS[12].0, super::WATCHES_UNIQUE_AWARD_VERSION);
+        assert_eq!(MIGRATIONS[13].0, super::WIZARD_RESOURCES_SPELLS_VERSION);
         assert!(MIGRATIONS[0].0 < MIGRATIONS[1].0 && MIGRATIONS[1].0 < MIGRATIONS[2].0);
         assert!(MIGRATIONS[2].0 < MIGRATIONS[3].0 && MIGRATIONS[3].0 < MIGRATIONS[4].0);
         assert!(MIGRATIONS[4].0 < MIGRATIONS[5].0 && MIGRATIONS[5].0 < MIGRATIONS[6].0);
@@ -112,6 +121,9 @@ mod tests {
         assert!(MIGRATIONS[8].0 < MIGRATIONS[9].0 && MIGRATIONS[9].0 < MIGRATIONS[10].0);
         assert!(MIGRATIONS[10].0 < MIGRATIONS[11].0);
         assert!(MIGRATIONS[11].0 < MIGRATIONS[12].0);
+        assert!(MIGRATIONS[12].0 < MIGRATIONS[13].0);
+        assert!(WIZARD_RESOURCES_SPELLS_MIGRATION.contains("CREATE TABLE spells ("));
+        assert!(WIZARD_RESOURCES_SPELLS_MIGRATION.contains("CREATE TABLE spell_affinities ("));
         assert!(SYNC_STATE_MIGRATION.contains("CREATE TABLE sync_state ("));
         assert!(SYNC_STATE_MIGRATION.contains("PRIMARY KEY (character_id, source)"));
     }
