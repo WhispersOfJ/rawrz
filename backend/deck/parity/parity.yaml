@@ -1,0 +1,847 @@
+version: 1
+feature_count: 48
+features:
+- cred.indexers
+- ctnr.images
+- ctnr.lifecycle
+- dash.feed
+- dash.overview
+- dash.rows
+- host.aur
+- host.backup
+- host.btrfs
+- host.cron
+- host.disk
+- host.drift
+- host.firewall
+- host.git
+- host.journal
+- host.mem
+- host.perms
+- host.pkg
+- host.reboot
+- host.residue
+- host.services
+- host.smart
+- host.ssh
+- host.uptime
+- lib.health
+- lib.lists
+- lib.prune
+- lib.watchable
+- notif.digest
+- notif.discord
+- notif.test
+- nzbd.dedup
+- nzbd.deletefail
+- nzbd.history
+- nzbd.mount
+- nzbd.queue
+- nzbd.stats
+- plex.analysis
+- plex.backup
+- plex.butler
+- plex.cleanup
+- plex.libraries
+- plex.maintenance
+- plex.markers
+- plex.sessions
+- stick.backlog
+- stick.decide
+- stick.queue
+operations:
+- function: stack-status
+  layer: stack
+  feature: dash.overview
+  safety: RO
+  purpose: Container status overview
+- function: stack-container
+  layer: stack
+  feature: ctnr.lifecycle
+  safety: EXC
+  purpose: Single-container restart/stop/start
+- function: stack-restart-all
+  layer: stack
+  feature: ctnr.lifecycle
+  safety: EXC
+  purpose: Restart the whole stack
+- function: stack-top
+  layer: stack
+  feature: dash.overview
+  safety: RO
+  purpose: Live docker stats
+- function: stack-version
+  layer: stack
+  feature: dash.overview
+  safety: RO
+  purpose: Stack versions
+- &id001
+  function: stack-help
+  layer: stack
+  feature: null
+  safety: retire
+  purpose: Function help index
+  retire_note: UI-native
+- function: stack-arr-queue-errors
+  layer: stack
+  feature: stick.queue
+  safety: RO
+  purpose: Queue items with error messages
+- function: stack-arr-backlog
+  layer: stack
+  feature: stick.backlog
+  safety: RO
+  purpose: Missing/cutoff backlog detail
+- function: stack-arr-recently-added
+  layer: stack
+  feature: dash.rows
+  safety: RO
+  purpose: Recently imported media
+- function: stack-arr-toggle-search
+  layer: stack
+  feature: stick.decide
+  safety: EXC
+  purpose: Toggle monitoring + trigger search
+- function: stack-arr-blocklist
+  layer: stack
+  feature: lib.health
+  safety: RO
+  purpose: View release blocklist
+- function: stack-arr-clear-blocklist
+  layer: stack
+  feature: lib.health
+  safety: EXC
+  purpose: Clear blocklist entries
+- function: stack-arr-missing-aired
+  layer: stack
+  feature: stick.backlog
+  safety: RO
+  purpose: Aired-but-missing episodes
+- function: stack-cutoff-unmet
+  layer: stack
+  feature: stick.backlog
+  safety: RO
+  purpose: Quality-cutoff unmet items
+- function: stack-arr-import
+  layer: stack
+  feature: stick.decide
+  safety: EXC
+  purpose: Trigger manual import scan
+- function: stack-arr-import-all
+  layer: stack
+  feature: stick.decide
+  safety: EXC
+  purpose: Import scan across all items
+- function: stack-arr-import-candidates
+  layer: stack
+  feature: stick.queue
+  safety: RO
+  purpose: List import candidates
+- function: stack-arr-import-starvation
+  layer: stack
+  feature: stick.backlog
+  safety: RO
+  purpose: Starvation-risk backlog view
+- function: stack-arr-logs
+  layer: stack
+  feature: lib.health
+  safety: RO
+  purpose: '*arr log viewer'
+- function: stack-arr
+  layer: stack
+  feature: stick.decide
+  safety: EXC
+  purpose: 'Dispatcher: rss-sync / search-missing / unstick'
+- function: stack-backlog-status
+  layer: stack
+  feature: stick.backlog
+  safety: RO
+  purpose: Compact backlog counts
+- function: stack-command-queue-summary
+  layer: stack
+  feature: stick.queue
+  safety: RO
+  purpose: '*arr background command queue'
+- function: stack-import-lists
+  layer: stack
+  feature: lib.lists
+  safety: RO
+  purpose: Import-lists overview
+- function: stack-radarr-health
+  layer: stack
+  feature: lib.health
+  safety: RO
+  purpose: Radarr health-check report
+- function: stack-radarr-prune
+  layer: stack
+  feature: lib.prune
+  safety: EXC
+  purpose: Radarr DB blob/history prune
+- function: stack-sonarr-prune
+  layer: stack
+  feature: lib.prune
+  safety: EXC
+  purpose: Sonarr DB blob/history prune
+- function: stack-prowlarr-indexers
+  layer: stack
+  feature: cred.indexers
+  safety: RO
+  purpose: Indexer status + query rates
+- function: stack-arrival-notify
+  layer: stack
+  feature: notif.discord
+  safety: EXC
+  purpose: Request→arrival Discord pings
+- function: stack-activity-feed
+  layer: stack
+  feature: dash.feed
+  safety: RO
+  purpose: Merged media activity feed
+- function: stack-disk-config-sizes
+  layer: stack
+  feature: host.disk
+  safety: EXC
+  purpose: du over live config trees
+- function: stack-docker-disk-usage
+  layer: stack
+  feature: host.disk
+  safety: RO
+  purpose: docker system df
+- function: stack-disk-reclaim
+  layer: stack
+  feature: host.disk
+  safety: EXC
+  purpose: Guarded prune/reclaim
+- function: stack-nzbdav-dedup-check
+  layer: stack
+  feature: nzbd.dedup
+  safety: EXC
+  purpose: Scan nzbdav history for dupes
+- function: stack-nzbdav-delete-failures
+  layer: stack
+  feature: nzbd.deletefail
+  safety: EXC
+  purpose: Delete failed nzbdav downloads
+- function: stack-mdblist-track
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Track an MDBList
+- function: stack-mdblist-untrack
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Untrack an MDBList
+- function: stack-mdblist-tracked
+  layer: stack
+  feature: lib.lists
+  safety: RO
+  purpose: List tracked MDBLists
+- function: stack-mdblist-import
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Import MDBList items into arrs
+- function: stack-mdblist-history
+  layer: stack
+  feature: lib.lists
+  safety: RO
+  purpose: Import history
+- function: stack-letterboxd-track
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Track a Letterboxd list
+- function: stack-letterboxd-untrack
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Untrack a Letterboxd list
+- function: stack-letterboxd-tracked
+  layer: stack
+  feature: lib.lists
+  safety: RO
+  purpose: List tracked Letterboxd lists
+- function: stack-letterboxd-import
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Import Letterboxd items
+- function: stack-letterboxd-history
+  layer: stack
+  feature: lib.lists
+  safety: RO
+  purpose: Import history
+- function: stack-loop-candidates
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Loop-detection candidate scan
+- function: stack-loop-exclude
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Write exclusion state
+- function: stack-loop-unmonitor
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: Unmonitor looped items
+- function: stack-tmdb-missing
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: TMDb missing lookup
+- function: stack-rating-imdb
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: OMDb rating lookup
+- function: stack-rating-mdblist
+  layer: stack
+  feature: lib.lists
+  safety: EXC
+  purpose: MDBList rating lookup
+- function: stack-maintenance-digest
+  layer: stack
+  feature: notif.digest
+  safety: EXC
+  purpose: Maintenance verification digest
+- function: stack-audit-residue
+  layer: stack
+  feature: host.residue
+  safety: RO
+  purpose: Retired-service residue scan
+- function: stack-config-drift
+  layer: stack
+  feature: host.drift
+  safety: RO
+  purpose: Config/secret/mount drift
+- function: stack-seerr-requests
+  layer: stack
+  feature: dash.rows
+  safety: RO
+  purpose: Open Seerr requests
+- function: stack-notify-test
+  layer: stack
+  feature: notif.test
+  safety: EXC
+  purpose: Test notification
+- function: stack-claude-full-backup
+  layer: stack
+  feature: host.backup
+  safety: EXC
+  purpose: Agent-state backup
+- function: stack-worktree
+  layer: stack
+  feature: host.git
+  safety: EXC
+  purpose: Worktree create/status
+- function: stack-image-check
+  layer: stack
+  feature: ctnr.images
+  safety: RO
+  purpose: Image update check
+- function: stack-perms-check
+  layer: stack
+  feature: host.perms
+  safety: RO
+  purpose: Filesystem perms check
+- function: stack-oom-check
+  layer: stack
+  feature: host.mem
+  safety: RO
+  purpose: OOM-kill scan
+- function: stack-resource-check
+  layer: stack
+  feature: host.mem
+  safety: RO
+  purpose: Host resource check
+- function: stack-log-levels
+  layer: stack
+  feature: lib.health
+  safety: RO
+  purpose: '*arr log-level report'
+- function: stack-nzbdav-queue
+  layer: stack
+  feature: nzbd.queue
+  safety: RO
+  purpose: nzbdav queue view
+- function: stack-nzbdav-history
+  layer: stack
+  feature: nzbd.history
+  safety: RO
+  purpose: nzbdav history
+- function: stack-nzbdav-stats
+  layer: stack
+  feature: nzbd.stats
+  safety: RO
+  purpose: nzbdav stats
+- function: stack-mount-health
+  layer: stack
+  feature: nzbd.mount
+  safety: RO
+  purpose: FUSE mount health
+- function: stack-plex-sessions
+  layer: stack
+  feature: plex.sessions
+  safety: RO
+  purpose: Live sessions
+- function: stack-plex-recently-added
+  layer: stack
+  feature: dash.rows
+  safety: RO
+  purpose: Recently added media
+- function: stack-plex-libraries
+  layer: stack
+  feature: plex.libraries
+  safety: RO
+  purpose: Libraries list
+- function: stack-plex
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: 'Dispatcher: refresh/scan/empty-trash/analyze'
+- function: stack-plex-butler
+  layer: stack
+  feature: plex.butler
+  safety: EXC
+  purpose: Trigger one Butler task
+- function: stack-plex-butler-all
+  layer: stack
+  feature: plex.butler
+  safety: EXC
+  purpose: Full Butler sweep
+- function: stack-plex-duplicates
+  layer: stack
+  feature: plex.libraries
+  safety: RO
+  purpose: Duplicate-asset report
+- function: stack-plex-garbage-collect-media
+  layer: stack
+  feature: plex.cleanup
+  safety: EXC
+  purpose: Orphaned metadata removal
+- function: stack-plex-garbage-collect-blobs
+  layer: stack
+  feature: plex.cleanup
+  safety: EXC
+  purpose: Orphaned artwork removal
+- function: stack-plex-backup-database
+  layer: stack
+  feature: plex.backup
+  safety: EXC
+  purpose: DB backup archive
+- function: stack-plex-automatic-updates
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: Auto-update toggle
+- function: stack-plex-process-assets
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: Asset processing pass
+- function: stack-plex-refresh-epg
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: EPG refresh
+- function: stack-plex-refresh-local-media
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: Local media refresh
+- function: stack-plex-clean-cache-files
+  layer: stack
+  feature: plex.cleanup
+  safety: EXC
+  purpose: Cache-file cleanup
+- function: stack-plex-clean-log-files
+  layer: stack
+  feature: plex.cleanup
+  safety: EXC
+  purpose: Log-file cleanup
+- function: stack-plex-image-clean
+  layer: stack
+  feature: plex.cleanup
+  safety: EXC
+  purpose: PhotoTranscoder cleanup
+- function: stack-plex-deep-media-analysis
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Deep analysis queue
+- function: stack-plex-upgrade-media-analysis
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Upgrade-priority analysis
+- function: stack-plex-music-analysis
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Music analysis
+- function: stack-plex-loudness-analysis
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Loudness analysis
+- function: stack-plex-generate-media-index
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Media index generation
+- function: stack-plex-generate-voice-activity
+  layer: stack
+  feature: plex.markers
+  safety: EXC
+  purpose: Voice-activity markers
+- function: stack-plex-generate-intro-markers
+  layer: stack
+  feature: plex.markers
+  safety: EXC
+  purpose: Intro markers
+- function: stack-plex-generate-credits-markers
+  layer: stack
+  feature: plex.markers
+  safety: EXC
+  purpose: Credits markers
+- function: stack-plex-generate-ad-markers
+  layer: stack
+  feature: plex.markers
+  safety: EXC
+  purpose: Ad markers
+- function: stack-plex-generate-chapter-thumbs
+  layer: stack
+  feature: plex.markers
+  safety: EXC
+  purpose: Chapter thumbnails
+- function: stack-plex-markers
+  layer: stack
+  feature: plex.markers
+  safety: RO
+  purpose: Marker report/view
+- function: stack-plex-updates
+  layer: stack
+  feature: plex.maintenance
+  safety: RO
+  purpose: Plex update check/report
+- function: stack-plex-analyze
+  layer: stack
+  feature: plex.analysis
+  safety: EXC
+  purpose: Queue library analysis
+- function: stack-plex-empty-trash
+  layer: stack
+  feature: plex.maintenance
+  safety: EXC
+  purpose: Empty Plex trash
+- function: stack-plex-refresh-libraries
+  layer: stack
+  feature: plex.libraries
+  safety: EXC
+  purpose: Library metadata refresh
+- function: stack-queue-autofix
+  layer: stack
+  feature: stick.queue
+  safety: EXC
+  purpose: Auto-fix stuck queue items
+- function: stack-sonarr-fix-episode-monitoring
+  layer: stack
+  feature: lib.health
+  safety: EXC
+  purpose: Repair episode monitoring state
+- function: stack-watchable
+  layer: stack
+  feature: lib.watchable
+  safety: RO
+  purpose: '"What''s watchable tonight"'
+- function: stack-unwatched
+  layer: stack
+  feature: lib.watchable
+  safety: RO
+  purpose: Unwatched library view
+- function: stack-recent
+  layer: stack
+  feature: lib.watchable
+  safety: RO
+  purpose: Recent watchable additions
+- function: stack-requests
+  layer: stack
+  feature: lib.watchable
+  safety: RO
+  purpose: Seerr request cross-reference
+- function: cave-sys-disk-free
+  layer: host-bash
+  feature: host.disk
+  safety: RO
+  purpose: Disk free
+- function: cave-sys-mem-pressure
+  layer: host-bash
+  feature: host.mem
+  safety: RO
+  purpose: Memory pressure
+- function: cave-sys-journal-errors
+  layer: host-bash
+  feature: host.journal
+  safety: RO
+  purpose: Journal errors
+- function: cave-sys-journal-size
+  layer: host-bash
+  feature: host.journal
+  safety: RO
+  purpose: Journal size
+- function: cave-sys-uptime-report
+  layer: host-bash
+  feature: host.uptime
+  safety: RO
+  purpose: Uptime report
+- function: cave-sys-service-failed
+  layer: host-bash
+  feature: host.services
+  safety: RO
+  purpose: Failed units
+- function: cave-sys-zombie-check
+  layer: host-bash
+  feature: host.services
+  safety: RO
+  purpose: Zombie processes
+- function: cave-sys-timer-status
+  layer: host-bash
+  feature: host.cron
+  safety: RO
+  purpose: Timer status
+- function: cave-sys-cron-list
+  layer: host-bash
+  feature: host.cron
+  safety: RO
+  purpose: Cron listing
+- function: cave-sys-kernel-check
+  layer: host-bash
+  feature: host.reboot
+  safety: RO
+  purpose: Pending kernel
+- function: cave-sys-reboot-check
+  layer: host-bash
+  feature: host.reboot
+  safety: RO
+  purpose: Reboot required
+- function: cave-sys-pkg-updates
+  layer: host-bash
+  feature: host.pkg
+  safety: RO
+  purpose: Package updates
+- function: cave-sys-pkg-orphans
+  layer: host-bash
+  feature: host.pkg
+  safety: RO
+  purpose: Package orphans
+- function: cave-sys-pkg-history
+  layer: host-bash
+  feature: host.pkg
+  safety: RO
+  purpose: Package history
+- function: cave-sys-pkg-update
+  layer: host-bash
+  feature: host.pkg
+  safety: EXC
+  purpose: Install updates
+- function: cave-sys-pkg-clean-cache
+  layer: host-bash
+  feature: host.pkg
+  safety: EXC
+  purpose: Clean package cache
+- function: stack-flatpak-updates.fish
+  layer: host-fish
+  feature: host.pkg
+  safety: RO
+  purpose: Flatpak updates
+- function: cave-sys-aur-audit
+  layer: host-bash
+  feature: host.aur
+  safety: RO
+  purpose: AUR audit
+- function: cave-sys-git-status-all
+  layer: host-bash
+  feature: host.git
+  safety: RO
+  purpose: Git status across repos
+- function: cave-sys-firewall-status
+  layer: host-bash
+  feature: host.firewall
+  safety: RO
+  purpose: Firewall status
+- function: cave-sys-ssh-doctor
+  layer: host-bash
+  feature: host.ssh
+  safety: RO
+  purpose: SSH doctor
+- function: cave-sys-disk-health
+  layer: host-bash
+  feature: host.smart
+  safety: RO
+  purpose: SMART/btrfs disk health
+- function: stack-claude-home.fish
+  layer: host-fish
+  feature: host.backup
+  safety: RO
+  purpose: Agent-home backup
+- function: cave-btrfs-usage
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs usage
+- function: cave-btrfs-subvolumes
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs subvolume list
+- function: cave-btrfs-device-stats
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs device stats
+- function: cave-btrfs-scrub-status
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs scrub status
+- function: cave-btrfs-balance-status
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs balance status
+- function: cave-btrfs-qgroup
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: btrfs qgroup show
+- function: cave-btrfs-snapper
+  layer: host-bash
+  feature: host.btrfs
+  safety: RO
+  purpose: snapper list
+- function: cave-btrfs-snapshot
+  layer: host-bash
+  feature: host.btrfs
+  safety: EXC
+  purpose: btrfs snapshot create/delete
+- function: cave-btrfs-subvol
+  layer: host-bash
+  feature: host.btrfs
+  safety: EXC
+  purpose: btrfs subvolume create
+- function: cave-btrfs-scrub
+  layer: host-bash
+  feature: host.btrfs
+  safety: EXC
+  purpose: btrfs scrub start
+- function: cave-btrfs-balance
+  layer: host-bash
+  feature: host.btrfs
+  safety: EXC
+  purpose: btrfs balance start
+- function: cave-backup
+  layer: host-bash
+  feature: host.backup
+  safety: MS
+  purpose: Dropbox backup
+- &id002
+  function: cave-lock
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Lock session
+  retire_note: DE-layer
+- &id003
+  function: cave-power
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Power menu
+  retire_note: DE-layer
+- &id004
+  function: cave-idle-toggle
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Idle/presentation toggle
+  retire_note: DE-layer
+- &id005
+  function: cave-theme
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Theme cycle
+  retire_note: DE-layer
+- &id006
+  function: cave-nightlight
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Nightlight toggle
+  retire_note: DE-layer
+- &id007
+  function: cave-record
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Screen recording
+  retire_note: DE-layer
+- &id008
+  function: cave-cliphist
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Clipboard history
+  retire_note: DE-layer
+- &id009
+  function: cave-audio
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Audio control
+  retire_note: DE-layer
+- &id010
+  function: cave-media
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Media transport
+  retire_note: DE-layer
+- &id011
+  function: cave-bar
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Waybar reload
+  retire_note: DE-layer
+- &id012
+  function: cave-notify
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Notification center
+  retire_note: DE-layer
+- &id013
+  function: cave-sync
+  layer: host-bash
+  feature: null
+  safety: retire
+  purpose: Dotfiles sync
+  retire_note: DE-layer
+retired_operations:
+- *id001
+- *id002
+- *id003
+- *id004
+- *id005
+- *id006
+- *id007
+- *id008
+- *id009
+- *id010
+- *id011
+- *id012
+- *id013
