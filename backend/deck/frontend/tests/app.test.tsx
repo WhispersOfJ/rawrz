@@ -30,8 +30,8 @@ describe("Cave Deck shell", () => {
     }
   });
 
-  it("shows the M0 skeleton banner on the dashboard", async () => {
+  it("shows the read-only banner on the dashboard", async () => {
     renderApp("/");
-    expect(await screen.findByText(/M0 skeleton/i)).toBeDefined();
+    expect(await screen.findByText(/Read-only control room/i)).toBeDefined();
   });
 });
