@@ -1,162 +1,66 @@
-# Contributing to the Bear Cave
+# Contributing to RAWRZ
 
-Thanks for wanting to contribute! These guidelines explain how to open good
-issues and well-formed pull requests for this repository, what the review
-process looks like, and how to report problems. Following them saves everyone
-time.
+RAWRZ is a protected-main monorepo. Changes arrive through pull requests and must keep
+the three component histories, current stack behavior, and unified CI honest.
 
-This repository is governed by the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
-By participating, you agree to uphold it. Instances of abusive or unacceptable
-behavior should be reported to the address in that document.
+## Worktrees and branches
 
-## Table of contents
+Create one task-named worktree inside the repository, based on `origin/main`:
 
-- [Before you start](#before-you-start)
-- [Reporting bugs](#reporting-bugs)
-- [Requesting features](#requesting-features)
-- [Making changes](#making-changes)
-- [Worktree discipline](#worktree-discipline)
-- [Commit and PR conventions](#commit-and-pr-conventions)
-- [Validation checklist](#validation-checklist)
-- [Code style](#code-style)
-- [Review and merge](#review-and-merge)
-- [Getting help](#getting-help)
-
-## Before you start
-
-- **Check existing work.** Search issues and open/merged PRs before opening a
-  new one — your bug may already be filed or fixed on `main`.
-- **Read the docs.** Start with `AGENTS.md` (the system reference) and the
-  relevant service doc under `docs/services/`. The architecture overview is in
-  `docs/architecture.md`, and the operational landmines you must never trip
-  are in `AGENTS.md` and `docs/landmines.md`.
-- **Know the scope.** This is a slim, 9-service media stack with strict CI.
-  Changes must keep the stack robust and the docs honest; retiring or adding a
-  service is a big change and should be proposed first.
-
-## Reporting bugs
-
-Use the **Bug report** issue template (`.github/ISSUE_TEMPLATE/bug_report.yml`).
-A good report includes:
-
-- What you did, what you expected, and what actually happened.
-- Which service(s) were involved (Plex, NzbDAV/rclone, Radarr/Sonarr/Prowlarr,
-  Seerr/Unpackerr, CI/CD, scripts).
-- How to reproduce, with exact commands.
-- Relevant logs or screenshots (scrub credentials first).
-- The stack versions (`stack-version`) and any error text verbatim.
-
-Before filing, check the known failure modes in `AGENTS.md` ("Historical Issues
-and Landmines") — several recurring problems (FUSE mount staleness, orphaned
-*arr references, DB bloat) are documented there with their fixes.
-
-## Requesting features
-
-Use the **Feature request** issue template
-(`.github/ISSUE_TEMPLATE/feature_request.yml`). Describe the problem you want
-solved, not just a solution, and note which service or area it affects.
-
-## Making changes
-
-Every change to this repository flows through a pull request. `main` is
-branch-protected — nobody pushes to it directly — and **all work happens on
-dedicated git worktrees, one worktree per task** (see
-[Worktree discipline](#worktree-discipline) and
-[docs/worktree-lifecycle.md](docs/worktree-lifecycle.md)).
-
-1. Create a task-named worktree off `origin/main`.
-2. Make exactly this task's changes inside it — never mix unrelated work.
-3. Run the [validation checklist](#validation-checklist).
-4. Commit with a Conventional Commit message and push the branch.
-5. Open a PR against `main` (the PR template
-   [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
-   attaches automatically — fill it in).
-6. Address review feedback; keep the branch up to date with `main`.
-
-## Worktree discipline
-
-Mandatory, effective 2026-08-31. One worktree per task, named by the task,
-never mixed with unrelated work. The main checkout stays clean and is used for
-reference only.
-
-The `stack-worktree` helper creates the task-named branch and worktree in one
-command (raw `git` equivalents and the full lifecycle are in
-[docs/worktree-lifecycle.md](docs/worktree-lifecycle.md)):
-
-```fish
-stack-worktree docs/fix-readme     # branch docs/fix-readme at ../wt-fix-readme
+```bash
+mkdir -p .worktrees
+git worktree add .worktrees/<task-name> -b <task-branch> origin/main
+cd .worktrees/<task-name>
 ```
 
-- Task names are lowercase and dash-separated, optionally type-prefixed
-  (`docs/`, `feat/`, `fix/`, `ci/`, `chore/`).
-- `stack-worktree` refuses when a worktree/branch for that task already exists
-  locally or on the remote, so check for a twin under a *different* name too:
-  `git worktree list`.
-- After the PR merges, remove the worktree and delete the branch:
-  `git worktree remove <path>` and `git branch -D <branch>` if it survived.
+Do not edit the reference checkout, mix unrelated work, or push directly to `main`.
+Push logical save points to the task branch and open a PR when the local gates are green.
+See [`docs/stack/worktree-lifecycle.md`](docs/stack/worktree-lifecycle.md).
 
-## Commit and PR conventions
+## Commits and releases
 
-**PR titles and commit messages must be Conventional Commits** — enforced by
-the `pr-lint` workflow. Allowed types:
+Use Conventional Commits:
 
+```text
+feat: add a capability
+fix: correct a regression
+docs: clarify the migration record
+ci: extend the unified validation pipeline
+chore: maintain repository tooling
 ```
-feat  fix  docs  style  refactor  perf  test  build  ci  chore  revert  docker
-```
 
-Examples: `fix: bound install verification with a timeout`,
-`feat: add stack-plex-markers`, `docs: add contributing guidelines`.
+The root release-please configuration is the only release configuration. `feat:` and
+`fix:` commits are release-worthy; documentation, CI, and chore commits do not create a
+release by themselves. `RELEASE_PLEASE_TOKEN` is a GitHub Actions secret and must never
+be committed.
 
-- Release behavior: `release-please` opens a release PR only for `feat:` and
-  `fix:` commits. `ci:`, `docs:`, `chore:`, etc. land silently without a
-  release — do not expect a version bump for docs-only changes.
-- PR titles follow the same convention; the subject must not start with a
-  space.
-- Linear history: merges are squash or rebase only — never merge commits.
+## M0 scope
 
-## Validation checklist
+M0 is intentionally non-runtime: do not add services to the root Compose file, alter
+ports, migrate databases, or cut over the live stack as part of migration/layout/CI work.
+Update the master spec and a later runbook before implementing target-state runtime work.
 
-Run these before opening a PR (they mirror what CI runs):
+## Validation
+
+Run applicable checks before committing:
 
 ```bash
 docker compose config --quiet
+python3 catalog/validate.py
+python3 scripts/check_api_contract.py
+python3 scripts/check_secret_manifest.py
+python3 scripts/check_secret_drift.py
 bash -n scripts/*.sh tests/*/*.sh
-
-python3 scripts/check_compose_mounts.py
-./tests/health/run-all.sh
+./tests/bash/test_bash_functions.sh --offline
 ```
 
-- `validate.yml` runs compose validation, env coverage, shellcheck, ruff, and
-  actionlint; `nightly-healthcheck.yml` re-validates everything daily.
-- Live checks (e.g. `./tests/integration/test_pipeline.sh`) run against the
-  real stack on the host — never rely on them in CI, and never run mutating
-  ones against active queued work.
+For Rust or frontend changes, also run the crate/frontend checks listed in `README.md`.
+All GitHub Actions are full-SHA pinned and must pass `actionlint`. Do not commit `.env`,
+`secrets/`, database files, build output, or generated dependency directories.
 
-## Code style
+## Review expectations
 
-- **Python:** Ruff (see `.github/workflows/validate.yml`); match the existing
-  check-script conventions (read-only DB access, `0/1/2` exit codes,
-  CI-safe pure-logic tests under `scripts/test_*.py`).
-- **Shell:** ShellCheck-clean, POSIX-ish bash for CI; `bash -n` must pass.
-- **Workflows:** third-party actions are SHA-pinned with a `# tag` comment;
-  GitHub Actions are validated by `actionlint` (see `docs/ci-cd.md`).
-
-## Review and merge
-
-- The branch-protection ruleset requires the CI checks and a Conventional
-  Commit title to pass. If `main` advances while your PR is open, rebase and
-  push with `--force-with-lease` (never force-push blindly; fetch and rebase a
-  clean local commit first).
-- Merges are squash merges via `gh pr merge <number> --squash --delete-branch`,
-  followed by `git worktree remove` for cleanup.
-- After merge, delete the local branch if the worktree check-out kept it.
-
-## Getting help
-
-- `stack-help` lists every terminal command in the repo.
-- Service documentation lives in `docs/services/`; CI/CD policy in
-  `docs/ci-cd.md`; testing conventions in `docs/testing.md`.
-- For security issues, follow `docs/security.md` and report privately rather
-  than opening a public issue.
-- Ask in a GitHub discussion or on an issue before large or cross-cutting
-  changes (service additions/retirements, networking, CI restructuring).
+- Preserve provenance when moving imported files; use `MIGRATION.md` for source refs.
+- Keep docs links valid after paths move.
+- Add or update tests with behavior changes.
+- Report failed or skipped checks explicitly in the PR description.
