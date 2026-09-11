@@ -369,6 +369,18 @@ Service → source map (full table incl. refs and commit SHAs:
 
 ---
 
+## Linkage note
+
+The Bear Cave stack is the media backbone. A separate project — a web-based RPG
+whose mechanics revolve around watching movies/TV from this stack — is
+**linked with** the stack (reads Plex/Sonarr/Radarr APIs) but is **not a part
+of** it (no new container in `docker-compose.yml`, separate lifecycle). Its spec
+lives at [`movie-rpg-spec.md`](movie-rpg-spec.md). When working on the RPG,
+bring that spec into context; when working on the stack, do not assume the RPG
+exists.
+
+---
+
 ## Archive
 
 Retired services and their re-adoption watchers are tracked in [docs/services/lifecycle.md](docs/services/lifecycle.md).
