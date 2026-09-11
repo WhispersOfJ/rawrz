@@ -3,7 +3,9 @@ use crate::enrichment::{
     MetadataCache,
 };
 use crate::normalization::NormalizedMetadata;
-use crate::providers::{FanartClient, FanartPayload, OmdbClient, OmdbResponse, TmdbClient, TmdbDetails, TvdbClient};
+use crate::providers::{
+    FanartClient, FanartPayload, OmdbClient, OmdbResponse, TmdbClient, TmdbDetails, TvdbClient,
+};
 use crate::stack::{
     PlexClient, PlexLibraryItem, RadarrClient, RadarrMovie, SonarrClient, SonarrSeries,
 };
@@ -264,15 +266,21 @@ impl ContentSyncRecord {
                 .get("originallyAvailableAt")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            status: attrs.get("status").and_then(Value::as_str).map(str::to_owned),
-            summary: attrs.get("summary").and_then(Value::as_str).map(str::to_owned),
-            rating,
-            rating_source,
-            poster_url: attrs.get("thumb").and_then(Value::as_str).map(str::to_owned),
-            fanart_url: attrs
-                .get("art")
+            status: attrs
+                .get("status")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            summary: attrs
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            rating,
+            rating_source,
+            poster_url: attrs
+                .get("thumb")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            fanart_url: attrs.get("art").and_then(Value::as_str).map(str::to_owned),
             section_key: attrs
                 .get("librarySectionKey")
                 .and_then(Value::as_str)
@@ -289,12 +297,12 @@ impl ContentSyncRecord {
     }
 
     pub fn from_sonarr(series: &SonarrSeries) -> Result<Self> {
-        let source_id = required(
-            series.id.map(|value| value.to_string()),
-            "id",
-        )?;
+        let source_id = required(series.id.map(|value| value.to_string()), "id")?;
         let title = required(series.title.clone(), "title")?;
-        let external_id = series.tmdb_id.or(series.tvdb_id).map(|value| value.to_string());
+        let external_id = series
+            .tmdb_id
+            .or(series.tvdb_id)
+            .map(|value| value.to_string());
         let external_id_type = if series.tmdb_id.is_some() {
             Some("tmdb".to_owned())
         } else if series.tvdb_id.is_some() {
@@ -419,7 +427,9 @@ impl ContentSyncRecord {
         Ok(())
     }
 
-    pub fn deduplicate(records: impl IntoIterator<Item = Self>) -> BTreeMap<ContentUpsertKey, Self> {
+    pub fn deduplicate(
+        records: impl IntoIterator<Item = Self>,
+    ) -> BTreeMap<ContentUpsertKey, Self> {
         records
             .into_iter()
             .map(|record| (record.key.clone(), record))
@@ -484,11 +494,7 @@ impl<'a> ProviderEnrichmentOrchestrator<'a> {
         }
     }
 
-    pub async fn enrich(
-        &mut self,
-        outcome: StackSyncOutcome,
-        now: u64,
-    ) -> EnrichedSyncOutcome {
+    pub async fn enrich(&mut self, outcome: StackSyncOutcome, now: u64) -> EnrichedSyncOutcome {
         let StackSyncOutcome {
             mut batch,
             failures: stack_failures,
@@ -585,11 +591,7 @@ pub struct StackSyncOrchestrator<'a> {
 }
 
 impl<'a> StackSyncOrchestrator<'a> {
-    pub fn new(
-        plex: &'a PlexClient,
-        sonarr: &'a SonarrClient,
-        radarr: &'a RadarrClient,
-    ) -> Self {
+    pub fn new(plex: &'a PlexClient, sonarr: &'a SonarrClient, radarr: &'a RadarrClient) -> Self {
         Self {
             plex,
             sonarr,
@@ -717,16 +719,10 @@ fn enrichment_request(group: &ContentSyncGroup) -> Option<EnrichmentRequest> {
             }
         }
         if tmdb_id.is_none() {
-            tmdb_id = json_i64_field(
-                &record.metadata_blob,
-                &["tmdbId", "tmdb_id", "tmdbID"],
-            );
+            tmdb_id = json_i64_field(&record.metadata_blob, &["tmdbId", "tmdb_id", "tmdbID"]);
         }
         if tvdb_id.is_none() {
-            tvdb_id = json_i64_field(
-                &record.metadata_blob,
-                &["tvdbId", "tvdb_id", "tvdbID"],
-            );
+            tvdb_id = json_i64_field(&record.metadata_blob, &["tvdbId", "tvdb_id", "tvdbID"]);
         }
         if imdb_id.is_none() {
             imdb_id = record
@@ -787,9 +783,9 @@ fn parse_provider_payload<T: DeserializeOwned>(
 
 impl ContentSyncBatch {
     pub fn from_records(records: impl IntoIterator<Item = ContentSyncRecord>) -> Self {
-        let mut groups = ContentSyncRecord::deduplicate(records)
-            .into_values()
-            .fold(BTreeMap::new(), |mut groups, record| {
+        let mut groups = ContentSyncRecord::deduplicate(records).into_values().fold(
+            BTreeMap::new(),
+            |mut groups, record| {
                 let identity = record.identity_key();
                 groups
                     .entry(identity.clone())
@@ -800,7 +796,8 @@ impl ContentSyncBatch {
                     .records
                     .insert(record.key.clone(), record);
                 groups
-            });
+            },
+        );
 
         let fallback_groups = groups
             .keys()
@@ -815,10 +812,10 @@ impl ContentSyncBatch {
                 .keys()
                 .filter(|identity| {
                     matches!(identity, ContentIdentityKey::External { .. })
-                            && same_title_year(
-                                groups.get(&fallback_identity).unwrap(),
-                                groups.get(identity).unwrap(),
-                            )
+                        && same_title_year(
+                            groups.get(&fallback_identity).unwrap(),
+                            groups.get(identity).unwrap(),
+                        )
                 })
                 .cloned()
                 .collect::<Vec<_>>();
@@ -918,8 +915,12 @@ fn attributes_to_map(attributes: &[(String, String)]) -> Map<String, Value> {
 }
 
 fn first_attr(attributes: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| attributes.get(*key).and_then(Value::as_str).map(str::to_owned))
+    keys.iter().find_map(|key| {
+        attributes
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
 }
 
 fn first_f64(attributes: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
@@ -932,11 +933,7 @@ fn first_f64(attributes: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
 }
 
 fn rating_source_name(value: &str) -> String {
-    value
-        .split("://")
-        .next()
-        .unwrap_or(value)
-        .to_owned()
+    value.split("://").next().unwrap_or(value).to_owned()
 }
 
 fn json_value<'a>(raw: &'a Map<String, Value>, path: &[&str]) -> Option<&'a Value> {
@@ -959,7 +956,9 @@ fn json_f64(raw: &Map<String, Value>, path: &[&str]) -> Option<f64> {
 }
 
 fn json_string(raw: &Map<String, Value>, path: &[&str]) -> Option<String> {
-    json_value(raw, path).and_then(Value::as_str).map(str::to_owned)
+    json_value(raw, path)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn json_string_array(raw: &Map<String, Value>, key: &str) -> Vec<String> {
@@ -1013,10 +1012,7 @@ mod tests {
             &fanart,
             &mut cache,
             3600,
-            std::collections::BTreeMap::from([(
-                "dream".to_owned(),
-                "Science Fiction".to_owned(),
-            )]),
+            std::collections::BTreeMap::from([("dream".to_owned(), "Science Fiction".to_owned())]),
         )
         .enrich(outcome, 100)
         .await;
@@ -1029,7 +1025,10 @@ mod tests {
         assert_eq!(record.rating_source.as_deref(), Some("tmdb"));
         assert!(record.genres.iter().any(|genre| genre == "Science Fiction"));
         assert_eq!(record.sub_genres, vec!["dream"]);
-        assert_eq!(record.poster_url.as_deref(), Some("https://assets.example/poster.jpg"));
+        assert_eq!(
+            record.poster_url.as_deref(),
+            Some("https://assets.example/poster.jpg")
+        );
         assert_eq!(cache.len(), 3);
         server.await.unwrap();
     }
@@ -1076,7 +1075,17 @@ mod tests {
                 && failure.failure.http_status == Some(503)
         }));
         assert!(result.batch.groups().next().unwrap().records.len() == 1);
-        assert!(result.batch.groups().next().unwrap().records.values().next().unwrap().provider_metadata.is_object());
+        assert!(result
+            .batch
+            .groups()
+            .next()
+            .unwrap()
+            .records
+            .values()
+            .next()
+            .unwrap()
+            .provider_metadata
+            .is_object());
         server.await.unwrap();
     }
 
@@ -1203,40 +1212,43 @@ mod tests {
                 let mut request = [0_u8; 8192];
                 let bytes_read = stream.read(&mut request).await.unwrap();
                 let request = String::from_utf8_lossy(&request[..bytes_read]);
-                let (status, body, content_type) = if request.contains("/library/sections")
-                    && !request.contains("/all")
-                {
-                    (
-                        200,
-                        include_str!("../fixtures/plex_sections.xml"),
-                        "application/xml",
-                    )
-                } else if request.contains("/library/sections/1/all") {
-                    (
-                        200,
-                        include_str!("../fixtures/plex_library.xml"),
-                        "application/xml",
-                    )
-                } else if request.contains("/library/sections/2/all") {
-                    (200, "<MediaContainer size=\"0\"></MediaContainer>", "application/xml")
-                } else if request.contains("/api/v3/series") {
-                    match sonarr_status {
-                        Some(status) => (status, "unauthorized", "application/json"),
-                        None => (
+                let (status, body, content_type) =
+                    if request.contains("/library/sections") && !request.contains("/all") {
+                        (
                             200,
-                            include_str!("../fixtures/sonarr_series.json"),
+                            include_str!("../fixtures/plex_sections.xml"),
+                            "application/xml",
+                        )
+                    } else if request.contains("/library/sections/1/all") {
+                        (
+                            200,
+                            include_str!("../fixtures/plex_library.xml"),
+                            "application/xml",
+                        )
+                    } else if request.contains("/library/sections/2/all") {
+                        (
+                            200,
+                            "<MediaContainer size=\"0\"></MediaContainer>",
+                            "application/xml",
+                        )
+                    } else if request.contains("/api/v3/series") {
+                        match sonarr_status {
+                            Some(status) => (status, "unauthorized", "application/json"),
+                            None => (
+                                200,
+                                include_str!("../fixtures/sonarr_series.json"),
+                                "application/json",
+                            ),
+                        }
+                    } else if request.contains("/api/v3/movie") {
+                        (
+                            200,
+                            include_str!("../fixtures/radarr_movies.json"),
                             "application/json",
-                        ),
-                    }
-                } else if request.contains("/api/v3/movie") {
-                    (
-                        200,
-                        include_str!("../fixtures/radarr_movies.json"),
-                        "application/json",
-                    )
-                } else {
-                    (404, "not found", "text/plain")
-                };
+                        )
+                    } else {
+                        (404, "not found", "text/plain")
+                    };
                 let reason = if status == 200 { "OK" } else { "Error" };
                 let response = format!(
                     "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1254,8 +1266,9 @@ mod tests {
 
     #[test]
     fn creates_stable_records_for_plex_arr_sources() {
-        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
-            .unwrap();
+        let plex =
+            crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+                .unwrap();
         let plex_record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
         assert_eq!(plex_record.key.source, ContentSource::Plex.as_str());
         assert_eq!(plex_record.key.source_id, "271");
@@ -1292,18 +1305,20 @@ mod tests {
 
     #[test]
     fn attaches_normalized_provider_fields_for_gameplay_and_audit() {
-        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
-            .unwrap();
+        let plex =
+            crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+                .unwrap();
         let radarr: Vec<RadarrMovie> =
             serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
-        let tmdb = crate::providers::parse_tmdb_details(include_str!("../fixtures/tmdb_movie.json"))
-            .unwrap();
-        let omdb = crate::providers::parse_omdb_response(include_str!("../fixtures/omdb_movie.json"))
-            .unwrap();
-        let fanart = crate::providers::parse_fanart_payload(
-            include_str!("../fixtures/fanart_movie.json"),
-        )
-        .unwrap();
+        let tmdb =
+            crate::providers::parse_tmdb_details(include_str!("../fixtures/tmdb_movie.json"))
+                .unwrap();
+        let omdb =
+            crate::providers::parse_omdb_response(include_str!("../fixtures/omdb_movie.json"))
+                .unwrap();
+        let fanart =
+            crate::providers::parse_fanart_payload(include_str!("../fixtures/fanart_movie.json"))
+                .unwrap();
         let metadata = crate::normalization::NormalizedMetadata::from_sources(
             Some(&plex[0]),
             None,
@@ -1312,10 +1327,7 @@ mod tests {
             Some(&omdb),
             None,
             Some(&fanart),
-            &std::collections::BTreeMap::from([(
-                "dream".to_owned(),
-                "Science Fiction".to_owned(),
-            )]),
+            &std::collections::BTreeMap::from([("dream".to_owned(), "Science Fiction".to_owned())]),
         );
         let mut record = ContentSyncRecord::from_radarr(&radarr[0]).unwrap();
         record.attach_normalized_metadata(&metadata).unwrap();
@@ -1324,19 +1336,19 @@ mod tests {
         assert_eq!(record.external_id_type.as_deref(), Some("tmdb"));
         assert_eq!(
             record.genres,
-            vec![
-                "Action",
-                "Drama",
-                "Horror",
-                "Mystery",
-                "Science Fiction"
-            ]
+            vec!["Action", "Drama", "Horror", "Mystery", "Science Fiction"]
         );
         assert_eq!(record.sub_genres, vec!["dream"]);
         assert_eq!(record.rating, Some(8.2));
         assert_eq!(record.rating_source.as_deref(), Some("tmdb"));
-        assert_eq!(record.poster_url.as_deref(), Some("https://assets.example/poster.jpg"));
-        assert_eq!(record.fanart_url.as_deref(), Some("https://assets.example/background.jpg"));
+        assert_eq!(
+            record.poster_url.as_deref(),
+            Some("https://assets.example/poster.jpg")
+        );
+        assert_eq!(
+            record.fanart_url.as_deref(),
+            Some("https://assets.example/background.jpg")
+        );
         assert_eq!(record.provider_metadata["tmdb_id"], json!(603));
         assert!(record.provider_metadata["provenance"]["dream"]
             .as_array()
@@ -1429,14 +1441,18 @@ mod tests {
         ];
         let deduped = ContentSyncRecord::deduplicate(records);
         assert_eq!(deduped.len(), 2);
-        assert_eq!(deduped[&super::ContentUpsertKey::new(ContentSource::Plex, "271")].title, "Fixture Movie (updated)");
+        assert_eq!(
+            deduped[&super::ContentUpsertKey::new(ContentSource::Plex, "271")].title,
+            "Fixture Movie (updated)"
+        );
         assert!(deduped.contains_key(&super::ContentUpsertKey::new(ContentSource::Radarr, "17")));
     }
 
     #[test]
     fn groups_plex_fallback_with_one_matching_arr_identity() {
-        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
-            .unwrap();
+        let plex =
+            crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+                .unwrap();
         let movies: Vec<RadarrMovie> =
             serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
         let mut plex_record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
@@ -1458,18 +1474,21 @@ mod tests {
             }
         );
         assert_eq!(group.records.len(), 2);
-        assert!(group.records.keys().any(|key| {
-            key.source == ContentSource::Plex.as_str() && key.source_id == "271"
-        }));
-        assert!(group.records.keys().any(|key| {
-            key.source == ContentSource::Radarr.as_str() && key.source_id == "17"
-        }));
+        assert!(group
+            .records
+            .keys()
+            .any(|key| { key.source == ContentSource::Plex.as_str() && key.source_id == "271" }));
+        assert!(group
+            .records
+            .keys()
+            .any(|key| { key.source == ContentSource::Radarr.as_str() && key.source_id == "17" }));
     }
 
     #[test]
     fn leaves_ambiguous_title_year_fallbacks_unmerged() {
-        let plex = crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
-            .unwrap();
+        let plex =
+            crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+                .unwrap();
         let movies: Vec<RadarrMovie> =
             serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
         let mut plex_record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
@@ -1480,11 +1499,8 @@ mod tests {
         plex_record.title = "Fixture Movie".to_owned();
         plex_record.year = Some(2024);
 
-        let batch = ContentSyncBatch::from_records([
-            plex_record,
-            radarr_record,
-            other_radarr_record,
-        ]);
+        let batch =
+            ContentSyncBatch::from_records([plex_record, radarr_record, other_radarr_record]);
         assert_eq!(batch.len(), 3);
         assert!(batch.groups().any(|group| {
             matches!(

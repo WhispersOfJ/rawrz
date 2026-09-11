@@ -56,9 +56,11 @@ pub fn evaluate(
     let is_plain = metadata.is_some_and(|map| map.is_empty());
 
     // Metadata-dependent rows are never evaluated until their inputs exist.
-    if metadata
-        .is_some_and(|map| map.get("metadata_dependent").and_then(Value::as_bool).unwrap_or(false))
-    {
+    if metadata.is_some_and(|map| {
+        map.get("metadata_dependent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
         return Evaluation::NotEvaluable;
     }
 
@@ -154,7 +156,10 @@ mod tests {
         );
         assert_eq!(
             evaluate("counter", Some(150), &metadata, &snapshot()),
-            Evaluation::InProgress { progress: 100, target: 150 }
+            Evaluation::InProgress {
+                progress: 100,
+                target: 150
+            }
         );
     }
 
@@ -166,7 +171,10 @@ mod tests {
         );
         assert_eq!(
             evaluate("streak", Some(30), &json!({}), &snapshot()),
-            Evaluation::InProgress { progress: 7, target: 30 }
+            Evaluation::InProgress {
+                progress: 7,
+                target: 30
+            }
         );
     }
 
@@ -179,7 +187,10 @@ mod tests {
         );
         assert_eq!(
             evaluate("counter", Some(10), &metadata, &snapshot()),
-            Evaluation::InProgress { progress: 5, target: 10 }
+            Evaluation::InProgress {
+                progress: 5,
+                target: 10
+            }
         );
     }
 
@@ -190,16 +201,31 @@ mod tests {
             Evaluation::NotEvaluable
         );
         assert_eq!(
-            evaluate("once", None, &json!({"content_type": "episode"}), &snapshot()),
+            evaluate(
+                "once",
+                None,
+                &json!({"content_type": "episode"}),
+                &snapshot()
+            ),
             Evaluation::NotEvaluable
         );
         assert_eq!(
-            evaluate("counter", Some(10), &json!({"metadata_dependent": true}), &snapshot()),
+            evaluate(
+                "counter",
+                Some(10),
+                &json!({"metadata_dependent": true}),
+                &snapshot()
+            ),
             Evaluation::NotEvaluable
         );
         // Metadata-qualified streaks (No Gap, Unbroken) stay unevaluated too.
         assert_eq!(
-            evaluate("streak", Some(7), &json!({"require_new_arrival": true}), &snapshot()),
+            evaluate(
+                "streak",
+                Some(7),
+                &json!({"require_new_arrival": true}),
+                &snapshot()
+            ),
             Evaluation::NotEvaluable
         );
     }
@@ -221,12 +247,25 @@ mod tests {
     #[test]
     fn snapshot_metrics_dispatch_to_their_seeded_shapes() {
         assert_eq!(
-            evaluate("counter", Some(3), &json!({"distinct_genres": 3}), &snapshot()),
+            evaluate(
+                "counter",
+                Some(3),
+                &json!({"distinct_genres": 3}),
+                &snapshot()
+            ),
             Evaluation::Unlock { progress: 3 }
         );
         assert_eq!(
-            evaluate("counter", Some(25), &json!({"genre": "Horror"}), &snapshot()),
-            Evaluation::InProgress { progress: 10, target: 25 }
+            evaluate(
+                "counter",
+                Some(25),
+                &json!({"genre": "Horror"}),
+                &snapshot()
+            ),
+            Evaluation::InProgress {
+                progress: 10,
+                target: 25
+            }
         );
         // A differently-named genre is not a snapshot metric in V1.
         assert_eq!(
@@ -234,8 +273,16 @@ mod tests {
             Evaluation::NotEvaluable
         );
         assert_eq!(
-            evaluate("counter", Some(8), &json!({"case_type": "featured"}), &snapshot()),
-            Evaluation::InProgress { progress: 0, target: 8 }
+            evaluate(
+                "counter",
+                Some(8),
+                &json!({"case_type": "featured"}),
+                &snapshot()
+            ),
+            Evaluation::InProgress {
+                progress: 0,
+                target: 8
+            }
         );
         // horror_native's "before any other purchase" condition is not a
         // single-key shape, so it stays unevaluated.

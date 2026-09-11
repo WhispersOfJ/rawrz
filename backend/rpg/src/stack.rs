@@ -53,9 +53,10 @@ pub fn parse_plex_sections(xml: &str) -> Result<Vec<PlexSection>> {
                 if event.name().as_ref() == b"Directory" =>
             {
                 let attrs = attributes(&event)?;
-                if attrs.iter().any(|(key, value)| {
-                    key == "type" && (value == "movie" || value == "show")
-                }) {
+                if attrs
+                    .iter()
+                    .any(|(key, value)| key == "type" && (value == "movie" || value == "show"))
+                {
                     sections.push(PlexSection {
                         key: attr(&attrs, "key"),
                         title: attr(&attrs, "title"),
@@ -107,19 +108,13 @@ pub fn parse_plex_library_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
 
     loop {
         match reader.read_event() {
-            Ok(quick_xml::events::Event::Start(event))
-                if is_item_tag(event.name().as_ref()) =>
-            {
+            Ok(quick_xml::events::Event::Start(event)) if is_item_tag(event.name().as_ref()) => {
                 stack.push(library_item_from_attrs(attributes(&event)?));
             }
-            Ok(quick_xml::events::Event::Empty(event))
-                if is_item_tag(event.name().as_ref()) =>
-            {
+            Ok(quick_xml::events::Event::Empty(event)) if is_item_tag(event.name().as_ref()) => {
                 items.push(library_item_from_attrs(attributes(&event)?));
             }
-            Ok(quick_xml::events::Event::Empty(event))
-                if event.name().as_ref() == b"Genre" =>
-            {
+            Ok(quick_xml::events::Event::Empty(event)) if event.name().as_ref() == b"Genre" => {
                 if let Some(item) = stack.last_mut() {
                     let attrs = attributes(&event)?;
                     if let Some(tag) = attr(&attrs, "tag") {
@@ -127,9 +122,7 @@ pub fn parse_plex_library_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
                     }
                 }
             }
-            Ok(quick_xml::events::Event::End(event))
-                if is_item_tag(event.name().as_ref()) =>
-            {
+            Ok(quick_xml::events::Event::End(event)) if is_item_tag(event.name().as_ref()) => {
                 if let Some(item) = stack.pop() {
                     items.push(item);
                 }
@@ -150,12 +143,7 @@ pub fn parse_plex_library_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
 pub fn parse_plex_watchable_items(xml: &str) -> Result<Vec<PlexLibraryItem>> {
     Ok(parse_plex_library_items(xml)?
         .into_iter()
-        .filter(|item| {
-            matches!(
-                item.item_type.as_deref(),
-                Some("movie") | Some("episode")
-            )
-        })
+        .filter(|item| matches!(item.item_type.as_deref(), Some("movie") | Some("episode")))
         .collect())
 }
 

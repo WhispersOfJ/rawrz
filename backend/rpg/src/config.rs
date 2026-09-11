@@ -25,15 +25,21 @@ impl ProbeConfig {
     /// Load the shared Bear Cave `.env` without printing or persisting secret values.
     /// Existing process environment variables take precedence over file values.
     pub fn from_env_file(path: impl AsRef<Path>) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).map_err(|error| ProbeError::MissingEnvironment(error.to_string()))?;
+        let contents = std::fs::read_to_string(path)
+            .map_err(|error| ProbeError::MissingEnvironment(error.to_string()))?;
         let file_values = contents
             .lines()
             .filter_map(parse_env_line)
             .collect::<HashMap<_, _>>();
-        Self::from_values(|name| std::env::var(name).ok().or_else(|| file_values.get(name).cloned()))
+        Self::from_values(|name| {
+            std::env::var(name)
+                .ok()
+                .or_else(|| file_values.get(name).cloned())
+        })
     }
 
-    fn from_values(mut get: impl FnMut(&str) -> Option<String>) -> Result<Self> {        let mut required =
+    fn from_values(mut get: impl FnMut(&str) -> Option<String>) -> Result<Self> {
+        let mut required =
             |name: &str| get(name).ok_or_else(|| ProbeError::MissingEnvironment(name.to_owned()));
         Ok(Self {
             plex_url: required("PLEX_URL")?,
@@ -85,7 +91,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "movie-rpg-config-{}-{}.env",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::write(
             &path,
@@ -99,7 +108,9 @@ mod tests {
         // value. This keeps the test hermetic even when the runner itself
         // exports one of these variables (e.g. RPG_DB_URL in CI).
         let expected = |file_value: &str, name: &str| {
-            std::env::var(name).ok().unwrap_or_else(|| file_value.to_owned())
+            std::env::var(name)
+                .ok()
+                .unwrap_or_else(|| file_value.to_owned())
         };
         assert_eq!(
             config.sonarr_api_key,

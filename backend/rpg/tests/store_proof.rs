@@ -9,7 +9,7 @@
 //! no-op re-migrate on an already-migrated database.
 
 use movie_rpg::auth::PinVerifyOutcome;
-use movie_rpg::persistence::{PostgresContentStore, SETTINGS_V1_DEFAULTS, SkipOutcome};
+use movie_rpg::persistence::{PostgresContentStore, SkipOutcome, SETTINGS_V1_DEFAULTS};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const SCRATCH_DB_URL_ENV: &str = "RPG_DB_URL";
@@ -46,7 +46,8 @@ fn assert_scratch_database(database_url: &str) {
 async fn reset_database(database_url: &str) {
     assert_scratch_database(database_url);
     let client = fresh_connection(database_url).await;
-    client        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    client
+        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("scratch database must be resettable");
 }
@@ -74,20 +75,33 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("store connects to scratch database");
     let summary = store.migrate().await.expect("migrate() succeeds");
-    assert_eq!(summary.applied, 14, "all fourteen migrations apply on a fresh database");
+    assert_eq!(
+        summary.applied, 14,
+        "all fourteen migrations apply on a fresh database"
+    );
     assert_eq!(summary.already_applied, 0);
 
     // (2a) verify with no account yet: locked.
     assert_eq!(
-        store.verify_account_pin("1234").await.expect("locked verify is not an error"),
+        store
+            .verify_account_pin("1234")
+            .await
+            .expect("locked verify is not an error"),
         None,
         "no account yet means locked"
     );
 
     // (3a) bootstrap with no account: a no-op.
-    let bootstrap = store.bootstrap_single_character().await.expect("bootstrap succeeds");
+    let bootstrap = store
+        .bootstrap_single_character()
+        .await
+        .expect("bootstrap succeeds");
     assert_eq!(
-        (bootstrap.character_state_seeded, bootstrap.genre_access_seeded, bootstrap.settings_seeded),
+        (
+            bootstrap.character_state_seeded,
+            bootstrap.genre_access_seeded,
+            bootstrap.settings_seeded
+        ),
         (0, 0, 0),
         "bootstrap without an account must be a no-op"
     );
@@ -99,7 +113,11 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .expect("first set_account_pin succeeds");
     assert!(outcome.account_created, "first set creates the account");
     assert_eq!(
-        (bootstrap.character_state_seeded, bootstrap.genre_access_seeded, bootstrap.settings_seeded),
+        (
+            bootstrap.character_state_seeded,
+            bootstrap.genre_access_seeded,
+            bootstrap.settings_seeded
+        ),
         (1, 1, 13),
         "first set seeds state, horror access, and all 13 settings defaults"
     );
@@ -120,7 +138,11 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(count(&probe, "characters").await, 1);
     assert_eq!(count(&probe, "character_state").await, 1);
     assert_eq!(count(&probe, "genres").await, 10);
-    assert_eq!(count(&probe, "achievements").await, 101, "the full §5.5 first-cut seed lands");
+    assert_eq!(
+        count(&probe, "achievements").await,
+        101,
+        "the full §5.5 first-cut seed lands"
+    );
     assert_eq!(
         count(&probe, "character_achievements").await,
         0,
@@ -143,7 +165,6 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         SETTINGS_V1_DEFAULTS.len() as i64,
         "all settings defaults land"
     );
-
 
     let state = probe
         .query_one(
@@ -168,7 +189,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     );
     assert_eq!(
         probe
-            .query_one("SELECT count(*) FROM character_state WHERE streak_last_watch_date IS NOT NULL", &[])
+            .query_one(
+                "SELECT count(*) FROM character_state WHERE streak_last_watch_date IS NOT NULL",
+                &[]
+            )
             .await
             .expect("streak date probe executes")
             .get::<_, i64>(0),
@@ -216,11 +240,17 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
 
     // (2c) verify with the wrong and the right PIN.
     assert_eq!(
-        store.verify_account_pin("2468").await.expect("wrong-PIN verify is not an error"),
+        store
+            .verify_account_pin("2468")
+            .await
+            .expect("wrong-PIN verify is not an error"),
         Some(PinVerifyOutcome::Rejected)
     );
     assert_eq!(
-        store.verify_account_pin("1357").await.expect("right-PIN verify is not an error"),
+        store
+            .verify_account_pin("1357")
+            .await
+            .expect("right-PIN verify is not an error"),
         Some(PinVerifyOutcome::Accepted)
     );
 
@@ -230,16 +260,30 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .set_account_pin("2468")
         .await
         .expect("second set_account_pin succeeds");
-    assert!(!outcome.account_created, "second set must not create another account");
+    assert!(
+        !outcome.account_created,
+        "second set must not create another account"
+    );
     assert_eq!(
-        (bootstrap.character_state_seeded, bootstrap.genre_access_seeded, bootstrap.settings_seeded),
+        (
+            bootstrap.character_state_seeded,
+            bootstrap.genre_access_seeded,
+            bootstrap.settings_seeded
+        ),
         (0, 0, 0),
         "second set re-seeds nothing"
     );
 
-    let bootstrap = store.bootstrap_single_character().await.expect("re-bootstrap succeeds");
+    let bootstrap = store
+        .bootstrap_single_character()
+        .await
+        .expect("re-bootstrap succeeds");
     assert_eq!(
-        (bootstrap.character_state_seeded, bootstrap.genre_access_seeded, bootstrap.settings_seeded),
+        (
+            bootstrap.character_state_seeded,
+            bootstrap.genre_access_seeded,
+            bootstrap.settings_seeded
+        ),
         (0, 0, 0),
         "re-bootstrap re-seeds nothing"
     );
@@ -252,18 +296,27 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(count(&probe, "settings").await, 13);
     // The original PIN still verifies; the second PIN never took effect.
     assert_eq!(
-        store.verify_account_pin("1357").await.expect("original PIN still verifies"),
+        store
+            .verify_account_pin("1357")
+            .await
+            .expect("original PIN still verifies"),
         Some(PinVerifyOutcome::Accepted)
     );
     assert_eq!(
-        store.verify_account_pin("2468").await.expect("second PIN must be rejected"),
+        store
+            .verify_account_pin("2468")
+            .await
+            .expect("second PIN must be rejected"),
         Some(PinVerifyOutcome::Rejected)
     );
 
     // (5) re-run migrate() on an already-migrated database: clean no-op.
     let summary = store.migrate().await.expect("re-migrate succeeds");
     assert_eq!(summary.applied, 0, "re-migrate applies nothing");
-    assert_eq!(summary.already_applied, 14, "re-migrate recognizes every version");
+    assert_eq!(
+        summary.already_applied, 14,
+        "re-migrate recognizes every version"
+    );
 
     // (5b-prev) Plex-shaped fixture for tick phase 1 (§9.1 detection): two
     // catalog rows joined to ratingKeys, one fully watched movie, one 96%
@@ -313,7 +366,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .award_plex_watches(&plex_fixture, today)
         .await
         .expect("award pass succeeds");
-    assert_eq!(awarded, 2, "two completions, one below threshold, one unknown");
+    assert_eq!(
+        awarded, 2,
+        "two completions, one below threshold, one unknown"
+    );
     // Award-once: the same state again awards nothing.
     let awarded = store
         .award_plex_watches(&plex_fixture, today)
@@ -333,7 +389,11 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(state.get::<_, i64>(0), 40, "2 × movie XP (§5.1)");
     assert_eq!(state.get::<_, i32>(1), 2);
     assert_eq!(state.get::<_, i32>(2), 2);
-    assert_eq!(state.get::<_, i32>(3), 1, "first ever watch starts the streak");
+    assert_eq!(
+        state.get::<_, i32>(3),
+        1,
+        "first ever watch starts the streak"
+    );
     assert_eq!(state.get::<_, i32>(4), 1, "40 XP stays level 1 (§5.2)");
 
     // (5b) Achievement engine (§6.4.8 contract): fresh state evaluates every
@@ -343,13 +403,19 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("evaluation succeeds")
         .expect("a character exists post-bootstrap");
-    assert!(evaluation.unlocked.is_empty(), "fresh state unlocks nothing");
+    assert!(
+        evaluation.unlocked.is_empty(),
+        "fresh state unlocks nothing"
+    );
     assert_eq!(
         evaluation.evaluated + evaluation.not_evaluable,
         101,
         "every seeded definition is classified"
     );
-    assert!(evaluation.not_evaluable > 0, "V1 has an honest non-evaluable set");
+    assert!(
+        evaluation.not_evaluable > 0,
+        "V1 has an honest non-evaluable set"
+    );
     let wall = store
         .badge_wall()
         .await
@@ -409,7 +475,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
             .unwrap()
             .get(0);
         let expected_streak = if index < 7 { index as i32 + 1 } else { 7 };
-        assert_eq!(observed_streak, expected_streak, "streak transition on threshold episode {index}");
+        assert_eq!(
+            observed_streak, expected_streak,
+            "streak transition on threshold episode {index}"
+        );
     }
     let state = probe
         .query_one(
@@ -422,9 +491,17 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .unwrap();
     assert_eq!(state.get::<_, i32>(1), 10);
     assert_eq!(state.get::<_, i32>(2), 12);
-    assert_eq!(state.get::<_, i32>(3), 7, "real dated watches build a seven-day streak");
+    assert_eq!(
+        state.get::<_, i32>(3),
+        7,
+        "real dated watches build a seven-day streak"
+    );
     assert_eq!(state.get::<_, i32>(4), 7);
-    assert_eq!(state.get::<_, i32>(5), 2, "watch XP crosses level 2 without a state edit");
+    assert_eq!(
+        state.get::<_, i32>(5),
+        2,
+        "watch XP crosses level 2 without a state edit"
+    );
 
     // The next level is reached by another real completed Plex movie, not by
     // editing character_state. This opens the third genre in the cascade.
@@ -459,7 +536,11 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .unwrap();
     assert_eq!(state.get::<_, i64>(0), 250);
-    assert_eq!(state.get::<_, i32>(1), 3, "watch XP crosses level 3 without a state edit");
+    assert_eq!(
+        state.get::<_, i32>(1),
+        3,
+        "watch XP crosses level 3 without a state edit"
+    );
 
     // Levels 2 and 3 now drive real genre-access transitions. The store owns
     // both each genre_access row and the character_state counter atomically.
@@ -471,7 +552,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(accessed.name, "Mystery");
     assert_eq!(accessed.genres_accessed, 3);
     assert!(accessed.accessed);
-    assert!(store.access_genre("Thriller").await.is_err(), "duplicate access is rejected");
+    assert!(
+        store.access_genre("Thriller").await.is_err(),
+        "duplicate access is rejected"
+    );
 
     // Complete one newly accessed Thriller and Mystery title through the same
     // watch-award path. This makes genre diversity an observed ledger fact,
@@ -502,7 +586,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         },
     ];
     assert_eq!(
-        store.award_plex_watches(&accessed_states, today).await.unwrap(),
+        store
+            .award_plex_watches(&accessed_states, today)
+            .await
+            .unwrap(),
         2,
         "newly accessed genre watches award through the real path"
     );
@@ -531,13 +618,19 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .expect("evaluation succeeds")
         .expect("a character exists");
-    assert!(evaluation.unlocked.is_empty(), "unlock writes are idempotent");
+    assert!(
+        evaluation.unlocked.is_empty(),
+        "unlock writes are idempotent"
+    );
     let unlock_rows: i64 = probe
         .query_one("SELECT count(*) FROM character_achievements", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(unlock_rows, 5, "exactly the five real achievement unlocks are stored");
+    assert_eq!(
+        unlock_rows, 5,
+        "exactly the five real achievement unlocks are stored"
+    );
 
     // The order threshold is still unmet at this point. A locked archetype
     // is rejected without changing the active loadout or creating an event;
@@ -586,24 +679,27 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         })
         .collect();
     assert_eq!(
-        store.award_plex_watches(&order_states, today).await.unwrap(),
+        store
+            .award_plex_watches(&order_states, today)
+            .await
+            .unwrap(),
         5,
         "each order movie completes through the real watch-award path"
-    );    let completion_tick = movie_rpg::game::run_game_tick(&store, None)
-        .await
-        .unwrap();
+    );
+    let completion_tick = movie_rpg::game::run_game_tick(&store, None).await.unwrap();
     assert_eq!(completion_tick.orders.skips_granted, 1);
 
     // Simulate recovery from a process interruption between order completion
     // and reward insertion: the repair path must restore exactly one grant,
     // without duplicating the completed order or changing its history.
     probe
-        .execute("DELETE FROM skip_grants WHERE source_order_id = $1", &[&order_id])
+        .execute(
+            "DELETE FROM skip_grants WHERE source_order_id = $1",
+            &[&order_id],
+        )
         .await
         .unwrap();
-    let recovery_tick = movie_rpg::game::run_game_tick(&store, None)
-        .await
-        .unwrap();
+    let recovery_tick = movie_rpg::game::run_game_tick(&store, None).await.unwrap();
     assert_eq!(recovery_tick.orders.skips_granted, 1);
     assert_eq!(
         probe
@@ -679,20 +775,30 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .await
         .unwrap();
     // Every order action below goes through the game tick (§9.1 phases).
-    let tick = movie_rpg::game::run_game_tick(&store, None).await.expect("tick succeeds");
+    let tick = movie_rpg::game::run_game_tick(&store, None)
+        .await
+        .expect("tick succeeds");
     assert_eq!(tick.watches_awarded, 0, "phase 1 is the documented V1 slot");
-    assert_eq!(tick.orders.orders_created.len(), 1, "horror is the only accessible genre");
+    assert_eq!(
+        tick.orders.orders_created.len(),
+        1,
+        "horror is the only accessible genre"
+    );
     assert_eq!(tick.orders.orders_created[0].genre, "Horror");
     assert_eq!(
-        tick.orders.orders_created[0].cycle_number,
-        2,
+        tick.orders.orders_created[0].cycle_number, 2,
         "the real order completion above already consumed cycle 1"
     );
     assert!(tick.achievements.expect("phase 3 ran").unlocked.is_empty());
 
     // Generation is deterministic and five movies long.
-    let tick = movie_rpg::game::run_game_tick(&store, None).await.expect("idempotent tick");
-    assert!(tick.orders.orders_created.is_empty(), "no duplicate generation");
+    let tick = movie_rpg::game::run_game_tick(&store, None)
+        .await
+        .expect("idempotent tick");
+    assert!(
+        tick.orders.orders_created.is_empty(),
+        "no duplicate generation"
+    );
 
     let board = store
         .order_view()
@@ -708,7 +814,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     assert_eq!(items.len(), 5);
     assert!(!items[0].locked, "item 1 is revealed at creation");
     assert!(items[0].title.is_some(), "revealed item carries its title");
-    assert!(items[1..].iter().all(|item| item.locked), "items 2-5 are locked");
+    assert!(
+        items[1..].iter().all(|item| item.locked),
+        "items 2-5 are locked"
+    );
     // THE LEAKAGE GUARD: locked items carry nothing but position + locked.
     for item in items.iter().skip(1) {
         assert!(item.content_id.is_none() && item.title.is_none() && item.year.is_none());
@@ -736,7 +845,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // A skip on the revealed item 2 resolves it without a watch row. The
     // earlier real order completion supplied this balance, proving the grant
     // ledger carries across orders.
-    let skip = store.skip_order_item(board[0].id).await.expect("skip succeeds");
+    let skip = store
+        .skip_order_item(board[0].id)
+        .await
+        .expect("skip succeeds");
     assert_eq!(skip, SkipOutcome::Skipped { position: 2 });
     let board = store
         .order_view()
@@ -749,17 +861,29 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // remaining items unresolved so the proof can continue to exercise the
     // mystery-safe active-order API; completion and skip-grant creation were
     // already proven by the first real order above.
-    let tick = movie_rpg::game::run_game_tick(&store, None).await.expect("idempotent tick");
-    assert!(tick.orders.orders_created.is_empty(), "V1 caps the genre at two cycles");
+    let tick = movie_rpg::game::run_game_tick(&store, None)
+        .await
+        .expect("idempotent tick");
+    assert!(
+        tick.orders.orders_created.is_empty(),
+        "V1 caps the genre at two cycles"
+    );
     let board = store
         .order_view()
         .await
         .expect("order view succeeds")
         .expect("a character exists");
-    assert_eq!(board.len(), 2, "active cycle 2 plus completed cycle 1 as history");
+    assert_eq!(
+        board.len(),
+        2,
+        "active cycle 2 plus completed cycle 1 as history"
+    );
     assert_eq!(board[0].cycle_number, 2);
     let balance: i64 = probe
-        .query_one("SELECT count(*) FROM skip_grants WHERE spent_at IS NULL", &[])
+        .query_one(
+            "SELECT count(*) FROM skip_grants WHERE spent_at IS NULL",
+            &[],
+        )
         .await
         .unwrap()
         .get(0);
@@ -805,22 +929,33 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
             let mut request = [0_u8; 8192];
             let bytes_read = stream.read(&mut request).await.unwrap_or(0);
             let request = String::from_utf8_lossy(&request[..bytes_read]);
-            let (status, body, content_type) = if request.contains("/library/sections")
-                && !request.contains("/all")
-            {
-                (200, include_str!("../fixtures/plex_sections.xml"), "application/xml")
-            } else if request.contains("/library/sections/1/all") {
-                (200, include_str!("../fixtures/plex_library.xml"), "application/xml")
-            } else if request.contains("/library/sections/2/all") {
-                (200, "<MediaContainer size=\"0\"></MediaContainer>", "application/xml")
-            } else if request.contains("/api/v3/") {
-                // Sonarr/Radarr unreachable: non-retryable status.
-                (404, "not found", "text/plain")
-            } else {
-                // Every metadata provider fails (retryable): the sync must
-                // still succeed with zero provider-cache rows.
-                (503, "temporary", "text/plain")
-            };
+            let (status, body, content_type) =
+                if request.contains("/library/sections") && !request.contains("/all") {
+                    (
+                        200,
+                        include_str!("../fixtures/plex_sections.xml"),
+                        "application/xml",
+                    )
+                } else if request.contains("/library/sections/1/all") {
+                    (
+                        200,
+                        include_str!("../fixtures/plex_library.xml"),
+                        "application/xml",
+                    )
+                } else if request.contains("/library/sections/2/all") {
+                    (
+                        200,
+                        "<MediaContainer size=\"0\"></MediaContainer>",
+                        "application/xml",
+                    )
+                } else if request.contains("/api/v3/") {
+                    // Sonarr/Radarr unreachable: non-retryable status.
+                    (404, "not found", "text/plain")
+                } else {
+                    // Every metadata provider fails (retryable): the sync must
+                    // still succeed with zero provider-cache rows.
+                    (503, "temporary", "text/plain")
+                };
             let reason = if status == 200 { "OK" } else { "Error" };
             let response = format!(
                 "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -841,25 +976,40 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         tmdb: movie_rpg::providers::TmdbClient::with_base_url(format!("{mock_base}/tmdb"), "k"),
         tvdb: movie_rpg::providers::TvdbClient::with_base_url(format!("{mock_base}/tvdb"), "k"),
         omdb: movie_rpg::providers::OmdbClient::with_base_url(format!("{mock_base}/omdb"), "k"),
-        fanart: movie_rpg::providers::FanartClient::with_base_url(format!("{mock_base}/fanart"), "k"),
+        fanart: movie_rpg::providers::FanartClient::with_base_url(
+            format!("{mock_base}/fanart"),
+            "k",
+        ),
     };
     let summary = movie_rpg::poll::run_poll_cycle(&store, &stack).await;
-    let sync = summary.sync.as_ref().expect("sync tolerates stack+provider failures");
+    let sync = summary
+        .sync
+        .as_ref()
+        .expect("sync tolerates stack+provider failures");
     assert_eq!(
-        sync.persistence.content_rows,
-        2,
+        sync.persistence.content_rows, 2,
         "the two Plex fixture items sync into the catalog"
     );
     assert_eq!(
-        sync.persistence.provider_cache_rows,
-        2,
+        sync.persistence.provider_cache_rows, 2,
         "failed provider attempts persist auditable cache failure rows"
     );
-    assert_eq!(sync.prepared.outcome.stack_failures.len(), 2, "sonarr + radarr failures logged");
-    let tick = summary.tick.as_ref().expect("tick runs after degraded sync");
-    assert_eq!(tick.watches_awarded, 1, "movie 271 completes (viewCount), the show does not");
     assert_eq!(
-        tick.orders.orders_created.len(), 0,
+        sync.prepared.outcome.stack_failures.len(),
+        2,
+        "sonarr + radarr failures logged"
+    );
+    let tick = summary
+        .tick
+        .as_ref()
+        .expect("tick runs after degraded sync");
+    assert_eq!(
+        tick.watches_awarded, 1,
+        "movie 271 completes (viewCount), the show does not"
+    );
+    assert_eq!(
+        tick.orders.orders_created.len(),
+        0,
         "existing orders are active; refresh generates nothing"
     );
     let line = movie_rpg::poll::format_cycle_log(&summary);
@@ -903,13 +1053,38 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .unwrap();
     let fixture_awards: Vec<_> = award_rows
         .iter()
-        .filter(|row| matches!(row.get::<_, String>(0).as_str(), "fixture-movie-1" | "fixture-movie-2" | "271"))
+        .filter(|row| {
+            matches!(
+                row.get::<_, String>(0).as_str(),
+                "fixture-movie-1" | "fixture-movie-2" | "271"
+            )
+        })
         .collect();
-    assert_eq!(fixture_awards.len(), 3, "two historical fixture awards plus one new award");
-    assert_eq!(fixture_awards[0].get::<_, i64>(1), 20, "historical award remains unchanged");
-    assert_eq!(fixture_awards[0].get::<_, i64>(2), 20, "historical normal XP remains unchanged");
-    assert_eq!(fixture_awards[1].get::<_, i64>(1), 20, "historical award remains unchanged");
-    assert_eq!(fixture_awards[2].get::<_, i64>(1), 22, "new award uses active archetype effect");
+    assert_eq!(
+        fixture_awards.len(),
+        3,
+        "two historical fixture awards plus one new award"
+    );
+    assert_eq!(
+        fixture_awards[0].get::<_, i64>(1),
+        20,
+        "historical award remains unchanged"
+    );
+    assert_eq!(
+        fixture_awards[0].get::<_, i64>(2),
+        20,
+        "historical normal XP remains unchanged"
+    );
+    assert_eq!(
+        fixture_awards[1].get::<_, i64>(1),
+        20,
+        "historical award remains unchanged"
+    );
+    assert_eq!(
+        fixture_awards[2].get::<_, i64>(1),
+        22,
+        "new award uses active archetype effect"
+    );
     // F-6 ledger semantics: normal_xp stays the neutral §5.1 value; the
     // archetype adjustment lives only in xp_awarded.
     assert_eq!(
@@ -923,9 +1098,7 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
     // shutdown runs zero cycles and returns the completed-cycle count.
     let store_handle = std::sync::Arc::new(store);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    shutdown_tx
-        .send(true)
-        .expect("shutdown receiver is alive");
+    shutdown_tx.send(true).expect("shutdown receiver is alive");
     let cycles = movie_rpg::poll::run_poll_loop(
         store_handle.clone(),
         stack,
@@ -966,7 +1139,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .json()
         .await
         .unwrap();
-    assert_eq!(status["locked"], false, "account exists, gate is ready for login");
+    assert_eq!(
+        status["locked"], false,
+        "account exists, gate is ready for login"
+    );
 
     // Gated route without a cookie: 401.
     let response = http
@@ -999,7 +1175,10 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .and_then(|value| value.to_str().ok())
         .expect("login sets the session cookie")
         .to_owned();
-    assert!(set_cookie.starts_with("rpg_session="), "cookie is {set_cookie:?}");
+    assert!(
+        set_cookie.starts_with("rpg_session="),
+        "cookie is {set_cookie:?}"
+    );
     assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Lax"));
     let token = set_cookie
         .split(';')
@@ -1111,13 +1290,23 @@ async fn store_proof_runs_the_real_surface_against_scratch_postgres() {
         .json()
         .await
         .expect("orders are a json array");
-    assert_eq!(orders.as_array().map(Vec::len), Some(2), "active + completed history");
+    assert_eq!(
+        orders.as_array().map(Vec::len),
+        Some(2),
+        "active + completed history"
+    );
     // Items 1-3 are revealed by now (item 2 via the skip); 4-5 remain
     // locked because item 3 has not been watched.
     let locked_item = &orders[0]["items"][3];
     assert_eq!(locked_item["locked"], true);
-    assert!(locked_item.get("title").is_none(), "locked item leaks no title");
-    assert!(locked_item.get("content_id").is_none(), "locked item leaks no content id");
+    assert!(
+        locked_item.get("title").is_none(),
+        "locked item leaks no title"
+    );
+    assert!(
+        locked_item.get("content_id").is_none(),
+        "locked item leaks no content id"
+    );
     let revealed_item = &orders[0]["items"][0];
     assert_eq!(revealed_item["locked"], false);
     assert!(revealed_item["title"].is_string());

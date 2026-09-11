@@ -224,45 +224,32 @@ impl<'a> EnrichmentCoordinator<'a> {
         let mut batch = EnrichmentBatch::default();
 
         if let Some(tmdb_id) = request.tmdb_id {
-            let key = ProviderCacheKey::new("tmdb", tmdb_id.to_string(), request.content_id.clone());
+            let key =
+                ProviderCacheKey::new("tmdb", tmdb_id.to_string(), request.content_id.clone());
             let client = self.tmdb;
             let kind = request.kind;
-            let outcome = load_json(
-                self.cache,
-                key,
-                now,
-                self.ttl_seconds,
-                move || async move {
-                    let details = match kind {
-                        ContentKind::Movie => client.movie(tmdb_id).await?,
-                        ContentKind::Series => client.tv(tmdb_id).await?,
-                    };
-                    Ok(serde_json::to_value(details)?)
-                },
-            )
+            let outcome = load_json(self.cache, key, now, self.ttl_seconds, move || async move {
+                let details = match kind {
+                    ContentKind::Movie => client.movie(tmdb_id).await?,
+                    ContentKind::Series => client.tv(tmdb_id).await?,
+                };
+                Ok(serde_json::to_value(details)?)
+            })
             .await;
             batch.record(outcome);
         }
 
         if request.kind == ContentKind::Series {
             if let Some(tvdb_id) = request.tvdb_id {
-                let key = ProviderCacheKey::new(
-                    "tvdb",
-                    tvdb_id.to_string(),
-                    request.content_id.clone(),
-                );
+                let key =
+                    ProviderCacheKey::new("tvdb", tvdb_id.to_string(), request.content_id.clone());
                 let client = self.tvdb;
-                let outcome = load_json(
-                    self.cache,
-                    key,
-                    now,
-                    self.ttl_seconds,
-                    move || async move {
+                let outcome =
+                    load_json(self.cache, key, now, self.ttl_seconds, move || async move {
                         client.ensure_login().await?;
                         client.series(tvdb_id).await
-                    },
-                )
-                .await;
+                    })
+                    .await;
                 batch.record(outcome);
             }
         }
@@ -270,13 +257,9 @@ impl<'a> EnrichmentCoordinator<'a> {
         if let Some(imdb_id) = request.imdb_id.clone() {
             let key = ProviderCacheKey::new("omdb", imdb_id.clone(), request.content_id.clone());
             let client = self.omdb;
-            let outcome = load_json(
-                self.cache,
-                key,
-                now,
-                self.ttl_seconds,
-                move || async move { Ok(serde_json::to_value(client.by_imdb_id(&imdb_id).await?)?) },
-            )
+            let outcome = load_json(self.cache, key, now, self.ttl_seconds, move || async move {
+                Ok(serde_json::to_value(client.by_imdb_id(&imdb_id).await?)?)
+            })
             .await;
             batch.record(outcome);
         } else if let Some(title) = request.title.clone() {
@@ -291,15 +274,11 @@ impl<'a> EnrichmentCoordinator<'a> {
             let key = ProviderCacheKey::new("omdb", provider_id, request.content_id.clone());
             let client = self.omdb;
             let year = request.year;
-            let outcome = load_json(
-                self.cache,
-                key,
-                now,
-                self.ttl_seconds,
-                move || async move {
-                    Ok(serde_json::to_value(client.by_title_year(&title, year).await?)?)
-                },
-            )
+            let outcome = load_json(self.cache, key, now, self.ttl_seconds, move || async move {
+                Ok(serde_json::to_value(
+                    client.by_title_year(&title, year).await?,
+                )?)
+            })
             .await;
             batch.record(outcome);
         }
@@ -310,26 +289,16 @@ impl<'a> EnrichmentCoordinator<'a> {
         };
         if let Some(fanart_id) = fanart_id {
             let provider_id = fanart_id.to_string();
-            let key = ProviderCacheKey::new(
-                "fanart",
-                provider_id,
-                request.content_id.clone(),
-            );
+            let key = ProviderCacheKey::new("fanart", provider_id, request.content_id.clone());
             let client = self.fanart;
             let kind = request.kind;
-            let outcome = load_json(
-                self.cache,
-                key,
-                now,
-                self.ttl_seconds,
-                move || async move {
-                    let payload = match kind {
-                        ContentKind::Movie => client.movie(fanart_id).await?,
-                        ContentKind::Series => client.tv(fanart_id).await?,
-                    };
-                    Ok(serde_json::to_value(payload)?)
-                },
-            )
+            let outcome = load_json(self.cache, key, now, self.ttl_seconds, move || async move {
+                let payload = match kind {
+                    ContentKind::Movie => client.movie(fanart_id).await?,
+                    ContentKind::Series => client.tv(fanart_id).await?,
+                };
+                Ok(serde_json::to_value(payload)?)
+            })
             .await;
             batch.record(outcome);
         }
@@ -378,12 +347,7 @@ where
             let used_stale = stale.is_some();
             let http_status = http_status(&error);
             let error_message = error.to_string();
-            cache.store_failure(
-                key.clone(),
-                now,
-                http_status,
-                error_message.clone(),
-            );
+            cache.store_failure(key.clone(), now, http_status, error_message.clone());
             ProviderOutcome {
                 payload: stale.map(|entry| payload_from_entry(entry, true, true, now)),
                 failure: Some(EnrichmentFailure {
@@ -455,11 +419,27 @@ mod tests {
     #[tokio::test]
     async fn uses_all_provider_clients_once_then_reads_fresh_cache() {
         let (base_url, server) = scripted_server(vec![
-            (200, "GET /tv/603", include_str!("../fixtures/tmdb_movie.json")),
-            (200, "POST /login", include_str!("../fixtures/tvdb_login.json")),
-            (200, "GET /series/67890", include_str!("../fixtures/tvdb_series.json")),
+            (
+                200,
+                "GET /tv/603",
+                include_str!("../fixtures/tmdb_movie.json"),
+            ),
+            (
+                200,
+                "POST /login",
+                include_str!("../fixtures/tvdb_login.json"),
+            ),
+            (
+                200,
+                "GET /series/67890",
+                include_str!("../fixtures/tvdb_series.json"),
+            ),
             (200, "GET /?", include_str!("../fixtures/omdb_movie.json")),
-            (200, "GET /tv/67890", include_str!("../fixtures/fanart_movie.json")),
+            (
+                200,
+                "GET /tv/67890",
+                include_str!("../fixtures/fanart_movie.json"),
+            ),
         ])
         .await;
         let tmdb = TmdbClient::with_base_url(&base_url, "tmdb-key");
@@ -477,9 +457,8 @@ mod tests {
         };
         let mut cache = MetadataCache::default();
         let (first, second) = {
-            let mut coordinator = EnrichmentCoordinator::new(
-                &tmdb, &tvdb, &omdb, &fanart, &mut cache, 3600,
-            );
+            let mut coordinator =
+                EnrichmentCoordinator::new(&tmdb, &tvdb, &omdb, &fanart, &mut cache, 3600);
             let first = coordinator.enrich(&request, 100).await;
             let second = coordinator.enrich(&request, 101).await;
             (first, second)
@@ -498,14 +477,26 @@ mod tests {
     #[tokio::test]
     async fn stale_provider_failure_keeps_payload_and_does_not_block_other_providers() {
         let (base_url, server) = scripted_server(vec![
-            (200, "GET /movie/603", include_str!("../fixtures/tmdb_movie.json")),
+            (
+                200,
+                "GET /movie/603",
+                include_str!("../fixtures/tmdb_movie.json"),
+            ),
             (200, "GET /?", include_str!("../fixtures/omdb_movie.json")),
-            (200, "GET /movies/603", include_str!("../fixtures/fanart_movie.json")),
+            (
+                200,
+                "GET /movies/603",
+                include_str!("../fixtures/fanart_movie.json"),
+            ),
             (503, "GET /movie/603", "temporary"),
             (503, "GET /movie/603", "temporary"),
             (503, "GET /movie/603", "temporary"),
             (200, "GET /?", include_str!("../fixtures/omdb_movie.json")),
-            (200, "GET /movies/603", include_str!("../fixtures/fanart_movie.json")),
+            (
+                200,
+                "GET /movies/603",
+                include_str!("../fixtures/fanart_movie.json"),
+            ),
         ])
         .await;
         let tmdb = TmdbClient::with_base_url(&base_url, "tmdb-key");
@@ -523,9 +514,8 @@ mod tests {
         };
         let mut cache = MetadataCache::default();
         let second = {
-            let mut coordinator = EnrichmentCoordinator::new(
-                &tmdb, &tvdb, &omdb, &fanart, &mut cache, 10,
-            );
+            let mut coordinator =
+                EnrichmentCoordinator::new(&tmdb, &tvdb, &omdb, &fanart, &mut cache, 10);
             coordinator.enrich(&request, 100).await;
             coordinator.enrich(&request, 200).await
         };

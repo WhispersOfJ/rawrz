@@ -1,11 +1,7 @@
 use crate::enrichment::MetadataCache;
-use crate::persistence::{
-    ContentPersistencePlan, PersistenceSummary, PostgresContentStore,
-};
+use crate::persistence::{ContentPersistencePlan, PersistenceSummary, PostgresContentStore};
 use crate::providers::{FanartClient, OmdbClient, TmdbClient, TvdbClient};
-use crate::sync::{
-    EnrichedSyncOutcome, ProviderEnrichmentOrchestrator, StackSyncOrchestrator,
-};
+use crate::sync::{EnrichedSyncOutcome, ProviderEnrichmentOrchestrator, StackSyncOrchestrator};
 use crate::Result;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -90,11 +86,7 @@ impl<'a> SyncPipeline<'a> {
         }
     }
 
-    pub async fn run(
-        &mut self,
-        store: &PostgresContentStore,
-        now: u64,
-    ) -> Result<SyncRunResult> {
+    pub async fn run(&mut self, store: &PostgresContentStore, now: u64) -> Result<SyncRunResult> {
         // F-21: migrations run once at startup, not on each of the 288 daily
         // cycles. Hydration fills the in-memory cache from persisted rows.
         store.hydrate_cache(self.cache).await?;
@@ -102,7 +94,9 @@ impl<'a> SyncPipeline<'a> {
         let persistence = store.persist(&prepared.plan).await?;
         // F-16 retention: expired rows are pruned after a grace period
         // (kept for stale-fallback), so the cache table cannot grow forever.
-        store.prune_provider_cache(PROVIDER_CACHE_GRACE_SECONDS).await?;
+        store
+            .prune_provider_cache(PROVIDER_CACHE_GRACE_SECONDS)
+            .await?;
         Ok(SyncRunResult {
             prepared,
             persistence,
@@ -191,8 +185,14 @@ mod tests {
         assert_eq!(prepared.outcome.stack_failures.len(), 1);
         assert_eq!(prepared.outcome.stack_failures[0].source.as_str(), "sonarr");
         assert_eq!(prepared.outcome.provider_failures.len(), 1);
-        assert_eq!(prepared.outcome.provider_failures[0].failure.provider, "tmdb");
-        assert_eq!(prepared.outcome.provider_failures[0].failure.http_status, Some(503));
+        assert_eq!(
+            prepared.outcome.provider_failures[0].failure.provider,
+            "tmdb"
+        );
+        assert_eq!(
+            prepared.outcome.provider_failures[0].failure.http_status,
+            Some(503)
+        );
         assert_eq!(prepared.outcome.batch.len(), 3);
         assert_eq!(prepared.plan.content.len(), 3);
         assert_eq!(prepared.plan.provider_cache.len(), 5);
@@ -229,7 +229,11 @@ mod tests {
                         "application/xml",
                     )
                 } else if request.contains("/library/sections/2/all") {
-                    (200, "<MediaContainer size=\"0\"></MediaContainer>", "application/xml")
+                    (
+                        200,
+                        "<MediaContainer size=\"0\"></MediaContainer>",
+                        "application/xml",
+                    )
                 } else if request.contains("/api/v3/series") {
                     if sonarr_failure {
                         (401, "unauthorized", "application/json")
@@ -255,9 +259,17 @@ mod tests {
                         "application/json",
                     )
                 } else if request.contains("/tvdb/login") {
-                    (200, include_str!("../fixtures/tvdb_login.json"), "application/json")
+                    (
+                        200,
+                        include_str!("../fixtures/tvdb_login.json"),
+                        "application/json",
+                    )
                 } else if request.contains("/tvdb/series/") {
-                    (200, include_str!("../fixtures/tvdb_series.json"), "application/json")
+                    (
+                        200,
+                        include_str!("../fixtures/tvdb_series.json"),
+                        "application/json",
+                    )
                 } else if request.contains("/fanart/movies/") || request.contains("/fanart/tv/") {
                     (
                         200,

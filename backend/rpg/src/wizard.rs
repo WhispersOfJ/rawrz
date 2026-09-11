@@ -273,19 +273,23 @@ pub fn streak_after_watch(
 
 /// Rune Forger affects only visible presentation progress, never unlock truth.
 pub fn visible_achievement_progress(progress: i64) -> i64 {
-    progress.max(0).saturating_mul(110).checked_div(100).unwrap_or(0)
+    progress
+        .max(0)
+        .saturating_mul(110)
+        .checked_div(100)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
     use super::{
         affinity_points_for_watch, apply_affinity, is_cold_gap, normal_xp_for_watch,
         normal_xp_with_focus, selection_allowed, spell_unlock_satisfied, streak_after_watch,
         unlock_satisfied, visible_achievement_progress, AffinityCalculation, SelectionRejection,
-        UnlockFacts, EMBER_ADEPT, LANTERN_SCHOLAR, MOONLIT_MEDIATOR, RUNE_FORGER,
-        STAR_SHEPHERD, VANISHING_STEP, VEIL_CARTOGRAPHER,
+        UnlockFacts, EMBER_ADEPT, LANTERN_SCHOLAR, MOONLIT_MEDIATOR, RUNE_FORGER, STAR_SHEPHERD,
+        VANISHING_STEP, VEIL_CARTOGRAPHER,
     };
+    use chrono::NaiveDate;
 
     fn facts() -> UnlockFacts {
         UnlockFacts {
@@ -386,19 +390,46 @@ mod tests {
 
     #[test]
     fn focus_sigil_stacks_additively_with_the_archetype_component() {
-        assert_eq!(normal_xp_with_focus(EMBER_ADEPT, "movie", false, 20, true), 24);
-        assert_eq!(normal_xp_with_focus(EMBER_ADEPT, "episode", false, 10, true), 10);
-        assert_eq!(normal_xp_with_focus(LANTERN_SCHOLAR, "movie", false, 20, true), 22);
+        assert_eq!(
+            normal_xp_with_focus(EMBER_ADEPT, "movie", false, 20, true),
+            24
+        );
+        assert_eq!(
+            normal_xp_with_focus(EMBER_ADEPT, "episode", false, 10, true),
+            10
+        );
+        assert_eq!(
+            normal_xp_with_focus(LANTERN_SCHOLAR, "movie", false, 20, true),
+            22
+        );
     }
 
     #[test]
     fn affinity_uses_neutral_half_xp_and_bounded_archetype_effects() {
-        assert_eq!(affinity_points_for_watch(LANTERN_SCHOLAR, "episode", true, 10), 5);
-        assert_eq!(affinity_points_for_watch(LANTERN_SCHOLAR, "movie", true, 20), 10);
-        assert_eq!(affinity_points_for_watch(VEIL_CARTOGRAPHER, "movie", true, 20), 9);
-        assert_eq!(affinity_points_for_watch(STAR_SHEPHERD, "episode", true, 10), 4);
-        assert_eq!(affinity_points_for_watch(MOONLIT_MEDIATOR, "movie", true, 20), 11);
-        assert_eq!(affinity_points_for_watch(LANTERN_SCHOLAR, "movie", false, 20), 0);
+        assert_eq!(
+            affinity_points_for_watch(LANTERN_SCHOLAR, "episode", true, 10),
+            5
+        );
+        assert_eq!(
+            affinity_points_for_watch(LANTERN_SCHOLAR, "movie", true, 20),
+            10
+        );
+        assert_eq!(
+            affinity_points_for_watch(VEIL_CARTOGRAPHER, "movie", true, 20),
+            9
+        );
+        assert_eq!(
+            affinity_points_for_watch(STAR_SHEPHERD, "episode", true, 10),
+            4
+        );
+        assert_eq!(
+            affinity_points_for_watch(MOONLIT_MEDIATOR, "movie", true, 20),
+            11
+        );
+        assert_eq!(
+            affinity_points_for_watch(LANTERN_SCHOLAR, "movie", false, 20),
+            0
+        );
     }
 
     #[test]

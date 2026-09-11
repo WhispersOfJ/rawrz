@@ -9,8 +9,7 @@ pub const ACCOUNTS_CHARACTERS_MIGRATION: &str =
 pub const GENRES_VERSION: &str = "0004_genres";
 pub const GENRES_MIGRATION: &str = include_str!("../migrations/0004_genres.sql");
 pub const CHARACTER_STATE_VERSION: &str = "0005_character_state";
-pub const CHARACTER_STATE_MIGRATION: &str =
-    include_str!("../migrations/0005_character_state.sql");
+pub const CHARACTER_STATE_MIGRATION: &str = include_str!("../migrations/0005_character_state.sql");
 pub const SETTINGS_VERSION: &str = "0006_settings";
 pub const SETTINGS_MIGRATION: &str = include_str!("../migrations/0006_settings.sql");
 pub const WATCHES_VERSION: &str = "0007_watches";
@@ -18,14 +17,11 @@ pub const WATCHES_MIGRATION: &str = include_str!("../migrations/0007_watches.sql
 pub const CASES_VERSION: &str = "0008_cases";
 pub const CASES_MIGRATION: &str = include_str!("../migrations/0008_cases.sql");
 pub const FEATURED_CASES_VERSION: &str = "0009_featured_cases";
-pub const FEATURED_CASES_MIGRATION: &str =
-    include_str!("../migrations/0009_featured_cases.sql");
+pub const FEATURED_CASES_MIGRATION: &str = include_str!("../migrations/0009_featured_cases.sql");
 pub const ACHIEVEMENTS_VERSION: &str = "0010_achievements";
-pub const ACHIEVEMENTS_MIGRATION: &str =
-    include_str!("../migrations/0010_achievements.sql");
+pub const ACHIEVEMENTS_MIGRATION: &str = include_str!("../migrations/0010_achievements.sql");
 pub const WATCH_ORDERS_VERSION: &str = "0011_watch_orders";
-pub const WATCH_ORDERS_MIGRATION: &str =
-    include_str!("../migrations/0011_watch_orders.sql");
+pub const WATCH_ORDERS_MIGRATION: &str = include_str!("../migrations/0011_watch_orders.sql");
 pub const WIZARD_ARCHETYPES_VERSION: &str = "0012_wizard_archetypes";
 pub const WIZARD_ARCHETYPES_MIGRATION: &str =
     include_str!("../migrations/0012_wizard_archetypes.sql");
@@ -42,10 +38,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         INITIAL_CONTENT_PROVIDER_CACHE,
     ),
     (SYNC_STATE_VERSION, SYNC_STATE_MIGRATION),
-    (
-        ACCOUNTS_CHARACTERS_VERSION,
-        ACCOUNTS_CHARACTERS_MIGRATION,
-    ),
+    (ACCOUNTS_CHARACTERS_VERSION, ACCOUNTS_CHARACTERS_MIGRATION),
     (GENRES_VERSION, GENRES_MIGRATION),
     (CHARACTER_STATE_VERSION, CHARACTER_STATE_MIGRATION),
     (SETTINGS_VERSION, SETTINGS_MIGRATION),
@@ -55,10 +48,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (ACHIEVEMENTS_VERSION, ACHIEVEMENTS_MIGRATION),
     (WATCH_ORDERS_VERSION, WATCH_ORDERS_MIGRATION),
     (WIZARD_ARCHETYPES_VERSION, WIZARD_ARCHETYPES_MIGRATION),
-    (
-        WATCHES_UNIQUE_AWARD_VERSION,
-        WATCHES_UNIQUE_AWARD_MIGRATION,
-    ),
+    (WATCHES_UNIQUE_AWARD_VERSION, WATCHES_UNIQUE_AWARD_MIGRATION),
     (
         WIZARD_RESOURCES_SPELLS_VERSION,
         WIZARD_RESOURCES_SPELLS_MIGRATION,
@@ -71,9 +61,8 @@ mod tests {
         ACCOUNTS_CHARACTERS_MIGRATION, ACHIEVEMENTS_MIGRATION, CASES_MIGRATION,
         CHARACTER_STATE_MIGRATION, FEATURED_CASES_MIGRATION, GENRES_MIGRATION,
         INITIAL_CONTENT_PROVIDER_CACHE as SQL, MIGRATIONS, SETTINGS_MIGRATION,
-        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION,
-        WATCH_ORDERS_MIGRATION, WIZARD_ARCHETYPES_MIGRATION,
-        WIZARD_RESOURCES_SPELLS_MIGRATION,
+        SYNC_STATE_MIGRATION, SYNC_STATE_VERSION, WATCHES_MIGRATION, WATCH_ORDERS_MIGRATION,
+        WIZARD_ARCHETYPES_MIGRATION, WIZARD_RESOURCES_SPELLS_MIGRATION,
     };
 
     fn statement_containing<'a>(sql: &'a str, fragment: &str) -> &'a str {
@@ -201,7 +190,10 @@ mod tests {
             "is_opening boolean NOT NULL DEFAULT false",
         ] {
             assert!(
-                contains_sql(statement_containing(GENRES_MIGRATION, "CREATE TABLE genres ("), field),
+                contains_sql(
+                    statement_containing(GENRES_MIGRATION, "CREATE TABLE genres ("),
+                    field
+                ),
                 "genres table is missing {field:?}"
             );
         }
@@ -297,8 +289,7 @@ mod tests {
 
     #[test]
     fn creates_settings_key_value_table_for_character_scoped_config() {
-        let statement =
-            statement_containing(SETTINGS_MIGRATION, "CREATE TABLE settings (");
+        let statement = statement_containing(SETTINGS_MIGRATION, "CREATE TABLE settings (");
         for field in [
             "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
             "key text NOT NULL",
@@ -358,14 +349,16 @@ mod tests {
             "CREATE INDEX watches_completed_at ON watches(character_id, completed_at DESC)",
             "CREATE INDEX watches_content ON watches(content_id)",
         ] {
-            assert!(WATCHES_MIGRATION.contains(index), "watches migration is missing {index:?}");
+            assert!(
+                WATCHES_MIGRATION.contains(index),
+                "watches migration is missing {index:?}"
+            );
         }
     }
 
     #[test]
     fn lands_the_deferred_genre_xp_ledger_with_watch_link() {
-        let statement =
-            statement_containing(WATCHES_MIGRATION, "CREATE TABLE genre_xp_ledger (");
+        let statement = statement_containing(WATCHES_MIGRATION, "CREATE TABLE genre_xp_ledger (");
         for field in [
             "character_id bigint NOT NULL REFERENCES characters(id) ON DELETE CASCADE",
             "sub_genre_id bigint NOT NULL REFERENCES sub_genres(id) ON DELETE CASCADE",
@@ -410,7 +403,10 @@ mod tests {
             "CREATE INDEX cases_character ON cases(character_id)",
             "CREATE INDEX cases_status ON cases(character_id, status)",
         ] {
-            assert!(CASES_MIGRATION.contains(index), "cases migration is missing {index:?}");
+            assert!(
+                CASES_MIGRATION.contains(index),
+                "cases migration is missing {index:?}"
+            );
         }
     }
 
@@ -447,12 +443,13 @@ mod tests {
                 "featured_cases table is missing {field:?}"
             );
         }
-        assert!(FEATURED_CASES_MIGRATION.contains(
-            "FOREIGN KEY (featured_case_id) REFERENCES featured_cases(id)"
-        ));
+        assert!(FEATURED_CASES_MIGRATION
+            .contains("FOREIGN KEY (featured_case_id) REFERENCES featured_cases(id)"));
         // Both deferred columns are completed: watches (0007) and cases (0008).
         assert_eq!(
-            FEATURED_CASES_MIGRATION.matches("FOREIGN KEY (featured_case_id)").count(),
+            FEATURED_CASES_MIGRATION
+                .matches("FOREIGN KEY (featured_case_id)")
+                .count(),
             2,
             "0009 must complete both deferred featured_case_id foreign keys"
         );
@@ -480,7 +477,10 @@ mod tests {
             "metadata jsonb NOT NULL DEFAULT '{}'",
         ] {
             assert!(
-                contains_sql(statement_containing(ACHIEVEMENTS_MIGRATION, "CREATE TABLE achievements ("), field),
+                contains_sql(
+                    statement_containing(ACHIEVEMENTS_MIGRATION, "CREATE TABLE achievements ("),
+                    field
+                ),
                 "achievements table is missing {field:?}"
             );
         }
@@ -491,7 +491,10 @@ mod tests {
         ] {
             assert!(
                 contains_sql(
-                    statement_containing(ACHIEVEMENTS_MIGRATION, "CREATE TABLE character_achievements ("),
+                    statement_containing(
+                        ACHIEVEMENTS_MIGRATION,
+                        "CREATE TABLE character_achievements ("
+                    ),
                     field
                 ),
                 "character_achievements table is missing {field:?}"
@@ -516,12 +519,13 @@ mod tests {
             .expect("seed row is missing a metadata literal")
             + 1;
         let rest = &row[start..];
-        let end = rest
-            .find("}'")
-            .expect("metadata literal is unterminated")
-            + 1;
-        serde_json::from_str(&rest[..end])
-            .unwrap_or_else(|error| panic!("seed metadata must be valid json ({error}): {:?}", &rest[..end]))
+        let end = rest.find("}'").expect("metadata literal is unterminated") + 1;
+        serde_json::from_str(&rest[..end]).unwrap_or_else(|error| {
+            panic!(
+                "seed metadata must be valid json ({error}): {:?}",
+                &rest[..end]
+            )
+        })
     }
 
     #[test]
@@ -545,7 +549,11 @@ mod tests {
                     .trim_start_matches("\n  ")
             })
             .collect();
-        assert_eq!(rows.len(), 101, "the §5.5 first-cut list has 101 achievements");
+        assert_eq!(
+            rows.len(),
+            101,
+            "the §5.5 first-cut list has 101 achievements"
+        );
 
         // Every row names exactly one of the six spec categories.
         for category in [
@@ -565,9 +573,18 @@ mod tests {
         // Slugs are unique across the seed.
         let mut slugs: Vec<&str> = rows
             .iter()
-            .map(|row| row.split(',').next().unwrap_or("").trim().trim_matches('\''))
+            .map(|row| {
+                row.split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('\'')
+            })
             .collect();
-        assert!(!slugs.iter().any(|slug| slug.is_empty()), "seed row is missing a slug");
+        assert!(
+            !slugs.iter().any(|slug| slug.is_empty()),
+            "seed row is missing a slug"
+        );
         let unique = slugs.len();
         slugs.sort_unstable();
         slugs.dedup();
@@ -595,7 +612,10 @@ mod tests {
                 .iter()
                 .find(|row| row.contains(&format!("'{slug}'")))
                 .unwrap_or_else(|| panic!("seed is missing {slug}"));
-            assert!(row.contains(", NULL, "), "{slug} must not carry a target_value");
+            assert!(
+                row.contains(", NULL, "),
+                "{slug} must not carry a target_value"
+            );
         }
         for slug in ["spooky_season", "rainy_day", "actors_playground"] {
             let row = rows
@@ -604,7 +624,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("seed is missing {slug}"));
             let metadata = seed_row_metadata(row);
             assert!(
-                metadata.get("metadata_dependent").is_some() || metadata.get("cumulative").is_some(),
+                metadata.get("metadata_dependent").is_some()
+                    || metadata.get("cumulative").is_some(),
                 "{slug} must carry its finalized metadata flag"
             );
         }
@@ -631,11 +652,15 @@ mod tests {
             "UNIQUE (character_id, genre_id, cycle_number)",
         ] {
             assert!(
-                contains_sql(statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_orders ("), field),
+                contains_sql(
+                    statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_orders ("),
+                    field
+                ),
                 "watch_orders table is missing {field:?}"
             );
         }
-        let items = statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_order_items (");
+        let items =
+            statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE watch_order_items (");
         for field in [
             "order_id bigint NOT NULL REFERENCES watch_orders(id) ON DELETE CASCADE",
             "position int NOT NULL",
@@ -644,7 +669,10 @@ mod tests {
             "skipped_at timestamptz",
             "UNIQUE (order_id, position)",
         ] {
-            assert!(contains_sql(items, field), "watch_order_items table is missing {field:?}");
+            assert!(
+                contains_sql(items, field),
+                "watch_order_items table is missing {field:?}"
+            );
         }
         // The mystery invariant: item resolution is derived from the watches
         // ledger (or skipped_at) — never stored on the item row.
@@ -659,7 +687,10 @@ mod tests {
             "spent_item_id bigint REFERENCES watch_order_items(id)",
         ] {
             assert!(
-                contains_sql(statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE skip_grants ("), field),
+                contains_sql(
+                    statement_containing(WATCH_ORDERS_MIGRATION, "CREATE TABLE skip_grants ("),
+                    field
+                ),
                 "skip_grants table is missing {field:?}"
             );
         }
@@ -678,26 +709,48 @@ mod tests {
 
     #[test]
     fn creates_archetype_catalog_and_queued_selection_state() {
-        let catalog = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE wizard_archetypes (");
+        let catalog = statement_containing(
+            WIZARD_ARCHETYPES_MIGRATION,
+            "CREATE TABLE wizard_archetypes (",
+        );
         for field in [
             "slug text NOT NULL UNIQUE",
             "primary_effect jsonb NOT NULL DEFAULT '{}'",
             "unlock_kind text NOT NULL",
             "strengths jsonb NOT NULL DEFAULT '[]'",
         ] {
-            assert!(contains_sql(catalog, field), "wizard archetypes missing {field:?}");
+            assert!(
+                contains_sql(catalog, field),
+                "wizard archetypes missing {field:?}"
+            );
         }
         let definitions = [
-            "lantern_scholar", "ember_adept", "veil_cartographer",
-            "rune_forger", "star_shepherd", "moonlit_mediator",
+            "lantern_scholar",
+            "ember_adept",
+            "veil_cartographer",
+            "rune_forger",
+            "star_shepherd",
+            "moonlit_mediator",
         ];
         for slug in definitions {
             assert!(WIZARD_ARCHETYPES_MIGRATION.contains(&format!("'{slug}'")));
         }
-        let unlocks = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE character_archetypes (");
-        assert!(contains_sql(unlocks, "PRIMARY KEY (character_id, archetype_id)"));
-        let events = statement_containing(WIZARD_ARCHETYPES_MIGRATION, "CREATE TABLE character_archetype_events (");
-        assert!(contains_sql(events, "UNIQUE (character_id, event_type, source_event_key)"));
+        let unlocks = statement_containing(
+            WIZARD_ARCHETYPES_MIGRATION,
+            "CREATE TABLE character_archetypes (",
+        );
+        assert!(contains_sql(
+            unlocks,
+            "PRIMARY KEY (character_id, archetype_id)"
+        ));
+        let events = statement_containing(
+            WIZARD_ARCHETYPES_MIGRATION,
+            "CREATE TABLE character_archetype_events (",
+        );
+        assert!(contains_sql(
+            events,
+            "UNIQUE (character_id, event_type, source_event_key)"
+        ));
         assert!(WIZARD_ARCHETYPES_MIGRATION.contains("pending_archetype_id bigint"));
         assert!(WIZARD_ARCHETYPES_MIGRATION.contains("characters_pending_archetype_fields"));
         assert!(WIZARD_ARCHETYPES_MIGRATION.contains("active_archetype_id SET NOT NULL"));

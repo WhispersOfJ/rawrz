@@ -94,14 +94,14 @@ mod tests {
         assert!(validate_pin(&"9".repeat(MAX_PIN_DIGITS)).is_ok());
 
         for invalid_pin in [
-            "",                       // too short
-            "123",                    // 3 digits < MIN
-            "1234567890123",          // 13 digits > MAX
-            "12a4",                   // letter
-            "12 4",                   // whitespace
-            "12.4",                   // punctuation
-            "+1234",                  // sign
-            "１２３４",                // non-ASCII digits
+            "",              // too short
+            "123",           // 3 digits < MIN
+            "1234567890123", // 13 digits > MAX
+            "12a4",          // letter
+            "12 4",          // whitespace
+            "12.4",          // punctuation
+            "+1234",         // sign
+            "１２３４",      // non-ASCII digits
         ] {
             assert!(
                 matches!(validate_pin(invalid_pin), Err(ProbeError::InvalidPin)),

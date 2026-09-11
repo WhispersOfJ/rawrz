@@ -225,11 +225,8 @@ impl OmdbClient {
     async fn lookup(&self, extra: &[(&str, &str)]) -> Result<OmdbResponse> {
         let mut params = vec![("apikey", self.api_key.as_str()), ("plot", "full")];
         params.extend(extra.iter().copied());
-        let response = crate::send_with_retry(
-            "omdb",
-            self.http.get(&self.base_url).query(&params),
-        )
-        .await?;
+        let response =
+            crate::send_with_retry("omdb", self.http.get(&self.base_url).query(&params)).await?;
         let parsed: OmdbResponse = crate::json_limited(response).await?;
         if parsed.response.as_deref() == Some("False") {
             return Err(ProbeError::HttpStatus {

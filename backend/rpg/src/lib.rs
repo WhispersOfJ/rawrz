@@ -1,9 +1,9 @@
 pub mod achievements;
-pub mod awards;
 pub mod auth;
-pub mod game;
+pub mod awards;
 pub mod config;
 pub mod enrichment;
+pub mod game;
 pub mod migrations;
 pub mod normalization;
 pub mod persistence;
@@ -14,6 +14,11 @@ pub mod server;
 pub mod stack;
 pub mod sync;
 pub mod wizard;
+// The wizard resource/spell slice is imported mid-implementation: its SQL
+// constants are defined ahead of the callers that will wire them up (see
+// MIGRATION.md §2). Keep the committed work rather than deleting it, and
+// revisit the lint once the slice is finished.
+#[allow(dead_code)]
 pub(crate) mod wizard_store;
 
 use thiserror::Error;
@@ -36,7 +41,10 @@ pub fn redact_url(value: &str) -> String {
             let Some((name, value)) = part.split_once('=') else {
                 return part.to_owned();
             };
-            if matches!(name.to_ascii_lowercase().as_str(), "api_key" | "apikey" | "token") {
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "api_key" | "apikey" | "token"
+            ) {
                 format!("{name}=[REDACTED]")
             } else {
                 format!("{name}={value}")
@@ -215,10 +223,14 @@ pub(crate) async fn send_with_retry(
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(1_u64 << (attempt - 1));
         tokio::time::sleep(std::time::Duration::from_secs(delay_seconds.min(4))).await;
-        request = Some(retry_template.try_clone().ok_or_else(|| ProbeError::HttpStatus {
-            provider,
-            status: response.status().as_u16(),
-        })?);
+        request = Some(
+            retry_template
+                .try_clone()
+                .ok_or_else(|| ProbeError::HttpStatus {
+                    provider,
+                    status: response.status().as_u16(),
+                })?,
+        );
     }
 
     unreachable!("retry loop always returns")
@@ -227,20 +239,18 @@ pub(crate) async fn send_with_retry(
 #[cfg(test)]
 mod tests {
     use super::normalization::NormalizedMetadata;
-    use super::ProbeError;
     use super::providers::{
-        parse_fanart_payload, parse_omdb_response, parse_tmdb_details, parse_tvdb_login,
-        TmdbClient,
+        parse_fanart_payload, parse_omdb_response, parse_tmdb_details, parse_tvdb_login, TmdbClient,
     };
     use super::stack::{
         parse_plex_library_items, parse_plex_sections, parse_plex_show_items,
         parse_plex_watchable_items, PlexClient, RadarrMovie, SonarrSeries,
     };
+    use super::ProbeError;
     use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    #[test]
     #[test]
     fn redacts_provider_keys_from_error_text() {
         let message = "error: https://api.example.test/search?api_key=tmdb-secret&apikey=omdb-secret&token=tvdb-secret&query=matrix#fragment";
@@ -261,7 +271,10 @@ mod tests {
 
         let items = parse_plex_library_items(include_str!("../fixtures/plex_library.xml")).unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].title.as_deref(), Some("Fear Street: Part One - 1994"));
+        assert_eq!(
+            items[0].title.as_deref(),
+            Some("Fear Street: Part One - 1994")
+        );
         assert_eq!(items[0].genres, vec!["Horror", "Mystery"]);
         assert_eq!(items[1].item_type.as_deref(), Some("show"));
     }
@@ -275,7 +288,11 @@ mod tests {
         assert_eq!(items.len(), 4, "show + season + 2 episodes");
         let episodes =
             parse_plex_watchable_items(include_str!("../fixtures/plex_episodes.xml")).unwrap();
-        assert_eq!(episodes.len(), 2, "episodes only; show/season rows filtered");
+        assert_eq!(
+            episodes.len(),
+            2,
+            "episodes only; show/season rows filtered"
+        );
         assert_eq!(episodes[0].item_type.as_deref(), Some("episode"));
         assert_eq!(episodes[0].rating_key.as_deref(), Some("901"));
         assert_eq!(
@@ -304,7 +321,11 @@ mod tests {
             .iter()
             .filter(|item| item.item_type.as_deref() == Some("show"))
             .collect();
-        assert_eq!(shows.len(), 1, "exactly one show item despite nested seasons");
+        assert_eq!(
+            shows.len(),
+            1,
+            "exactly one show item despite nested seasons"
+        );
         assert_eq!(shows[0].rating_key.as_deref(), Some("900"));
         assert_eq!(shows[0].genres, vec!["Comedy"]);
         assert_eq!(
@@ -315,7 +336,10 @@ mod tests {
         // The nested season fragments parse too — and never steal the show's
         // attributes or close it early.
         assert_eq!(
-            items.iter().filter(|i| i.item_type.as_deref() == Some("season")).count(),
+            items
+                .iter()
+                .filter(|i| i.item_type.as_deref() == Some("season"))
+                .count(),
             3,
             "nested season rows are separate items"
         );
@@ -323,15 +347,28 @@ mod tests {
 
     #[test]
     fn parses_arr_payloads_with_external_ids_and_raw_fields() {
-        let series: Vec<SonarrSeries> = serde_json::from_str(include_str!("../fixtures/sonarr_series.json")).unwrap();
+        let series: Vec<SonarrSeries> =
+            serde_json::from_str(include_str!("../fixtures/sonarr_series.json")).unwrap();
         assert_eq!(series[0].tmdb_id, Some(12345));
         assert_eq!(series[0].tvdb_id, Some(67890));
-        assert_eq!(series[0].raw.get("status").and_then(|v| v.as_str()), Some("continuing"));
+        assert_eq!(
+            series[0].raw.get("status").and_then(|v| v.as_str()),
+            Some("continuing")
+        );
 
-        let movies: Vec<RadarrMovie> = serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
+        let movies: Vec<RadarrMovie> =
+            serde_json::from_str(include_str!("../fixtures/radarr_movies.json")).unwrap();
         assert_eq!(movies[0].tmdb_id, Some(591275));
         assert_eq!(movies[0].imdb_id.as_deref(), Some("tt1234567"));
-        assert_eq!(movies[0].raw.get("ratings").and_then(|v| v.get("tmdb")).and_then(|v| v.get("value")).and_then(|v| v.as_f64()), Some(7.5));
+        assert_eq!(
+            movies[0]
+                .raw
+                .get("ratings")
+                .and_then(|v| v.get("tmdb"))
+                .and_then(|v| v.get("value"))
+                .and_then(|v| v.as_f64()),
+            Some(7.5)
+        );
     }
 
     #[test]
@@ -339,7 +376,10 @@ mod tests {
         let tmdb = parse_tmdb_details(include_str!("../fixtures/tmdb_movie.json")).unwrap();
         assert_eq!(tmdb.id, 603);
         assert!(tmdb.genres.iter().any(|genre| genre.name == "Drama"));
-        assert!(tmdb.keywords().iter().any(|keyword| keyword.name == "dream"));
+        assert!(tmdb
+            .keywords()
+            .iter()
+            .any(|keyword| keyword.name == "dream"));
 
         let omdb = parse_omdb_response(include_str!("../fixtures/omdb_movie.json")).unwrap();
         assert_eq!(omdb.imdb_id.as_deref(), Some("tt0133093"));
@@ -348,7 +388,10 @@ mod tests {
 
         let fanart = parse_fanart_payload(include_str!("../fixtures/fanart_movie.json")).unwrap();
         assert_eq!(fanart.images_for("movieposter").len(), 1);
-        assert_eq!(fanart.images_for("movieposter")[0].url.as_deref(), Some("https://assets.example/poster.jpg"));
+        assert_eq!(
+            fanart.images_for("movieposter")[0].url.as_deref(),
+            Some("https://assets.example/poster.jpg")
+        );
 
         let login = parse_tvdb_login(include_str!("../fixtures/tvdb_login.json")).unwrap();
         assert_eq!(login.token, "fixture-token");
@@ -362,7 +405,8 @@ mod tests {
         let tmdb = parse_tmdb_details(include_str!("../fixtures/tmdb_movie.json")).unwrap();
         let omdb = parse_omdb_response(include_str!("../fixtures/omdb_movie.json")).unwrap();
         let fanart = parse_fanart_payload(include_str!("../fixtures/fanart_movie.json")).unwrap();
-        let tvdb: serde_json::Value = serde_json::from_str(include_str!("../fixtures/tvdb_series.json")).unwrap();
+        let tvdb: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/tvdb_series.json")).unwrap();
         let metadata = NormalizedMetadata::from_sources(
             Some(&plex[0]),
             None,
@@ -380,7 +424,13 @@ mod tests {
         assert_eq!(metadata.title.as_deref(), Some("The Matrix"));
         assert_eq!(metadata.tmdb_id, Some(603));
         assert_eq!(metadata.imdb_id.as_deref(), Some("tt0133093"));
-        assert_eq!(metadata.featured_score.as_ref().map(|score| score.provider.as_str()), Some("tmdb"));
+        assert_eq!(
+            metadata
+                .featured_score
+                .as_ref()
+                .map(|score| score.provider.as_str()),
+            Some("tmdb")
+        );
         assert!(metadata.sub_genres.iter().any(|tag| tag.slug == "dream"));
         assert_eq!(metadata.artwork.len(), 2);
         assert_eq!(metadata.provenance["horror"], vec!["plex"]);
@@ -429,11 +479,8 @@ mod tests {
             .is_empty());
         server.await.unwrap();
 
-        let (base_url, server) = mock_server(
-            "/movie/603",
-            include_str!("../fixtures/tmdb_movie.json"),
-        )
-        .await;
+        let (base_url, server) =
+            mock_server("/movie/603", include_str!("../fixtures/tmdb_movie.json")).await;
         let details = TmdbClient::with_base_url(base_url, "fixture-key")
             .movie(603)
             .await
@@ -493,7 +540,10 @@ mod tests {
         (format!("http://{}", address), server)
     }
 
-    async fn mock_server(expected_path: &'static str, body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    async fn mock_server(
+        expected_path: &'static str,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -501,7 +551,10 @@ mod tests {
             let mut request = [0_u8; 4096];
             let bytes_read = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..bytes_read]);
-            assert!(request.contains(expected_path), "request did not contain {expected_path}: {request}");
+            assert!(
+                request.contains(expected_path),
+                "request did not contain {expected_path}: {request}"
+            );
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

@@ -79,10 +79,7 @@ pub struct PollCycleSummary {
 /// matches against), then the game tick with the stack clients. A sync
 /// failure is returned in the summary (logged by the caller) and must not
 /// stop the tick — phases 2–3 advance on known state (§9.1).
-pub async fn run_poll_cycle(
-    store: &PostgresContentStore,
-    stack: &PollStack,
-) -> PollCycleSummary {
+pub async fn run_poll_cycle(store: &PostgresContentStore, stack: &PollStack) -> PollCycleSummary {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("host clock is after the epoch")
@@ -182,9 +179,7 @@ pub async fn run_poll_loop(
         }
     }
     if cycles_failed > 0 {
-        println!(
-            "poll loop stopped after {cycles_run} cycle(s), {cycles_failed} with failures"
-        );
+        println!("poll loop stopped after {cycles_run} cycle(s), {cycles_failed} with failures");
     }
     cycles_run
 }

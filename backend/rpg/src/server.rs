@@ -101,7 +101,8 @@ impl SessionStore {
         let mut bytes = [0_u8; 16];
         rand::thread_rng().fill_bytes(&mut bytes);
         let token = hex(&bytes);
-        self.sessions.insert(token.clone(), Instant::now() + SESSION_TTL);
+        self.sessions
+            .insert(token.clone(), Instant::now() + SESSION_TTL);
         token
     }
 
@@ -140,8 +141,7 @@ impl SessionStore {
 
     /// F-10: records a failed login for this attempt source.
     pub fn record_login_failure(&mut self, source: &str) {
-        self.login_limiter
-            .record_failure_at(source, Instant::now());
+        self.login_limiter.record_failure_at(source, Instant::now());
     }
 
     /// F-10: a successful login clears only this source's failure streak.
@@ -217,11 +217,7 @@ fn login_source(headers: &axum::http::HeaderMap) -> String {
 
 // ---- Gate ----
 
-async fn require_session(
-    State(app): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn require_session(State(app): State<AppState>, request: Request, next: Next) -> Response {
     let authenticated = session_token_from(&request).is_some_and(|token| {
         app.sessions
             .lock()
@@ -347,7 +343,10 @@ async fn login(
 /// Gated: deletes the server-side session and clears the cookie.
 async fn logout(State(app): State<AppState>, request: Request) -> Response {
     if let Some(token) = session_token_from(&request) {
-        app.sessions.lock().expect("session mutex poisoned").revoke(&token);
+        app.sessions
+            .lock()
+            .expect("session mutex poisoned")
+            .revoke(&token);
     }
     let mut response = Json(json!({ "authenticated": false })).into_response();
     clear_session_cookie(&mut response);
@@ -372,11 +371,9 @@ async fn select_archetype(
 ) -> Response {
     match app.store.select_archetype(&slug).await {
         Ok(state) => Json(state).into_response(),
-        Err(crate::ProbeError::ArchetypeSelectionConflict(reason)) => (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": reason })),
-        )
-            .into_response(),
+        Err(crate::ProbeError::ArchetypeSelectionConflict(reason)) => {
+            (StatusCode::CONFLICT, Json(json!({ "error": reason }))).into_response()
+        }
         Err(crate::ProbeError::InvalidArchetypeSelection(reason)) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({ "error": reason })),
@@ -570,8 +567,8 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        cookie_value, SessionStore, SESSION_COOKIE, SESSION_TTL, LOGIN_BASE_LOCKOUT,
-        LOGIN_MAX_FAILURES,
+        cookie_value, SessionStore, LOGIN_BASE_LOCKOUT, LOGIN_MAX_FAILURES, SESSION_COOKIE,
+        SESSION_TTL,
     };
 
     #[test]
@@ -580,7 +577,10 @@ mod tests {
             cookie_value("a=1; rpg_session=abc123; b=2", SESSION_COOKIE),
             Some("abc123".to_owned())
         );
-        assert_eq!(cookie_value("rpg_session=xyz", SESSION_COOKIE), Some("xyz".to_owned()));
+        assert_eq!(
+            cookie_value("rpg_session=xyz", SESSION_COOKIE),
+            Some("xyz".to_owned())
+        );
         assert_eq!(cookie_value("other=1", SESSION_COOKIE), None);
         assert_eq!(cookie_value("", SESSION_COOKIE), None);
         // First match wins on duplicates.
@@ -644,10 +644,8 @@ mod tests {
         let after_first_lockout = now + LOGIN_BASE_LOCKOUT;
         assert!(!sessions.login_locked_at_for_test("client-a", after_first_lockout));
         sessions.record_login_failure_at_for_test("client-a", after_first_lockout);
-        assert!(sessions.login_locked_at_for_test(
-            "client-a",
-            after_first_lockout + Duration::from_secs(1)
-        ));
+        assert!(sessions
+            .login_locked_at_for_test("client-a", after_first_lockout + Duration::from_secs(1)));
         sessions.record_login_success("client-a");
         assert!(!sessions.login_locked_at_for_test("client-a", after_first_lockout));
     }

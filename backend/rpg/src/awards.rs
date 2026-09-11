@@ -121,7 +121,10 @@ pub enum StreakAdvance {
 
 /// Pure streak advance (§5.1): `last_watch_date` is `None` before the first
 /// ever watch. Days are whole calendar days (host-local clock).
-pub fn streak_advance(last_watch_date: Option<chrono::NaiveDate>, today: chrono::NaiveDate) -> StreakAdvance {
+pub fn streak_advance(
+    last_watch_date: Option<chrono::NaiveDate>,
+    today: chrono::NaiveDate,
+) -> StreakAdvance {
     match last_watch_date {
         Some(day) if day == today => StreakAdvance::Neutral,
         Some(day) if day == today.pred_opt().unwrap_or(today) => {

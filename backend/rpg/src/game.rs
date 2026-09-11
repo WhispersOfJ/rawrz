@@ -52,10 +52,7 @@ impl GameTickReport {
             orders_created: self.orders.orders_created.len(),
             skips_granted: self.orders.skips_granted,
             skipped_genres: self.orders.skipped_genres.clone(),
-            achievements_unlocked: self
-                .achievements
-                .as_ref()
-                .map_or(0, |a| a.unlocked.len()),
+            achievements_unlocked: self.achievements.as_ref().map_or(0, |a| a.unlocked.len()),
             achievements_evaluated: self.achievements.as_ref().map_or(0, |a| a.evaluated),
         }
     }
@@ -144,7 +141,6 @@ async fn detect_plex_watch_states(
     }
     Ok(states)
 }
-
 
 #[cfg(test)]
 mod tests {

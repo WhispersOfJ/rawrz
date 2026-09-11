@@ -4,10 +4,10 @@ use crate::sync::{
     ContentIdentityKey, ContentSyncGroup, ContentSyncRecord, EnrichedSyncOutcome,
     ProviderSyncFailure, StackSyncFailure,
 };
+use crate::Result;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use crate::Result;
 use tokio_postgres::NoTls;
 
 pub const SCHEMA_MIGRATIONS_SQL: &str = r#"
@@ -17,10 +17,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 "#;
 
-pub const MIGRATION_LOOKUP_SQL: &str =
-    "SELECT version FROM schema_migrations WHERE version = $1";
-pub const MIGRATION_RECORD_SQL: &str =
-    "INSERT INTO schema_migrations (version) VALUES ($1)";
+pub const MIGRATION_LOOKUP_SQL: &str = "SELECT version FROM schema_migrations WHERE version = $1";
+pub const MIGRATION_RECORD_SQL: &str = "INSERT INTO schema_migrations (version) VALUES ($1)";
 
 fn migration_summary(applied: usize, already_applied: usize) -> MigrationSummary {
     MigrationSummary {
@@ -56,10 +54,7 @@ async fn seed_rows_for(
         .execute(GENRE_ACCESS_SEED_SQL, &[&character_id])
         .await?;
 
-    let keys: Vec<&str> = SETTINGS_V1_DEFAULTS
-        .iter()
-        .map(|(key, _)| *key)
-        .collect();
+    let keys: Vec<&str> = SETTINGS_V1_DEFAULTS.iter().map(|(key, _)| *key).collect();
     let values: Vec<&str> = SETTINGS_V1_DEFAULTS
         .iter()
         .map(|(_, value)| *value)
@@ -267,7 +262,8 @@ SELECT $1, genres.id
 FROM genres
 WHERE genres.is_opening
 ON CONFLICT (character_id, genre_id) DO NOTHING
-"#;pub const SETTINGS_SEED_SQL: &str = r#"
+"#;
+pub const SETTINGS_SEED_SQL: &str = r#"
 INSERT INTO settings (character_id, key, value)
 SELECT $1, key, value
 FROM unnest($2::text[], $3::text[]) AS seed(key, value)
@@ -349,10 +345,7 @@ impl From<&ContentSyncRecord> for ContentUpsertParams {
             year: record.year,
             content_type: record.content_type.as_str().to_owned(),
             parent_source: record.parent_key.as_ref().map(|key| key.source.clone()),
-            parent_source_id: record
-                .parent_key
-                .as_ref()
-                .map(|key| key.source_id.clone()),
+            parent_source_id: record.parent_key.as_ref().map(|key| key.source_id.clone()),
             season_number: record.season_number,
             episode_number: record.episode_number,
             runtime_seconds: record.runtime_seconds,
@@ -389,7 +382,11 @@ pub struct ProviderCacheUpsertParams {
 }
 
 impl ProviderCacheUpsertParams {
-    fn from_entry(entry: &ProviderCacheEntry, content_source: String, content_source_id: String) -> Self {
+    fn from_entry(
+        entry: &ProviderCacheEntry,
+        content_source: String,
+        content_source_id: String,
+    ) -> Self {
         Self {
             content_source,
             content_source_id,
@@ -688,9 +685,7 @@ impl PostgresContentStore {
     /// Takes the deadpool transaction (all store transactions come from
     /// `StoreConnection::transaction`), which derefs to the tokio-postgres
     /// one and rolls the underlying transaction back.
-    async fn rollback(
-        transaction: deadpool_postgres::Transaction<'_>,
-    ) {
+    async fn rollback(transaction: deadpool_postgres::Transaction<'_>) {
         let _ = transaction.rollback().await;
     }
 
@@ -750,7 +745,10 @@ impl PostgresContentStore {
     /// the full bootstrap seed, all in one transaction. Returns
     /// `account_created: false` when an account already exists (V1 has no
     /// PIN change flow; bootstrap is then still run, idempotently).
-    pub async fn set_account_pin(&self, pin: &str) -> Result<(AccountPinOutcome, BootstrapSummary)> {
+    pub async fn set_account_pin(
+        &self,
+        pin: &str,
+    ) -> Result<(AccountPinOutcome, BootstrapSummary)> {
         crate::auth::validate_pin(pin)?;
         // The Argon2id cost is paid on a blocking thread (F-20) and before
         // any store work, so an unauthenticated caller cannot hold pooled
@@ -767,10 +765,7 @@ impl PostgresContentStore {
         let mut connection = self.connection().await?;
         let transaction = connection.transaction().await?;
 
-        let existing: bool = transaction
-            .query_one(ACCOUNT_EXISTS_SQL, &[])
-            .await?
-            .get(0);
+        let existing: bool = transaction.query_one(ACCOUNT_EXISTS_SQL, &[]).await?.get(0);
         let account_created = !existing;
         if account_created {
             transaction
@@ -786,9 +781,7 @@ impl PostgresContentStore {
             .await?
             .get(0);
         if !character_exists {
-            transaction
-                .query_one(CHARACTER_INSERT_SQL, &[])
-                .await?;
+            transaction.query_one(CHARACTER_INSERT_SQL, &[]).await?;
         }
         let character_id: i64 = transaction
             .query_one(SINGLE_CHARACTER_ID_SQL, &[])
@@ -811,7 +804,10 @@ impl PostgresContentStore {
     /// re-derives the PIN. A missing account is **locked** (`None`); a wrong
     /// PIN is `Rejected`, not an error; a malformed stored hash is an
     /// operational error.
-    pub async fn verify_account_pin(&self, pin: &str) -> Result<Option<crate::auth::PinVerifyOutcome>> {
+    pub async fn verify_account_pin(
+        &self,
+        pin: &str,
+    ) -> Result<Option<crate::auth::PinVerifyOutcome>> {
         let connection = self.connection().await?;
         let Some(stored) = connection
             .query_opt(SINGLE_ACCOUNT_PIN_SQL, &[])
@@ -830,10 +826,7 @@ impl PostgresContentStore {
             })?
     }
 
-    pub async fn hydrate_cache(
-        &self,
-        cache: &mut MetadataCache,
-    ) -> Result<CacheHydrationSummary> {
+    pub async fn hydrate_cache(&self, cache: &mut MetadataCache) -> Result<CacheHydrationSummary> {
         // F-16: hydrate fresh rows only; expired entries are re-fetched from
         // the provider rather than rehydrated, and retention prunes them.
         let connection = self.connection().await?;
@@ -892,49 +885,92 @@ impl PostgresContentStore {
         if !plan.content.is_empty() {
             let sources: Vec<&str> = plan.content.iter().map(|p| p.source.as_str()).collect();
             let source_ids: Vec<&str> = plan.content.iter().map(|p| p.source_id.as_str()).collect();
-            let external_ids: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.external_id.as_deref()).collect();
-            let external_id_types: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.external_id_type.as_deref()).collect();
+            let external_ids: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.external_id.as_deref())
+                .collect();
+            let external_id_types: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.external_id_type.as_deref())
+                .collect();
             let titles: Vec<&str> = plan.content.iter().map(|p| p.title.as_str()).collect();
             let years: Vec<Option<i32>> = plan.content.iter().map(|p| p.year).collect();
-            let content_types: Vec<&str> =
-                plan.content.iter().map(|p| p.content_type.as_str()).collect();
-            let parent_sources: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.parent_source.as_deref()).collect();
-            let parent_source_ids: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.parent_source_id.as_deref()).collect();
+            let content_types: Vec<&str> = plan
+                .content
+                .iter()
+                .map(|p| p.content_type.as_str())
+                .collect();
+            let parent_sources: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.parent_source.as_deref())
+                .collect();
+            let parent_source_ids: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.parent_source_id.as_deref())
+                .collect();
             let season_numbers: Vec<Option<i32>> =
                 plan.content.iter().map(|p| p.season_number).collect();
             let episode_numbers: Vec<Option<i32>> =
                 plan.content.iter().map(|p| p.episode_number).collect();
             let runtimes: Vec<Option<i32>> =
                 plan.content.iter().map(|p| p.runtime_seconds).collect();
-            let release_dates: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.release_date.as_deref()).collect();
-            let first_air_dates: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.first_air_date.as_deref()).collect();
+            let release_dates: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.release_date.as_deref())
+                .collect();
+            let first_air_dates: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.first_air_date.as_deref())
+                .collect();
             let statuses: Vec<Option<&str>> =
                 plan.content.iter().map(|p| p.status.as_deref()).collect();
             let summaries: Vec<Option<&str>> =
                 plan.content.iter().map(|p| p.summary.as_deref()).collect();
             let ratings: Vec<Option<f64>> = plan.content.iter().map(|p| p.rating).collect();
-            let rating_sources: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.rating_source.as_deref()).collect();
-            let poster_urls: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.poster_url.as_deref()).collect();
-            let fanart_urls: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.fanart_url.as_deref()).collect();
-            let section_keys: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.section_key.as_deref()).collect();
-            let section_titles: Vec<Option<&str>> =
-                plan.content.iter().map(|p| p.section_title.as_deref()).collect();
+            let rating_sources: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.rating_source.as_deref())
+                .collect();
+            let poster_urls: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.poster_url.as_deref())
+                .collect();
+            let fanart_urls: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.fanart_url.as_deref())
+                .collect();
+            let section_keys: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.section_key.as_deref())
+                .collect();
+            let section_titles: Vec<Option<&str>> = plan
+                .content
+                .iter()
+                .map(|p| p.section_title.as_deref())
+                .collect();
             let genres: Vec<Value> = plan.content.iter().map(|p| p.genres.clone()).collect();
-            let sub_genres: Vec<Value> = plan.content.iter().map(|p| p.sub_genres.clone()).collect();
-            let metadata_blobs: Vec<Value> =
-                plan.content.iter().map(|p| p.metadata_blob.clone()).collect();
-            let provider_metadata: Vec<Value> =
-                plan.content.iter().map(|p| p.provider_metadata.clone()).collect();
+            let sub_genres: Vec<Value> =
+                plan.content.iter().map(|p| p.sub_genres.clone()).collect();
+            let metadata_blobs: Vec<Value> = plan
+                .content
+                .iter()
+                .map(|p| p.metadata_blob.clone())
+                .collect();
+            let provider_metadata: Vec<Value> = plan
+                .content
+                .iter()
+                .map(|p| p.provider_metadata.clone())
+                .collect();
 
             transaction
                 .execute(
@@ -972,24 +1008,51 @@ impl PostgresContentStore {
         }
 
         if !plan.provider_cache.is_empty() {
-            let content_sources: Vec<&str> =
-                plan.provider_cache.iter().map(|p| p.content_source.as_str()).collect();
-            let content_source_ids: Vec<&str> =
-                plan.provider_cache.iter().map(|p| p.content_source_id.as_str()).collect();
-            let providers: Vec<&str> =
-                plan.provider_cache.iter().map(|p| p.provider.as_str()).collect();
-            let provider_ids: Vec<&str> =
-                plan.provider_cache.iter().map(|p| p.provider_id.as_str()).collect();
-            let payloads: Vec<Value> =
-                plan.provider_cache.iter().map(|p| p.payload.clone()).collect();
-            let fetched_ats: Vec<f64> =
-                plan.provider_cache.iter().map(|p| p.fetched_at_epoch as f64).collect();
-            let expires_ats: Vec<Option<f64>> =
-                plan.provider_cache.iter().map(|p| p.expires_at_epoch.map(|v| v as f64)).collect();
-            let http_statuses: Vec<Option<i32>> =
-                plan.provider_cache.iter().map(|p| p.http_status.map(i32::from)).collect();
-            let errors: Vec<Option<&str>> =
-                plan.provider_cache.iter().map(|p| p.error.as_deref()).collect();
+            let content_sources: Vec<&str> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.content_source.as_str())
+                .collect();
+            let content_source_ids: Vec<&str> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.content_source_id.as_str())
+                .collect();
+            let providers: Vec<&str> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.provider.as_str())
+                .collect();
+            let provider_ids: Vec<&str> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.provider_id.as_str())
+                .collect();
+            let payloads: Vec<Value> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.payload.clone())
+                .collect();
+            let fetched_ats: Vec<f64> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.fetched_at_epoch as f64)
+                .collect();
+            let expires_ats: Vec<Option<f64>> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.expires_at_epoch.map(|v| v as f64))
+                .collect();
+            let http_statuses: Vec<Option<i32>> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.http_status.map(i32::from))
+                .collect();
+            let errors: Vec<Option<&str>> = plan
+                .provider_cache
+                .iter()
+                .map(|p| p.error.as_deref())
+                .collect();
 
             transaction
                 .execute(
@@ -1076,7 +1139,7 @@ impl PostgresContentStore {
                 slug: row.get(0),
                 kind: row.get(1),
                 target_value: row.get::<_, Option<i64>>(2),
-            // tokio-postgres maps jsonb → serde_json::Value directly.
+                // tokio-postgres maps jsonb → serde_json::Value directly.
                 metadata: row.get(3),
             })
             .collect::<Vec<_>>();
@@ -1115,7 +1178,10 @@ impl PostgresContentStore {
                     }
                     self.connection()
                         .await?
-                        .execute(ACHIEVEMENT_UNLOCK_SQL, &[&account_id, &definition.slug, &progress])
+                        .execute(
+                            ACHIEVEMENT_UNLOCK_SQL,
+                            &[&account_id, &definition.slug, &progress],
+                        )
                         .await?;
                     summary.unlocked.push(definition.slug.clone());
                 }
@@ -1141,7 +1207,12 @@ impl PostgresContentStore {
             return Ok(None);
         };
         let mut entries = Vec::new();
-        for row in self.connection().await?.query(BADGE_WALL_SQL, &[&account_id]).await? {
+        for row in self
+            .connection()
+            .await?
+            .query(BADGE_WALL_SQL, &[&account_id])
+            .await?
+        {
             let unlocked_at: Option<String> = row.get(6);
             let stored_progress: Option<i64> = row.get(7);
             let target: Option<i64> = row.get(8);
@@ -1157,7 +1228,9 @@ impl PostgresContentStore {
                 );
                 match evaluation {
                     crate::achievements::Evaluation::Unlock { progress } => (true, progress),
-                    crate::achievements::Evaluation::InProgress { progress, .. } => (false, progress),
+                    crate::achievements::Evaluation::InProgress { progress, .. } => {
+                        (false, progress)
+                    }
                     crate::achievements::Evaluation::NotEvaluable => (false, 0),
                 }
             };
@@ -1172,7 +1245,11 @@ impl PostgresContentStore {
             } else {
                 (name, description)
             };
-            let (progress, target) = if !visible && !unlocked { (0, None) } else { (progress, target) };
+            let (progress, target) = if !visible && !unlocked {
+                (0, None)
+            } else {
+                (progress, target)
+            };
             entries.push(BadgeEntry {
                 slug,
                 name,
@@ -1234,7 +1311,12 @@ impl PostgresContentStore {
             skipped_genres: Vec::new(),
         };
 
-        for row in self.connection().await?.query(ORDER_GENRES_SQL, &[&account_id]).await? {
+        for row in self
+            .connection()
+            .await?
+            .query(ORDER_GENRES_SQL, &[&account_id])
+            .await?
+        {
             let genre_id: i64 = row.get(0);
             let genre: String = row.get(1);
             let candidates: Vec<i64> = self
@@ -1257,7 +1339,8 @@ impl PostgresContentStore {
                     genre,
                     reason: format!(
                         "only {} of {} needed movies are available unwatched and unranked",
-                        candidates.len(), WATCH_ORDER_SIZE
+                        candidates.len(),
+                        WATCH_ORDER_SIZE
                     ),
                 });
                 continue;
@@ -1293,9 +1376,7 @@ impl PostgresContentStore {
     /// skip rewards. Returns how many skips were granted.
     async fn advance_watch_orders(&self, account_id: i64) -> Result<usize> {
         let mut connection = self.connection().await?;
-        connection
-            .execute(REVEAL_STAMP_SQL, &[&account_id])
-            .await?;
+        connection.execute(REVEAL_STAMP_SQL, &[&account_id]).await?;
         let mut granted = 0;
         for row in connection.query(OPEN_ORDERS_SQL, &[&account_id]).await? {
             let order_id: i64 = row.get(0);
@@ -1469,7 +1550,10 @@ impl PostgresContentStore {
             let adjusted_xp = crate::wizard::normal_xp_for_watch(
                 &active_archetype,
                 &award.watch.content_type,
-                horror.get(&award.watch.content_id).copied().unwrap_or(false),
+                horror
+                    .get(&award.watch.content_id)
+                    .copied()
+                    .unwrap_or(false),
                 neutral_xp,
             );
 
@@ -1554,8 +1638,7 @@ impl PostgresContentStore {
                     continue;
                 }
                 Err(error)
-                    if error.code()
-                        == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) =>
+                    if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) =>
                 {
                     // 0013 constraint backstop: a concurrent writer awarded
                     // first. Treat identically to the guard above.
@@ -1568,7 +1651,14 @@ impl PostgresContentStore {
             transaction
                 .execute(
                     AWARD_STATE_SQL,
-                    &[&account_id, &(adjusted_xp + milestone), &award.watch.content_type, &new_streak_i32, &date_delta, &new_level_i32],
+                    &[
+                        &account_id,
+                        &(adjusted_xp + milestone),
+                        &award.watch.content_type,
+                        &new_streak_i32,
+                        &date_delta,
+                        &new_level_i32,
+                    ],
                 )
                 .await?;
             transaction.commit().await?;
@@ -1952,7 +2042,8 @@ WHERE c.source = 'plex'
 /// UNIQUE(character_id, content_id) constraint is the database-level
 /// backstop (F-7); `normal_xp` stays the neutral value and `xp_awarded`
 /// carries the archetype adjustment (F-6 ledger semantics).
-pub const WATCH_AWARD_LOCK_SQL: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))";
+pub const WATCH_AWARD_LOCK_SQL: &str =
+    "SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))";
 
 pub const WATCH_INSERT_SQL: &str = r#"
 INSERT INTO watches (
@@ -2060,19 +2151,17 @@ pub enum SkipOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        bootstrap_summary, migration_summary, provider_cache_entry_from_fields,
-        BootstrapSummary, ContentPersistencePlan, ContentUpsertParams, MigrationSummary,
-        PersistedProviderCacheFields, PostgresContentStore, SETTINGS_V1_DEFAULTS,
-        ACCOUNT_EXISTS_SQL, ACCOUNT_INSERT_SQL, CHARACTER_EXISTS_SQL, CHARACTER_INSERT_SQL,
-        CHARACTER_STATE_SEED_SQL, CONTENT_UPSERT_SQL, GENRE_ACCESS_SEED_SQL,
-        MIGRATION_LOOKUP_SQL, MIGRATION_RECORD_SQL, PROVIDER_CACHE_HYDRATE_SQL,
-        PROVIDER_CACHE_UPSERT_SQL, SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL,
-        SINGLE_ACCOUNT_PIN_SQL, SINGLE_CHARACTER_ID_SQL,
-        AWARD_STATE_SQL, CHARACTER_AWARD_STATE_SQL, ORDER_CANDIDATES_SQL,
-        ORDER_COMPLETE_SQL, ORDER_COMPLETED_UNGRANTED_SQL, ORDER_INSERT_SQL,
-        ORDER_VIEW_SQL, PLEX_CATALOG_SQL, WATCH_AWARD_LOCK_SQL,
-        REVEAL_STAMP_SQL, SKIP_GRANT_SQL, SKIP_ITEM_SQL, SKIP_SPEND_SQL,
-        WATCH_INSERT_SQL,
+        bootstrap_summary, migration_summary, provider_cache_entry_from_fields, BootstrapSummary,
+        ContentPersistencePlan, ContentUpsertParams, MigrationSummary,
+        PersistedProviderCacheFields, PostgresContentStore, ACCOUNT_EXISTS_SQL, ACCOUNT_INSERT_SQL,
+        AWARD_STATE_SQL, CHARACTER_AWARD_STATE_SQL, CHARACTER_EXISTS_SQL, CHARACTER_INSERT_SQL,
+        CHARACTER_STATE_SEED_SQL, CONTENT_UPSERT_SQL, GENRE_ACCESS_SEED_SQL, MIGRATION_LOOKUP_SQL,
+        MIGRATION_RECORD_SQL, ORDER_CANDIDATES_SQL, ORDER_COMPLETED_UNGRANTED_SQL,
+        ORDER_COMPLETE_SQL, ORDER_INSERT_SQL, ORDER_VIEW_SQL, PLEX_CATALOG_SQL,
+        PROVIDER_CACHE_HYDRATE_SQL, PROVIDER_CACHE_UPSERT_SQL, REVEAL_STAMP_SQL,
+        SCHEMA_MIGRATIONS_SQL, SETTINGS_SEED_SQL, SETTINGS_V1_DEFAULTS, SINGLE_ACCOUNT_PIN_SQL,
+        SINGLE_CHARACTER_ID_SQL, SKIP_GRANT_SQL, SKIP_ITEM_SQL, SKIP_SPEND_SQL,
+        WATCH_AWARD_LOCK_SQL, WATCH_INSERT_SQL,
     };
     use crate::enrichment::{
         EnrichmentFailure, MetadataCache, ProviderCacheEntry, ProviderCacheKey,
@@ -2123,11 +2212,13 @@ mod tests {
 
     #[test]
     fn settings_defaults_cover_the_spec_v1_surface() {
-        let defaults: std::collections::BTreeMap<&str, &str> = SETTINGS_V1_DEFAULTS
-            .iter()
-            .copied()
-            .collect();
-        assert_eq!(defaults.len(), SETTINGS_V1_DEFAULTS.len(), "duplicate setting keys");
+        let defaults: std::collections::BTreeMap<&str, &str> =
+            SETTINGS_V1_DEFAULTS.iter().copied().collect();
+        assert_eq!(
+            defaults.len(),
+            SETTINGS_V1_DEFAULTS.len(),
+            "duplicate setting keys"
+        );
 
         for (key, value) in [
             ("near_end_threshold_pct", "95"),
@@ -2157,8 +2248,8 @@ mod tests {
         assert_eq!(genre_list[9], "Animation");
 
         // holiday_windows: Halloween (Horror) + winter (Comedy, Drama) starters.
-        let windows: Vec<serde_json::Value> =
-            serde_json::from_str(defaults["holiday_windows"]).expect("holiday_windows must be JSON");
+        let windows: Vec<serde_json::Value> = serde_json::from_str(defaults["holiday_windows"])
+            .expect("holiday_windows must be JSON");
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0]["name"], "halloween");
         assert_eq!(windows[0]["multiplier"], 1.5);
@@ -2167,7 +2258,8 @@ mod tests {
 
     #[test]
     fn bootstrap_statements_resolve_the_single_character_and_seed_idempotently() {
-        assert!(SINGLE_CHARACTER_ID_SQL.contains("JOIN accounts ON accounts.id = characters.account_id"));
+        assert!(SINGLE_CHARACTER_ID_SQL
+            .contains("JOIN accounts ON accounts.id = characters.account_id"));
         assert!(SINGLE_CHARACTER_ID_SQL.contains("ORDER BY characters.id"));
         assert!(SINGLE_CHARACTER_ID_SQL.contains("LIMIT 1"));
 
@@ -2180,12 +2272,15 @@ mod tests {
         assert!(GENRE_ACCESS_SEED_SQL.contains("ON CONFLICT (character_id, genre_id) DO NOTHING"));
 
         assert!(SETTINGS_SEED_SQL.contains("INSERT INTO settings (character_id, key, value)"));
-        assert!(SETTINGS_SEED_SQL.contains("FROM unnest($2::text[], $3::text[]) AS seed(key, value)"));
+        assert!(
+            SETTINGS_SEED_SQL.contains("FROM unnest($2::text[], $3::text[]) AS seed(key, value)")
+        );
         assert!(SETTINGS_SEED_SQL.contains("WHERE NOT EXISTS ("));
-        assert!(SETTINGS_SEED_SQL.contains("settings.character_id = $1 AND settings.key = seed.key"));
-        assert!(crate::wizard_store::ARCHETYPE_BOOTSTRAP_EVENT_SQL.contains(
-            "event_type, source, source_event_key"
-        ));
+        assert!(
+            SETTINGS_SEED_SQL.contains("settings.character_id = $1 AND settings.key = seed.key")
+        );
+        assert!(crate::wizard_store::ARCHETYPE_BOOTSTRAP_EVENT_SQL
+            .contains("event_type, source, source_event_key"));
         assert!(crate::wizard_store::ARCHETYPE_BOOTSTRAP_EVENT_SQL
             .contains("'bootstrap:lantern_scholar'"));
     }
@@ -2257,7 +2352,8 @@ mod tests {
         // caller-computed level (§5.2 math stays in the pure module).
         assert!(AWARD_STATE_SQL.contains("best_streak_days = GREATEST(cs.best_streak_days, $4)"));
         assert!(AWARD_STATE_SQL.contains("level = $6"));
-        assert!(AWARD_STATE_SQL.contains("streak_last_watch_date = COALESCE($5, cs.streak_last_watch_date)"));
+        assert!(AWARD_STATE_SQL
+            .contains("streak_last_watch_date = COALESCE($5, cs.streak_last_watch_date)"));
         // The state read gives the caller everything the pure math needs.
         assert!(CHARACTER_AWARD_STATE_SQL.contains("cs.xp::bigint"));
         assert!(CHARACTER_AWARD_STATE_SQL.contains("cs.streak_last_watch_date"));
@@ -2275,7 +2371,8 @@ mod tests {
         assert!(SINGLE_ACCOUNT_PIN_SQL.contains("LIMIT 1"));
 
         assert!(CHARACTER_EXISTS_SQL.contains("SELECT EXISTS (SELECT 1 FROM characters)"));
-        assert!(CHARACTER_INSERT_SQL.contains("INSERT INTO characters (account_id, active_archetype_id)"));
+        assert!(CHARACTER_INSERT_SQL
+            .contains("INSERT INTO characters (account_id, active_archetype_id)"));
         assert!(CHARACTER_INSERT_SQL.contains("FROM accounts"));
         assert!(CHARACTER_INSERT_SQL.contains("RETURNING id"));
     }
@@ -2356,7 +2453,10 @@ mod tests {
 
         assert!(!restored);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.entries().next().unwrap().payload, Some(json!({"revision": "current"})));
+        assert_eq!(
+            cache.entries().next().unwrap().payload,
+            Some(json!({"revision": "current"}))
+        );
     }
 
     #[test]
@@ -2386,10 +2486,9 @@ mod tests {
 
     #[test]
     fn maps_fixture_records_to_complete_content_upsert_parameters() {
-        let plex = crate::stack::parse_plex_library_items(
-            include_str!("../fixtures/plex_library.xml"),
-        )
-        .unwrap();
+        let plex =
+            crate::stack::parse_plex_library_items(include_str!("../fixtures/plex_library.xml"))
+                .unwrap();
         let record = ContentSyncRecord::from_plex(&plex[0]).unwrap();
         let params = ContentUpsertParams::from(&record);
 
@@ -2417,7 +2516,10 @@ mod tests {
             // The final pass re-joins on the natural key and links parents.
             "JOIN content child ON child.source = b.source",
         ] {
-            assert!(CONTENT_UPSERT_SQL.contains(fragment), "missing {fragment:?}");
+            assert!(
+                CONTENT_UPSERT_SQL.contains(fragment),
+                "missing {fragment:?}"
+            );
         }
         for fragment in [
             "INSERT INTO content_provider_cache",

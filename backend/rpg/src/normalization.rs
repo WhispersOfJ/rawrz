@@ -117,7 +117,12 @@ impl NormalizedMetadata {
                 Self::push_tag(
                     &mut normalized.genres,
                     &mut normalized.provenance,
-                    NormalizedTag::new(&genre.name, &genre.name, "tmdb", Some(genre.id.to_string())),
+                    NormalizedTag::new(
+                        &genre.name,
+                        &genre.name,
+                        "tmdb",
+                        Some(genre.id.to_string()),
+                    ),
                 );
             }
             for keyword in details.keywords() {
@@ -170,9 +175,17 @@ impl NormalizedMetadata {
         }
         if let Some(details) = omdb {
             if let Some(value) = parse_rating(details.imdb_rating.as_deref()) {
-                normalized.push_rating("omdb_imdb", value, 10.0, parse_votes(details.imdb_votes.as_deref()));
+                normalized.push_rating(
+                    "omdb_imdb",
+                    value,
+                    10.0,
+                    parse_votes(details.imdb_votes.as_deref()),
+                );
             }
-            if let Some(value) = details.rotten_tomatoes_rating().and_then(|value| parse_rating(Some(&value))) {
+            if let Some(value) = details
+                .rotten_tomatoes_rating()
+                .and_then(|value| parse_rating(Some(&value)))
+            {
                 normalized.push_rating("omdb_rotten_tomatoes", value, 10.0, None);
             }
         }
@@ -181,14 +194,27 @@ impl NormalizedMetadata {
         }
         if let Some(movie) = radarr {
             for (provider, key) in [("radarr_tmdb", "tmdb"), ("radarr_imdb", "imdb")] {
-                if let Some(value) = movie.raw.get("ratings").and_then(|ratings| ratings.get(key)).and_then(|rating| rating.get("value")).and_then(Value::as_f64) {
-                    let votes = movie.raw.get("ratings").and_then(|ratings| ratings.get(key)).and_then(|rating| rating.get("votes")).and_then(Value::as_i64);
+                if let Some(value) = movie
+                    .raw
+                    .get("ratings")
+                    .and_then(|ratings| ratings.get(key))
+                    .and_then(|rating| rating.get("value"))
+                    .and_then(Value::as_f64)
+                {
+                    let votes = movie
+                        .raw
+                        .get("ratings")
+                        .and_then(|ratings| ratings.get(key))
+                        .and_then(|rating| rating.get("votes"))
+                        .and_then(Value::as_i64);
                     normalized.push_rating(provider, value, 10.0, votes);
                 }
             }
         }
         if let Some(item) = plex {
-            if let Some(value) = attr_f64(&item.raw_attributes, "audienceRating").or_else(|| attr_f64(&item.raw_attributes, "rating")) {
+            if let Some(value) = attr_f64(&item.raw_attributes, "audienceRating")
+                .or_else(|| attr_f64(&item.raw_attributes, "rating"))
+            {
                 normalized.push_rating("plex", value, 10.0, None);
             }
         }
@@ -207,20 +233,27 @@ impl NormalizedMetadata {
                     }
                 }
             }
-            normalized.artwork.sort_by(|left, right| {
-                (&left.kind, &left.url).cmp(&(&right.kind, &right.url))
-            });
+            normalized
+                .artwork
+                .sort_by(|left, right| (&left.kind, &left.url).cmp(&(&right.kind, &right.url)));
         }
 
         normalized.featured_score = normalized.ratings.iter().find_map(|rating| {
-            ["tmdb", "omdb_imdb", "tvdb", "radarr_tmdb", "radarr_imdb", "plex"]
-                .contains(&rating.provider.as_str())
-                .then(|| FeaturedScore {
-                    provider: rating.provider.clone(),
-                    value: rating.value,
-                    scale: rating.scale,
-                    votes: rating.votes,
-                })
+            [
+                "tmdb",
+                "omdb_imdb",
+                "tvdb",
+                "radarr_tmdb",
+                "radarr_imdb",
+                "plex",
+            ]
+            .contains(&rating.provider.as_str())
+            .then(|| FeaturedScore {
+                provider: rating.provider.clone(),
+                value: rating.value,
+                scale: rating.scale,
+                votes: rating.votes,
+            })
         });
         normalized
     }
@@ -254,7 +287,11 @@ impl NormalizedMetadata {
         if !value.is_finite() || value < 0.0 || value > scale {
             return;
         }
-        if self.ratings.iter().any(|rating| rating.provider == provider) {
+        if self
+            .ratings
+            .iter()
+            .any(|rating| rating.provider == provider)
+        {
             return;
         }
         self.ratings.push(ProviderRating {
@@ -283,7 +320,13 @@ fn slug(value: &str) -> String {
         .trim()
         .to_lowercase()
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|part| !part.is_empty())
@@ -316,7 +359,12 @@ fn parse_votes(value: Option<&str>) -> Option<i64> {
 }
 
 fn attr_f64(attributes: &[(String, String)], key: &str) -> Option<f64> {
-    attributes.iter().find(|(name, _)| name == key)?.1.parse().ok()
+    attributes
+        .iter()
+        .find(|(name, _)| name == key)?
+        .1
+        .parse()
+        .ok()
 }
 
 fn json_f64(value: Option<&Value>, path: &[&str]) -> Option<f64> {
@@ -328,7 +376,8 @@ fn json_i64(value: Option<&Value>, path: &[&str]) -> Option<i64> {
 }
 
 fn json_value<'a>(value: Option<&'a Value>, path: &[&str]) -> Option<&'a Value> {
-    path.iter().try_fold(value?, |current, key| current.get(*key))
+    path.iter()
+        .try_fold(value?, |current, key| current.get(*key))
 }
 
 fn json_tags(value: &Value, path: &[&str]) -> Vec<(String, Option<i64>)> {
