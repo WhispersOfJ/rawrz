@@ -1,6 +1,5 @@
 """Tests for catalog.validate — run with: python3 -m unittest discover catalog"""
 import unittest
-from unittest import mock
 
 import validate
 
