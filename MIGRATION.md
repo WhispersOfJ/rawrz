@@ -35,12 +35,15 @@ Also included in `90a76cb`: the `NZBDAV_USENET_TERTIARY_*` keys added to `.env.t
 which the compose environment-coverage gate would fail (the pending compose change referenced
 ${VAR}s the template did not define).
 
-**Note on `movie-rpg` `efa1366`:** the wizard spell slice is knowingly incomplete — the
-spend-SQL constants are defined but not yet wired to a caller, so the crate compiles with
-dead-code warnings. `movie-rpg`'s CI has no clippy gate, so this does not fail anything today;
-the M0 plan's proposed `clippy --all-targets -- -D warnings` gate for RAWRZ will fail on this
-state until the slice is finished or the gate lands unblocked. Recorded here so it is not
-mistaken for an import defect.
+**Note on `movie-rpg` `efa1366` (resolved):** the wizard spell slice is knowingly incomplete —
+the spend-SQL constants are defined but not yet wired to a caller, so the crate compiled with
+dead-code warnings. `movie-rpg`'s CI had no clippy gate, so this failed nothing there; in
+RAWRZ the unified gate required a decision. The resolution keeps the committed work: the
+crate was rustfmt-normalized, a duplicated test attribute and an unused import were removed,
+and the dead-code allowance is scoped to `wizard_store` with the reason recorded there.
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test
+--all-targets` (including the live scratch-Postgres proof) now all pass. Recorded here so the
+allowance is never mistaken for an import defect.
 
 ## 3. Method (and why not `git subtree`)
 
@@ -110,26 +113,38 @@ Consequences of the rewrite, stated plainly:
 | `movie-rpg`'s `LICENSE`, `CODE_OF_CONDUCT.md` | Duplicates of the root copies (both MIT). |
 | Source tags for the two application repositories | Single release stream (D4); see §3. |
 
-## 5. Layout after the import
+## 5. Layout after the import (final)
 
 ```
 rawrz/
 ├── docker-compose.yml  config/  scripts/  services/  tests/  media/   ← The Bear Cave
+├── catalog/            shared catalog: catalog.yaml, validator, retired registry
+├── parity/             the Deck feature-ID contract (parity.yaml)
 ├── docs/
-│   ├── rpg/     movie-rpg-spec.md, CHANGELOG.md, CONTRIBUTING.md
-│   ├── agents/  FIX.md, HANDOFF.md, CLAUDE.md
-│   ├── deck/            (tracked by the cave-deck import; not yet relocated — M0 PR9)
-│   ├── stack/           (Bear Cave docs; AGENTS.md content not yet relocated — M0 PR9)
-│   └── plans/           the RAWRZ planning documents
+│   ├── rpg/            movie-rpg-spec.md (canonical), CHANGELOG.md, CONTRIBUTING.md
+│   ├── deck/           cave-deck-spec.md, CHANGELOG.md, adr/
+│   ├── agents/         FIX.md, HANDOFF.md, CLAUDE.md
+│   ├── stack/          the Bear Cave operational docs (AGENTS.md, services/, operations/, …)
+│   ├── HISTORY-DEDUPE.md
+│   └── plans/          the RAWRZ planning documents
 ├── backend/
-│   ├── rpg/     Cargo.toml Cargo.lock src/ tests/ fixtures/ migrations/ scripts/ .gitignore
-│   └── deck/    backend/ frontend/ catalog/ docs/ parity/ scripts/ compose.yml README.md
-└── MIGRATION.md
+│   ├── rpg/            Cargo.toml Cargo.lock src/ tests/ fixtures/ migrations/ scripts/
+│   └── deck/           backend/ frontend/ compose.yml README.md
+├── .github/workflows/  the unified pipeline (validate.yml covers every component)
+├── AGENTS.md  CONTRIBUTING.md  README.md  MIGRATION.md
+└── release-please-config.json  .release-please-manifest.json
 ```
 
-Not yet consolidated (deferred to M0 PR9–PR11, all tracked): `backend/deck/.github/`,
-`backend/deck/.env.template`, `backend/deck/compose.yml`, and the relocation of the Bear Cave's
-`AGENTS.md`/`docs/` into `docs/stack/`.
+Consolidated after the import, each as its own commit so `git log --follow` still traverses the
+import boundary:
+
+| Commit theme | What moved |
+|---|---|
+| Relocation | Bear Cave docs → `docs/stack/`; Deck spec/ADRs → `docs/deck/`; catalog and parity → the repository root; Deck `.github/`, `.env.template`, and release-please files deleted |
+| Consolidation | `.gitignore` and `.env.template` unions; one release-please config/manifest on the stack's 1.x line |
+| Path repair | `scripts/check_api_contract.py` and the Deck's compile-time catalog include repointed at the moved tree; the RPG proof harness de-nested |
+| Unified CI | one `validate.yml` covering the stack guards, both Rust crates (scratch-Postgres proof), the Deck frontend, and the catalog |
+| Docs correctness | supersession banners in the component sub-specs and `docs/agents/FIX.md`; every relative markdown link resolves |
 
 ## 6. Verification
 

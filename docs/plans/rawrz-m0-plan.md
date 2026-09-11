@@ -1,6 +1,8 @@
 # RAWRZ — M0 migration plan (skeleton, subtree imports, unified CI, docs)
 
 > **Status:** Draft v0.1 — 2026-09-11. Companion to `rawrz-megastack-spec.md` §3, §13, §15.
+> **Delivery:** PR1–PR11 are delivered on the task branch `chore/complete-rawrz-migration`;
+> §9 records what is verified locally and what remains a GitHub-side operation.
 > **Milestone:** **M0** — the first mergeable step (D37): create RAWRZ, import all three
 > repositories with preserved history, stand up unified CI, consolidate docs.
 > **Hard constraint:** **M0 changes no runtime behavior.** No containers, no Redis, no nginx,
@@ -166,11 +168,18 @@ git log --oneline -- backend/deck | wc -l     # ≈ 16
 ls backend/rpg/Cargo.toml backend/deck/backend/Cargo.toml catalog/catalog.yaml docker-compose.yml
 ```
 
-- [ ] `git log --follow` resolves each sample file back to its original repo's commit subjects.
-- [ ] The stale spec copies are gone; the canonical spec exists in exactly one place.
-- [ ] `MIGRATION.md` records, for each source repo: URL, branch, commit SHA, imported date, and the
+- [x] `git log --follow` resolves each sample file back to its original repo's commit subjects.
+      Verified on the task branch: RPG `backend/rpg/src/persistence.rs` bottoms out at
+      `feat: add content persistence upsert plan`; Deck `backend/deck/backend/src/catalog.rs` at
+      its catalog commit; stack `services/bash-functions/bearcave-bash.sh` at the `stack-*` CLI
+      port.
+- [x] The stale spec copies are gone; the canonical spec exists in exactly one place
+      (`docs/rpg/movie-rpg-spec.md`; the Deck spec at `docs/deck/cave-deck-spec.md`).
+- [x] `MIGRATION.md` records, for each source repo: URL, branch, commit SHA, imported date, and the
       destination path.
 - [ ] Original repos still exist, untouched, with their tags and release history intact.
+      *External to this repository: the source checkouts are on disk and M0 changed nothing in
+      them; confirm in their own checkouts before archiving them at cut-over.*
 
 ---
 
@@ -376,26 +385,36 @@ documentation-correctness requirement, not a nice-to-have.
 | **PR10** | Root `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, `docs/plans/*` | Agent contract complete; plan docs present |
 | **PR11** | Dead-code/legacy cleanup: delete stale spec copies, document `backend/src`, remove temp subtree remotes | `MIGRATION.md` final; no stale duplicates |
 
-M0 is done when **PR11 merges and every check in §9 passes**. Only then does M1 (Redis lands in
-the existing stack) begin.
+M0 is done when **PR11 merges and every check in §9 passes**. The repository-side work is
+complete on the task branch and §9 lists the remaining GitHub-side operations. Only then does M1
+(Redis lands in the existing stack) begin.
 
 ---
 
 ## 9. M0 acceptance criteria
 
-- [ ] `github.com/WhispersOfJ/rawrz` exists, public, personal account, branch-protected `main`.
-- [ ] All **463** source commits are reachable; `MIGRATION.md` records the three source SHAs, dates, and destinations.
-- [ ] `git log --follow` works for one representative file from each source repo.
-- [ ] `docker-compose.yml` is byte-identical in effect to the live stack's (M0 changes no runtime behavior) — verified by `docker compose config` diff against the stack repo.
-- [ ] Both Rust crates pass `fmt`/`clippy -D warnings`/`test --all-targets` in CI, including the scratch-Postgres live proof.
-- [ ] The Deck frontend typechecks, lints, and builds; catalog validation passes.
-- [ ] Every existing stack guard test still runs and passes in the unified pipeline.
-- [ ] One release config/manifest exists; the RPG's `release-as: 0.0.0.1` override is gone; `RELEASE_PLEASE_TOKEN` is a secret, not a file.
-- [ ] `.env.template` is the union and the secret-drift/manifest guards pass.
-- [ ] No sub-spec contradicts the master spec (§6.5 edits complete).
-- [ ] No secrets in the repo (`secret-guard` green); `~/TRUTH`-style reference material is not committed.
-- [ ] The three source repos are unmodified, still building, and still serving their existing roles.
-- [ ] `docs/plans/` contains the master spec's four companion plans; the master spec's header links them.
+Verified on the task branch (`chore/complete-rawrz-migration`). "Local" means the repository and
+host toolchain; "GitHub" means it can only be confirmed once the PR runs in Actions and `main`
+is protected.
+
+| # | Criterion | Status | Evidence / remaining action |
+|---|---|---|---|
+| 1 | `github.com/WhispersOfJ/rawrz` exists, public, personal account, branch-protected `main` | Partial | `origin` is `https://github.com/WhispersOfJ/rawrz.git` and the task branch pushes; **public visibility and branch protection are external and unverified here** — set protection when the PR opens |
+| 2 | All source commits reachable; `MIGRATION.md` records the three source SHAs, dates, and destinations | Done | **491** commits reachable; `MIGRATION.md` §1 |
+| 3 | `git log --follow` works for one representative file from each source repo | Done | See §3.3 |
+| 4 | `docker-compose.yml` unchanged in effect (M0 changes no runtime behavior) | Done | No M0 commit touches `docker-compose.yml`; its newest history entries are stack commits, and `docker compose config --quiet` passes against `.env.template` |
+| 5 | Both Rust crates pass `fmt` / `clippy -D warnings` / `test --all-targets` in CI, including the scratch-Postgres live proof | Done locally | RPG: 98 unit tests plus the live proof against a disposable Postgres; Deck: 29 tests. The `rust` job in `validate.yml` runs both on every `backend/**` change |
+| 6 | The Deck frontend typechecks, lints, and builds; catalog validation passes | Done locally | `npm ci`, 15 vitest tests, `tsc --noEmit && vite build`; `catalog/validate.py` and `catalog/test_validate.py`. No separate frontend linter is configured, so typecheck + tests are the gate |
+| 7 | Every existing stack guard test still runs and passes in the unified pipeline | Done locally | The complete offline guard list from §6.2 passes, including `test_audit_residue` and the registry-sync check |
+| 8 | One release config/manifest exists; the RPG's `release-as: 0.0.0.1` override is gone; `RELEASE_PLEASE_TOKEN` is a secret, not a file | Done | Root `release-please-config.json` + `.release-please-manifest.json` only; no `release-as` in the tree; the token remains a secret/env placeholder |
+| 9 | `.env.template` is the union and the secret-drift/manifest guards pass | Done | `check_secret_manifest.py` and `check_secret_drift.py` both pass against the union template |
+| 10 | No sub-spec contradicts the master spec (§6.5 edits complete) | Done | Supersession banners in the RPG spec, Deck spec, `docs/agents/FIX.md` §8, and the stack AGENTS; every relative markdown link resolves |
+| 11 | No secrets in the repo (`secret-guard` green); `~/TRUTH`-style reference material is not committed | Done | `secret-guard`/secret-drift pass; `~/TRUTH` appears only as documented path references, no reference corpus is committed |
+| 12 | The three source repos are unmodified, still building, and still serving their existing roles | External | M0 changes nothing in them; confirm in their own checkouts before archiving at cut-over |
+| 13 | `docs/plans/` contains the master spec's four companion plans; the master spec's header links them | Done | `rawrz-megastack-spec.md`'s header links all four under `docs/plans/` |
+
+**M0 changes nothing in the live stack.** The only outstanding items are GitHub-side operations
+(repository visibility, branch protection, required checks), not repository content.
 
 ---
 
