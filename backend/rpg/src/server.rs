@@ -43,13 +43,53 @@ pub struct AppState {
     sessions: Arc<Mutex<SessionStore>>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct LoginFailureState {
+    failures: u32,
+    locked_until: Option<Instant>,
+}
+
+/// In-memory failed-login limiter. V1 intentionally resets this state on
+/// restart, like sessions; keys come from the request's best available
+/// attempt source (forwarded IP, real IP, or an anonymous fallback).
+#[derive(Default)]
+struct LoginLimiter {
+    attempts: HashMap<String, LoginFailureState>,
+}
+
+impl LoginLimiter {
+    fn is_locked_at(&self, source: &str, now: Instant) -> bool {
+        self.attempts
+            .get(source)
+            .and_then(|state| state.locked_until)
+            .is_some_and(|until| now < until)
+    }
+
+    fn record_failure_at(&mut self, source: &str, now: Instant) {
+        let state = self.attempts.entry(source.to_owned()).or_default();
+        state.failures = state.failures.saturating_add(1);
+        if state.failures >= LOGIN_MAX_FAILURES {
+            let exponent = state.failures.saturating_sub(LOGIN_MAX_FAILURES).min(8);
+            state.locked_until = Some(
+                now + LOGIN_BASE_LOCKOUT
+                    .checked_mul(1_u32 << exponent)
+                    .expect("login lockout duration fits"),
+            );
+        }
+    }
+
+    fn record_success(&mut self, source: &str) {
+        self.attempts.remove(source);
+    }
+}
+
 /// Server-side session table: token → expiry instant.
 #[derive(Default)]
 pub struct SessionStore {
     sessions: HashMap<String, Instant>,
-    /// F-10: consecutive failed logins and the instant the lockout lifts.
-    login_failures: u32,
-    login_locked_until: Option<Instant>,
+    /// F-10: failed logins are keyed by attempt source rather than globally,
+    /// so one client cannot lock out unrelated clients.
+    login_limiter: LoginLimiter,
 }
 
 impl SessionStore {
@@ -93,29 +133,36 @@ impl SessionStore {
         before - self.sessions.len()
     }
 
-    /// F-10: whether a login attempt is permitted right now. A locked gate
-    /// does not reach the Argon2 verifier at all (no CPU spent on guesses).
-    pub fn login_locked(&self) -> bool {
-        self.login_locked_until
-            .is_some_and(|until| Instant::now() < until)
+    /// F-10: whether a login attempt from this source is permitted right now.
+    pub fn login_locked(&self, source: &str) -> bool {
+        self.login_limiter.is_locked_at(source, Instant::now())
     }
 
-    /// F-10: records a failed login and arms an exponentially growing
-    /// lockout (30s × 2^n, capped by `LOGIN_MAX_FAILURES` successes-worth
-    /// of doubling). A successful login resets the counter.
-    pub fn record_login_failure(&mut self) {
-        self.login_failures = self.login_failures.saturating_add(1);
-        if self.login_failures >= LOGIN_MAX_FAILURES {
-            let exponent = LOGIN_MAX_FAILURES.saturating_sub(1).min(8);
-            self.login_locked_until =
-                Some(Instant::now() + LOGIN_BASE_LOCKOUT * (1_u32 << exponent));
-        }
+    /// F-10: records a failed login for this attempt source.
+    pub fn record_login_failure(&mut self, source: &str) {
+        self.login_limiter
+            .record_failure_at(source, Instant::now());
     }
 
-    /// F-10: a successful login clears the failure streak.
-    pub fn record_login_success(&mut self) {
-        self.login_failures = 0;
-        self.login_locked_until = None;
+    /// F-10: a successful login clears only this source's failure streak.
+    pub fn record_login_success(&mut self, source: &str) {
+        self.login_limiter.record_success(source);
+    }
+
+    #[cfg(test)]
+    fn insert_expired_for_test(&mut self, token: &str) {
+        self.sessions
+            .insert(token.to_owned(), Instant::now() - Duration::from_secs(1));
+    }
+
+    #[cfg(test)]
+    fn record_login_failure_at_for_test(&mut self, source: &str, now: Instant) {
+        self.login_limiter.record_failure_at(source, now);
+    }
+
+    #[cfg(test)]
+    fn login_locked_at_for_test(&self, source: &str, now: Instant) -> bool {
+        self.login_limiter.is_locked_at(source, now)
     }
 
     pub fn len(&self) -> usize {
@@ -152,6 +199,20 @@ fn session_token_from(request: &Request) -> Option<String> {
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .and_then(|cookies| cookie_value(cookies, SESSION_COOKIE))
+}
+
+/// Returns the best available attempt-source identifier without trusting it
+/// for authentication. Reverse proxies should provide `X-Forwarded-For`.
+fn login_source(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("anonymous")
+        .to_owned()
 }
 
 // ---- Gate ----
@@ -192,20 +253,22 @@ pub struct PinBody {
 /// Enumerates the gate state for the frontend so it can render the right
 /// first-run screen: locked (no account yet) vs ready-for-login.
 async fn auth_status(State(app): State<AppState>) -> Response {
-    let account_exists = app.store.account_exists().await.unwrap_or(false);
-    Json(json!({ "locked": !account_exists })).into_response()
+    match app.store.account_exists().await {
+        Ok(account_exists) => Json(json!({ "locked": !account_exists })).into_response(),
+        Err(error) => internal_error(error),
+    }
 }
 
 async fn set_pin(State(app): State<AppState>, Json(body): Json<PinBody>) -> Response {
-    // F-10: when an account exists the gate is closed — no PIN validation,
-    // no Argon2 hashing, no bootstrap work for an unauthenticated caller.
-    let account_exists = app.store.account_exists().await.unwrap_or(true);
-    if account_exists {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "an account already exists; log in instead" })),
-        )
-            .into_response();
+    // F-10: check account existence before validation/hashing. Existing
+    // accounts receive the same response shape without paying Argon2 cost or
+    // changing the stored PIN.
+    match app.store.account_exists().await {
+        Ok(true) => {
+            return Json(json!({ "account_created": false })).into_response();
+        }
+        Ok(false) => {}
+        Err(error) => return internal_error(error),
     }
     match app.store.set_account_pin(&body.pin).await {
         Ok((outcome, _bootstrap)) => {
@@ -230,10 +293,15 @@ async fn set_pin(State(app): State<AppState>, Json(body): Json<PinBody>) -> Resp
     }
 }
 
-async fn login(State(app): State<AppState>, Json(body): Json<PinBody>) -> Response {
+async fn login(
+    State(app): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<PinBody>,
+) -> Response {
+    let source = login_source(&headers);
     {
         let sessions = app.sessions.lock().expect("session mutex poisoned");
-        if sessions.login_locked() {
+        if sessions.login_locked(&source) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 Json(json!({ "error": "too many failed attempts; try again later" })),
@@ -245,7 +313,7 @@ async fn login(State(app): State<AppState>, Json(body): Json<PinBody>) -> Respon
         Ok(Some(auth::PinVerifyOutcome::Accepted)) => {
             let token = {
                 let mut sessions = app.sessions.lock().expect("session mutex poisoned");
-                sessions.record_login_success();
+                sessions.record_login_success(&source);
                 sessions.issue()
             };
             let mut response = Json(json!({ "authenticated": true })).into_response();
@@ -256,7 +324,7 @@ async fn login(State(app): State<AppState>, Json(body): Json<PinBody>) -> Respon
             app.sessions
                 .lock()
                 .expect("session mutex poisoned")
-                .record_login_failure();
+                .record_login_failure(&source);
             (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "wrong PIN" })),
@@ -269,7 +337,7 @@ async fn login(State(app): State<AppState>, Json(body): Json<PinBody>) -> Respon
             app.sessions
                 .lock()
                 .expect("session mutex poisoned")
-                .record_login_failure();
+                .record_login_failure(&source);
             (StatusCode::UNAUTHORIZED, Json(json!({ "error": "locked" }))).into_response()
         }
         Err(error) => internal_error(error),
@@ -499,7 +567,12 @@ pub fn router(store: Arc<PostgresContentStore>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{cookie_value, SessionStore, SESSION_COOKIE, SESSION_TTL};
+    use std::time::Instant;
+
+    use super::{
+        cookie_value, SessionStore, SESSION_COOKIE, SESSION_TTL, LOGIN_BASE_LOCKOUT,
+        LOGIN_MAX_FAILURES,
+    };
 
     #[test]
     fn extracts_cookie_values_from_header_pairs() {
@@ -543,6 +616,40 @@ mod tests {
         let second = sessions.issue();
         assert_ne!(first, second);
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn session_sweep_removes_expired_entries() {
+        let mut sessions = SessionStore::default();
+        let token = sessions.issue();
+        sessions.insert_expired_for_test("expired");
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions.sweep_expired(), 1);
+        assert!(sessions.is_valid(&token));
+        assert!(!sessions.is_valid("expired"));
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn login_limiter_is_source_scoped_and_uses_exponential_lockout() {
+        use std::time::Duration;
+        let mut sessions = SessionStore::default();
+        let now = Instant::now();
+        for _ in 0..LOGIN_MAX_FAILURES {
+            sessions.record_login_failure_at_for_test("client-a", now);
+        }
+        assert!(sessions.login_locked_at_for_test("client-a", now));
+        assert!(!sessions.login_locked_at_for_test("client-b", now));
+
+        let after_first_lockout = now + LOGIN_BASE_LOCKOUT;
+        assert!(!sessions.login_locked_at_for_test("client-a", after_first_lockout));
+        sessions.record_login_failure_at_for_test("client-a", after_first_lockout);
+        assert!(sessions.login_locked_at_for_test(
+            "client-a",
+            after_first_lockout + Duration::from_secs(1)
+        ));
+        sessions.record_login_success("client-a");
+        assert!(!sessions.login_locked_at_for_test("client-a", after_first_lockout));
     }
 
     #[test]
