@@ -1,0 +1,12 @@
+[
+  {
+    "id": 24,
+    "title": "Fixture Series",
+    "year": 2024,
+    "tmdbId": 12345,
+    "tvdbId": 67890,
+    "status": "continuing",
+    "genre": null,
+    "statistics": {"episodeFileCount": 3}
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "id": 603,
+  "title": "The Matrix",
+  "overview": "A hacker discovers reality is not what it seems.",
+  "genres": [
+    {"id": 28, "name": "Action"},
+    {"id": 878, "name": "Science Fiction"},
+    {"id": 18, "name": "Drama"}
+  ],
+  "keywords": {
+    "keywords": [
+      {"id": 123, "name": "dream"},
+      {"id": 456, "name": "artificial intelligence"}
+    ]
+  },
+  "vote_average": 8.2,
+  "vote_count": 25000,
+  "imdb_id": "tt0133093"
+}

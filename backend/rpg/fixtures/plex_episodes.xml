@@ -1,0 +1,8 @@
+<MediaContainer size="3">
+  <Directory ratingKey="900" title="Fixture Show" year="2020" type="show" viewCount="3">
+    <Genre tag="Comedy" />
+    <Directory ratingKey="9000" title="Season 1" type="season" />
+    <Video ratingKey="901" title="Fixture Show S1E1" type="episode" parentRatingKey="900" grandparentRatingKey="900" season="1" episode="1" viewCount="1" duration="2400000" parentIndex="1" index="1" />
+    <Video ratingKey="902" title="Fixture Show S1E2" type="episode" parentRatingKey="900" grandparentRatingKey="900" season="1" episode="2" viewCount="1" duration="2400000" parentIndex="1" index="2" />
+  </Directory>
+</MediaContainer>

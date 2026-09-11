@@ -1,0 +1,15 @@
+{
+  "status": "success",
+  "data": {
+    "id": 67890,
+    "name": "Fixture Series",
+    "genres": [
+      {"id": 1, "name": "Drama"}
+    ],
+    "tags": [
+      {"id": 2, "name": "Mystery"}
+    ],
+    "score": 8.1,
+    "scoreVotes": 120
+  }
+}

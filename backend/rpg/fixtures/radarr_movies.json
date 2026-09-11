@@ -1,0 +1,14 @@
+[
+  {
+    "id": 17,
+    "title": "Fixture Movie",
+    "year": 2024,
+    "tmdbId": 591275,
+    "imdbId": "tt1234567",
+    "genres": [],
+    "ratings": {
+      "tmdb": {"value": 7.5, "votes": 100},
+      "imdb": {"value": 7.1, "votes": 80}
+    }
+  }
+]
