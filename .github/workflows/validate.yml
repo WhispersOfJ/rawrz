@@ -1,5 +1,20 @@
 name: Validate
-# All third-party actions are pinned to immutable commit SHAs.
+# Unified RAWRZ pipeline (M0). Jobs:
+#   changes   path detection so component jobs only run when they can matter
+#   validate  the stack gates (compose, guard regression tests, shell, ruff, actionlint)
+#   rust      both crates: fmt, clippy -D warnings, test (RPG proof against scratch Postgres)
+#   frontend  the Deck SPA: npm ci, vitest, typecheck + build
+#   catalog   shared catalog validation and the Deck API contract
+#   e2e-*     M8 placeholder, deliberately guarded off
+#
+# All third-party actions are pinned to immutable commit SHAs with a "# tag"
+# comment. Only the already-pinned actions/checkout is used: the jobs rely on
+# the runner's preinstalled Rust/Node toolchains.
+#
+# Caching note: the M0 plan calls for rust-cache/pnpm-store caching. Those
+# actions are not pinned in this repository yet, and the pin policy forbids
+# guessing a SHA, so the cache steps are deferred to a follow-up rather than
+# added unpinned or with an unverified pin.
 
 on:
   push:
@@ -17,9 +32,54 @@ on:
         required: false
         default: false
         type: boolean
+      run_e2e:
+        # The M8 ephemeral-compose tier is not implemented; this stays false so
+        # the placeholder job never reports a passing suite that did not run.
+        description: "Run the ephemeral-compose e2e tier (not implemented until M8)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      catalog: ${{ steps.detect.outputs.catalog }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed components
+        id: detect
+        env:
+          # Present only for pull_request events; empty on push/dispatch.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ]; then
+            rust=true; frontend=true; catalog=true
+          else
+            files="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")"
+            match() { printf '%s\n' "$files" | grep -qE "$1"; }
+            if match '^backend/rpg/|^backend/deck/backend/'; then rust=true; else rust=false; fi
+            if match '^backend/deck/frontend/'; then frontend=true; else frontend=false; fi
+            if match '^catalog/|^parity/|^scripts/check_api_contract\.py$'; then catalog=true; else catalog=false; fi
+          fi
+          {
+            echo "rust=${rust}"
+            echo "frontend=${frontend}"
+            echo "catalog=${catalog}"
+          } >> "$GITHUB_OUTPUT"
+
   validate:
+    name: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,6 +145,12 @@ jobs:
             exit 1
           fi
 
+      - name: Secret manifest
+        run: python3 scripts/check_secret_manifest.py
+
+      - name: Secret drift
+        run: python3 scripts/check_secret_drift.py
+
       - name: Shellcheck
         uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
@@ -126,3 +192,111 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
           /tmp/actionlint -color .github/workflows/*.yml
+
+  rust:
+    name: rust (${{ matrix.crate }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - backend/rpg
+          - backend/deck/backend
+    services:
+      postgres:
+        # The RPG store proof is a live Postgres integration test. It drops and
+        # recreates the schema of whatever RPG_DB_URL names, so the database is
+        # a throwaway service container with a scratch-shaped name — never a
+        # shared or persistent database (FIX.md F-1).
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rpg_scratch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rpg_scratch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Only backend/rpg's store proof reads this; the Deck crate ignores it.
+      RPG_DB_URL: postgresql://postgres:postgres@localhost:5432/rpg_scratch
+    defaults:
+      run:
+        working-directory: ${{ matrix.crate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # With RPG_DB_URL set, the RPG's --all-targets run includes the
+        # scratch-Postgres store proof.
+        run: cargo test --all-targets
+
+  frontend:
+    name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/deck/frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test
+        run: npm test -- --run
+
+      - name: Typecheck and build
+        # package.json's build script is `tsc --noEmit && vite build`, so this
+        # is the frontend typecheck as well as the production bundle.
+        run: npm run build
+
+  catalog:
+    name: catalog
+    needs: changes
+    if: needs.changes.outputs.catalog == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install catalog requirements
+        run: python3 -m pip install -r catalog/requirements.txt
+
+      - name: Validate the catalog
+        run: python3 catalog/validate.py
+
+      - name: Catalog validator self-tests
+        run: python3 catalog/test_validate.py
+
+      - name: Deck API contract
+        run: python3 scripts/check_api_contract.py
+
+  e2e-skeleton:
+    # M8 placeholder: the ephemeral-compose end-to-end tier does not exist yet.
+    # Land the job shape now, guarded off, so it can never report a green result
+    # for a suite that has not run.
+    name: e2e (disabled until M8)
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_e2e }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Placeholder
+        run: echo "The ephemeral-compose e2e tier lands in M8."

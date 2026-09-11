@@ -1,4 +1,5 @@
-# Dependabot version updates for The Bear Cave's active eight-service stack.
+# Dependabot version updates for RAWRZ: the active eight-service stack plus the
+# imported Rust crates and the Deck frontend.
 version: 2
 updates:
   - package-ecosystem: "docker-compose"
@@ -21,3 +22,39 @@ updates:
       time: "06:00"
       timezone: "Etc/UTC"
     labels: ["dependencies", "github-actions"]
+
+  - package-ecosystem: "cargo"
+    directory: "/backend/rpg"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(rpg)"
+    labels: ["dependencies", "rpg"]
+
+  - package-ecosystem: "cargo"
+    directory: "/backend/deck/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(deck)"
+    labels: ["dependencies", "deck"]
+
+  - package-ecosystem: "npm"
+    directory: "/backend/deck/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(deck-frontend)"
+    labels: ["dependencies", "deck"]

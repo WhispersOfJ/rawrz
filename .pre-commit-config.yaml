@@ -45,3 +45,14 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
         args: ["--markdown-linebreak-ext=md"]
+
+  # Both imported crates are rustfmt-clean; the unified CI rust job runs the
+  # same check. This keeps a local commit from drifting out of format.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check (both crates)
+        language: system
+        pass_filenames: false
+        files: '^backend/.*\.rs$'
+        entry: bash -c 'cargo fmt --all --manifest-path backend/rpg/Cargo.toml -- --check && cargo fmt --all --manifest-path backend/deck/backend/Cargo.toml -- --check'

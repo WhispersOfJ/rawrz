@@ -31,17 +31,7 @@ jobs:
       - name: Lint YAML
         run: 'yamllint -d "{extends: relaxed, rules: {line-length: disable}}" docker-compose.yml .github/*.yml .github/workflows/*.yml'
 
-  shell-and-python:
-    name: Shell and Python Quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Bash syntax
-        run: for f in scripts/*.sh tests/*/*.sh; do bash -n "$f"; done
-      - name: Bash functions
-        run: ./tests/bash/test_bash_functions.sh --offline
-      - name: Python checks
-        run: |
-          python3 -m py_compile scripts/*.py
-          pip install ruff==0.8.6
-          ruff check . --exclude archive/ --exclude "**/migrations"
+  # The former shell-and-python job was retired in M0: its bash -n, bash
+  # functions, and ruff gates all run in validate.yml's `validate` job (and are
+  # mirrored by the pre-commit gate), so keeping a second copy only doubled the
+  # runtime without adding coverage.

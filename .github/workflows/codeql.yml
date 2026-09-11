@@ -22,6 +22,7 @@ on:
         options:
           - all
           - python
+          - javascript-typescript
 
 permissions:
   security-events: write
@@ -35,7 +36,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ${{ (github.event.inputs.language && github.event.inputs.language != 'all') && fromJSON(format('["{0}"]', github.event.inputs.language)) || fromJSON('["python"]') }}
+        # Default set: the stack's Python tooling plus the Deck's
+        # JavaScript/TypeScript frontend. Rust analysis is deliberately not
+        # enabled in M0: CodeQL's Rust support needs a build recipe for two
+        # independent crates, and the repo has no verified configuration for
+        # it yet. Add it with a tested recipe rather than an untested guess.
+        language: ${{ (github.event.inputs.language && github.event.inputs.language != 'all') && fromJSON(format('["{0}"]', github.event.inputs.language)) || fromJSON('["python","javascript-typescript"]') }}
 
     steps:
       - name: Checkout repository
