@@ -55,7 +55,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIFECYCLE_DOC = ROOT / "docs" / "services" / "lifecycle.md"
+# The stack docs live under docs/stack/ after the RAWRZ M0 relocation.
+LIFECYCLE_DOC = ROOT / "docs" / "stack" / "services" / "lifecycle.md"
 COMPOSE = ROOT / "docker-compose.yml"
 ENV_TEMPLATE = ROOT / ".env.template"
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -94,8 +95,10 @@ EXTRA_ENV_PREFIXES = ("WS_",)
 # watchers) and are exempt from the workflow text scan.
 WATCHER_FILES = {"cleanuparr-sabnzbd-watch.yml"}
 
-# docs/ filenames that legitimately name a retired project (migration record).
-DOC_EXEMPT = {"docs/migration/from-media-stack.md"}
+# docs/ basenames that legitimately name a retired project (the migration
+# record). Matched on the filename so relocating the record does not silently
+# turn it into residue.
+DOC_EXEMPT_NAMES = {"from-media-stack.md"}
 
 # A line containing this marker is a deliberate mention, never residue.
 IGNORE_MARKER = "audit-residue-ignore"
@@ -235,7 +238,7 @@ def scan_doc_filenames() -> list[Finding]:
         if not path.is_file():
             continue
         rel = path.relative_to(ROOT).as_posix()
-        if rel in DOC_EXEMPT:
+        if path.name in DOC_EXEMPT_NAMES:
             continue
         if doc_name_is_retired(path.name):
             out.append(Finding("docs", "fail",
