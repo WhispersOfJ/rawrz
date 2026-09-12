@@ -4,7 +4,6 @@ name: release-please
 # To upgrade: gh api repos/{owner}/{repo}/commits/{new-tag} --jq .sha, then
 # update the SHA and the "# tag" comment on its uses: line.
 
-
 # Watches conventional-commit messages on main and maintains a standing
 # "release PR" that accumulates them into CHANGELOG.md and bumps the
 # version. Merging that PR cuts the actual GitHub Release + tag.
@@ -22,13 +21,18 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
     steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+      - name: Run release-please with the configured PAT
+        if: ${{ env.RELEASE_PLEASE_TOKEN != '' }}
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
-          # A user PAT, not the default GITHUB_TOKEN. GitHub deliberately does
-          # not fire pull_request workflows for a PR opened with GITHUB_TOKEN
-          # (recursion guard). A PAT-opened PR triggers validate.yml normally.
-          # Falls back to GITHUB_TOKEN when the PAT secret isn't configured.
+          # A user PAT is required because this repository's default
+          # GITHUB_TOKEN cannot create the release PR and retrigger CI.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - name: Explain skipped release automation
+        if: ${{ env.RELEASE_PLEASE_TOKEN == '' }}
+        run: echo "RELEASE_PLEASE_TOKEN is not configured; release automation skipped."
