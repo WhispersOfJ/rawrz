@@ -4,11 +4,12 @@
     "ghcr.io/hotio/prowlarr:release-2.5.2.5491": 0,
     "ghcr.io/hotio/radarr:release-6.3.0.10514": 0,
     "ghcr.io/hotio/sonarr:release-4.0.19.2979": 0,
-    "ghcr.io/infinidysk/infinidysk@sha256:8cf616c1806c3443e6cfbd4b10bf7562d0e09cdfe735360c2e992f3a0c623dd0": 0,
-    "ghcr.io/seerr-team/seerr:v3.4.1": 0,
+    "ghcr.io/infinidysk/infinidysk:dev": 0,
+    "ghcr.io/seerr-team/seerr:v3.4.1": 2,
     "golift/unpackerr:v0.16.1": 0,
-    "kometateam/imagemaid:latest@sha256:ac510622d44c8fd0024d28023ec2ce32f0992271ff019db455e227bd693f0052": 0,
-    "plexinc/pms-docker@sha256:83a425ae9e133b1cb2cc3b809556e01c61cd8ff65c582e41b4374bc2210bac9e": 0,
-    "rclone/rclone:1.75.0": 0
+    "kometateam/imagemaid:latest@sha256:ac510622d44c8fd0024d28023ec2ce32f0992271ff019db455e227bd693f0052": 4,
+    "plexinc/pms-docker:latest": 0,
+    "rclone/rclone:1.75.0": 2,
+    "redis:7-alpine": 0
   }
 }
