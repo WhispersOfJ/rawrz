@@ -98,7 +98,7 @@ entry that approved one).
 ## 4. Bazarr re-adoption (fresh implementation) — ✅ DONE 2026-09-03
 
 Subtitle capability, retired 2026-08-30 for OOM crash-looping at 128m — not
-for being useless. Re-adopt per `docs/services/lifecycle.md` convention: fresh
+for being useless. Re-adopt per `docs/stack/services/lifecycle.md` convention: fresh
 tracked implementation (never a copy from `archive/`), real memory cap
 (512m–1g), DB hygiene, Sonarr wiring, Prowlarr sync, trivy baseline.
 

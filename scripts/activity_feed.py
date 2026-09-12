@@ -16,7 +16,7 @@ A missed run or a down app is harmless — the cursor never moves past
 records it has seen, so the next run catches up and nothing is lost or
 duplicated. Run from a user timer (every 15 minutes is plenty); point an
 RSS reader at feed.xml, or serve the directory with `python3 -m http.server`
-when remote access is wanted (documented in docs/services/bash-functions.md).
+when remote access is wanted (documented in docs/stack/services/bash-functions.md).
 
 Event mapping (Radarr/Sonarr History eventTypes):
   downloadFolderImported (both), seriesFolderImported (Sonarr) -> import

@@ -41,7 +41,7 @@ stack-maintenance-digest() {
 # crontab, and user timers for references to retired services and dead
 # project paths — the automated exhaustive-removal checklist (AGENTS.md
 # landmine #7, TODO.md project #2). Backed by scripts/audit_residue.py, whose
-# registry mirrors docs/services/lifecycle.md. Read-only — safe to run any
+# registry mirrors docs/stack/services/lifecycle.md. Read-only — safe to run any
 # time. Exit 0 = no residue; 1 = residue found (host units print per-unit).
 stack-audit-residue() {
     if [ "$#" -gt 0 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; then

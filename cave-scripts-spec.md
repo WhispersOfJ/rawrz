@@ -87,9 +87,9 @@ pre-researched plan for approval — will be built directly from this file.
 - Testing today: `tests/bash/test_bash_functions.sh` (offline + live tiers; `--offline` is CI-safe), `scripts/gen-bash-completions.sh --check`, `bash -n` gates, `stack-config-drift`, `stack-audit-residue` (which **scans the functions tree** for retired residue — must learn Cave-Scripts' tree), maintenance digest.
 
 ### 4.3 Retired / archived fish (context for the full audit)
-- Fish library was **retired** in favour of bash (docs/services/FISH.md): parallel fish doubled API/endpoint drift surface. Retirement is reversible from git history.
+- Fish library was **retired** in favour of bash (docs/stack/services/FISH.md): parallel fish doubled API/endpoint drift surface. Retirement is reversible from git history.
 - `archive/media-stack/` still holds **117 `.fish` files** (62 functions + 55 completions). The M1 audit classifies each: re-adopt, superseded-by-bash, or dead.
-- **`services/host-tools/` is a *live*, fish-only library** the audit must also cover: 25 `.fish` files — 23 `stack-*` host functions (pkg/journal/firewall/disk/mem/service/timer/cron/ssh/kernel/aur/flatpak/uptime/git/claude-home…) plus `__host_*` helpers — with `scripts/{install,uninstall}.sh` and `docs/services/host-tools.md`. No bash/zsh ports exist. In scope for the M1 audit and the three-shell ports (D1, D19). Repo-wide `.fish` total: **142**.
+- **`services/host-tools/` is a *live*, fish-only library** the audit must also cover: 25 `.fish` files — 23 `stack-*` host functions (pkg/journal/firewall/disk/mem/service/timer/cron/ssh/kernel/aur/flatpak/uptime/git/claude-home…) plus `__host_*` helpers — with `scripts/{install,uninstall}.sh` and `docs/stack/services/host-tools.md`. No bash/zsh ports exist. In scope for the M1 audit and the three-shell ports (D1, D19). Repo-wide `.fish` total: **142**.
 
 ### 4.4 Recent DE work (2026-09-05, Hyprland switchover) — inventory to turn into functions
 - `~/.config/hypr/`: `hyprland.conf`, `hyprlock.conf`, `hypridle.conf`, `hyprpaper.conf`, `README.md`, `.current-theme`, **`themes/` with 7 themes** (`auto`, `catppuccin-mocha`, `dracula`, `gruvbox`, `nord`, `rose-pine`, `tokyonight`), **`scripts/`**: `build-themes.sh`, `render-theme.sh`, `hyprtheme`, `idle-toggle.sh`, `gammastep-toggle.sh`, `recorder-toggle.sh`, `power.sh`, `cliphist-pick.sh`.
@@ -102,9 +102,9 @@ pre-researched plan for approval — will be built directly from this file.
 
 ### 4.5 Wiring that references `services/bash-functions` (must be repointed at Cave-Scripts on cutover)
 **23 files** across md/sh/yml/py reference the path (grep-verified on main 2026-09-05 — the earlier 85-count included `.worktrees/` checkouts of the same files); there will be **no compatibility shim** after cutover (D16), so the repoint list must be exhaustive and M1 re-derives it mechanically.
-- `~/.bashrc` loader snippet (documented in `docs/services/bash-functions.md`) → path changes to the Cave-Scripts checkout/submodule location.
+- `~/.bashrc` loader snippet (documented in `docs/stack/services/bash-functions.md`) → path changes to the Cave-Scripts checkout/submodule location.
 - `tests/bash/test_bash_functions.sh` (offline tier + live tier split per D13), `gen-bash-completions.sh --check`, `bash -n services/bash-functions/functions/*.sh` gates.
-- Docs: `docs/services/bash-functions.md`, `docs/services/FISH.md`, `AGENTS.md` (bash-functions references, waybar pointer, validation steps), `CLAUDE.md`-adjacent workflow notes, `docs/API.md` call-surface notes, waybar README sync flow.
+- Docs: `docs/stack/services/bash-functions.md`, `docs/stack/services/FISH.md`, `AGENTS.md` (bash-functions references, waybar pointer, validation steps), `docs/stack/API.md` call-surface notes, waybar README sync flow.
 - Cron/timers: `install-nightly-reclaim-cron.sh` (installs a crontab entry whose `bash -lc` sources the loader **by repo path**); user timers for arrival-notify / activity-feed / maintenance digest call python backends and stack-* functions by path.
 - CI (`validate.yml` and friends) referencing the tree/tests; `stack-audit-residue`'s repo-surface scan of the functions tree; `stack-config-drift` (path-independent, safe).
 - M1 must produce the **complete reference list** (grep-verified) before the cutover commit.

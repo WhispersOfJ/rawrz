@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when the nzbdav (InfiniDysk) download queue is non-empty.
 
-The landmine (docs/landmines.md, docs/operations/backup-restore.md):
+The landmine (docs/stack/landmines.md, docs/operations/backup-restore.md):
 recreating the nzbdav container wipes the in-memory queue and silently
 blocklists every queued NZB. scripts/update-nzbdav.sh guards the
 *intended* update path, but a bare `docker compose up -d nzbdav` or

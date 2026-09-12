@@ -2,7 +2,7 @@
 """Fail when a running container is serving a stale inode for a bind-mounted
 config file.
 
-The landmine (docs/landmines.md — "Bind-mounted files can be stale"): editing a
+The landmine (docs/stack/landmines.md — "Bind-mounted files can be stale"): editing a
 single-file bind in place with `sed -i` or `vim` writes a *new inode* on the
 host, but the container can keep the *old* inode open and silently serve stale
 content until restarted. `docker compose config` and `docker inspect` both

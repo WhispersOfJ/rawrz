@@ -119,9 +119,8 @@ time (D14).
 5. **Compile the repoint reference list**: all **23 files** (grep-verified)
    referencing
    `services/bash-functions` (md/sh/yml/py) captured by path + reason —
-   categories: loader docs, CI (`validate.yml` + friends), `tests/bash/`,
-   docs (`docs/services/bash-functions.md`, `FISH.md`, `AGENTS.md`,
-   `docs/API.md`, waybar README), cron installer
+   categories: loader docs, CI (`validate.yml` + friends), `tests/bash/`,   docs (`docs/stack/services/bash-functions.md`, `FISH.md`, `AGENTS.md`,
+    `docs/stack/API.md`, waybar README), cron installer
    (`install-nightly-reclaim-cron.sh` crontab text), user timers, residue
    audit (`stack-audit-residue` functions-tree scan). This list is M4's
    cutover checklist, frozen in this milestone.
@@ -338,9 +337,8 @@ fish (D19), finish docs/CI, and run the final end-to-end smoke.
 1. **Cutover commit in thebearcave** (one PR, from the frozen M1 list):
    repoint loader docs + `~/.bashrc` install snippet to the submodule path;
    move offline test tiers to Cave-Scripts (keep live tier + integration in
-   thebearcave — D13); update CI (`validate.yml` etc.), `AGENTS.md`,
-   `docs/services/bash-functions.md` (retirement record in the FISH.md
-   style), `docs/API.md`, waybar docs, `install-nightly-reclaim-cron.sh`
+   thebearcave — D13); update CI (`validate.yml` etc.), `AGENTS.md`,    `docs/stack/services/bash-functions.md` (retirement record in the FISH.md
+    style), `docs/stack/API.md`, waybar docs, `install-nightly-reclaim-cron.sh`
    crontab text + user timers, residue audit (`stack-audit-residue` learns
    the Cave-Scripts tree), stack-config-drift unaffected (path-independent).
 2. **Remove `services/bash-functions/`** from thebearcave (no symlink shim).

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that secrets never drift into the git tree.
 
-Backs up the SECURITY.md / docs/security.md promise that secrets are never
+Backs up the SECURITY.md / docs/stack/security.md promise that secrets are never
 committed. Fails when a sensitive path is *tracked by git*, or when the
 .gitignore rules protecting it are removed (which would let an accidental
 `git add -A` stage it). Guarded surfaces:

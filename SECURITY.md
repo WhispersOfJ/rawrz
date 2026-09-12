@@ -4,7 +4,7 @@ The Bear Cave stack is LAN-oriented and intentionally slim: no reverse proxy,
 no central authentication tier, and no monitoring sidecar. Host firewalling and
 each application's native authentication are part of the security boundary.
 The full security model — secrets handling, exposed surfaces, TLS posture, CI
-controls, and incident response — is documented in [docs/security.md](docs/security.md).
+controls, and incident response — is documented in [docs/stack/security.md](docs/stack/security.md).
 
 ## Reporting a vulnerability
 
@@ -28,8 +28,8 @@ Include, when known:
 ## Scope
 
 The active stack is the 9 always-on Compose services plus the manual ImageMaid
-profile described in `AGENTS.md` and `docs/services/`. Historical records and
-retired-service files under `archive/` and `docs/services/lifecycle.md` are
+profile described in `AGENTS.md` and `docs/stack/services/`. Historical records and
+retired-service files under `archive/` and `docs/stack/services/lifecycle.md` are
 reference material, not runtime configuration.
 
 Things we care about most:
@@ -46,7 +46,7 @@ Things that are expected, not vulnerabilities:
 - rclone RC (`:5572`) bound to the container network only.
 - The known operational landmines documented in `AGENTS.md` (FUSE mount
   fragility, non-persistent NzbDAV queue, etc.) — report incidents per
-  `docs/security.md` incident response instead.
+  `docs/stack/security.md` incident response instead.
 
 ## Expectations
 
@@ -60,4 +60,4 @@ Things that are expected, not vulnerabilities:
 
 Security fixes land on `main` and are shipped via the automated
 `release-please` releases. There are no LTS or backport channels — please test
-against the latest release (see `docs/ci-cd.md` for the release process).
+against the latest release (see `docs/stack/ci-cd.md` for the release process).

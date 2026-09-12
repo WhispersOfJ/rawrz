@@ -49,7 +49,7 @@ docker logs --tail=100 nzbdav_rclone
 
 The rclone entrypoint clears stale FUSE state before mounting. If it still loops, check
 for stale host mounts and follow the FUSE recovery procedure in
-[docs/services/nzbdav-rclone.md](../services/nzbdav-rclone.md).
+[docs/stack/services/nzbdav-rclone.md](../stack/services/nzbdav-rclone.md).
 
 ## NzbDAV returns 401
 

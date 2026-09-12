@@ -133,7 +133,7 @@ carry guards (`stack-pkg-update --yes`, `stack-pkg-orphans --remove`,
 `stack-flatpak-updates --apply`, `stack-pkg-clean-cache`) → registry marks
 them `mutating-safe`/`destructive-confirm`. Also ships
 `scripts/{install,uninstall}.sh` → fold into the Cave-Scripts per-shell
-installer (M2); `README.md` + `docs/services/host-tools.md` content moves
+installer (M2); `README.md` + `docs/stack/services/host-tools.md` content moves
 into Cave-Scripts docs.
 
 **Naming (L2):** host diagnostics are renamed **`cave-sys-*`** — e.g.

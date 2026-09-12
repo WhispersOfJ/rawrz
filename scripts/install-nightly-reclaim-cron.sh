@@ -8,7 +8,7 @@
 # Aggressive mode removes every image not referenced by docker-compose.yml
 # (plus dangling volumes/build cache/stopped containers) — cache-only images
 # are re-pullable, and compose-referenced + container-backed images are
-# protected. See docs/services/bash-functions.md → "Nightly maintenance".
+# protected. See docs/stack/services/bash-functions.md → "Nightly maintenance".
 #
 # Refuses to install when the target repo cannot actually run the command
 # (missing function, missing .env, missing script, gone repo) — this avoids

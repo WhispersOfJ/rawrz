@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Detect and remediate a wedged nzbdav (InfiniDysk) backend.
 
-Landmine (docs/landmines.md #13): the :3000 frontend can stay healthy while
+Landmine (docs/stack/landmines.md #13): the :3000 frontend can stay healthy while
 the internal backend on :8080 dies, leaving the queue API and WebDAV serving
 502s. Docker marks the container `unhealthy` (the compose healthcheck probes
 both), but `restart: unless-stopped` only fires on *exit* — nothing acts on

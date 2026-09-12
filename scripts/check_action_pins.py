@@ -7,7 +7,7 @@ commit via the GitHub API. Reports three problem classes:
 
   1. drifts   — the tag has moved; the pinned SHA is stale
   2. unpinned — a third-party action referenced by a mutable tag instead
-                of a full SHA (policy violation, see docs/ci-cd.md)
+                of a full SHA (policy violation, see docs/stack/ci-cd.md)
   3. errors   — the tag/repo could not be resolved (missing tag, rate
                 limit, no `gh` CLI, ...)
 

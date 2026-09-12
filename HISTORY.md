@@ -72,7 +72,7 @@ network security, and utility services in three phases. All decisions came from 
 
 Every service removed from `docker-compose.yml` end to end (compose, landing page
 registry, docs, tests, scripts, trivy baseline, AGENTS.md). Live tracking of
-re-adoption watchers lives in [docs/services/lifecycle.md](docs/services/lifecycle.md).
+re-adoption watchers lives in [docs/stack/services/lifecycle.md](docs/stack/services/lifecycle.md).
 
 | Service | Retired | Reason | Re-adoption watcher | Where it went |
 |---------|---------|--------|---------------------|---------------|

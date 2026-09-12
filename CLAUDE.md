@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A unified media infrastructure stack combining the active media services from media-stack and metacacharr into a single, cohesive Docker Compose deployment. 8 containers, one `docker compose up -d`. Retired services remain documented in `docs/services/lifecycle.md` and preserved under `archive/`.
+A unified media infrastructure stack combining the active media services from media-stack and metacacharr into a single, cohesive Docker Compose deployment. 8 containers, one `docker compose up -d`. Retired services remain documented in `docs/stack/services/lifecycle.md` and preserved under `archive/`.
 
 ## How to Work
 

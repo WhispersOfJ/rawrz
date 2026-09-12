@@ -10,7 +10,7 @@ Scans services/bash-functions/functions/*.sh for env-prefix assignments
 directly before a `python3` invocation and fails on any variable not in the
 scalar whitelist (URLs, keys, IDs, limits, app names, state). Add new
 scalar env vars to SCALAR_ENV_VARS after review; anything data-sized must
-go via stdin instead. See docs/services/bash-functions.md.
+go via stdin instead. See docs/stack/services/bash-functions.md.
 """
 
 import re

@@ -50,7 +50,7 @@ host-tools install, cron/timers).
 | `scripts/setup.sh` secret generation and trust bootstrap | `openssl`, `ca-certificates` | random secret material and the initial public CA bundle |
 | `scripts/setup.sh` external mount preparation | `sudo` | creates `/mnt/remote/nzbdav` when `/mnt` is root-owned |
 | `stack-plex-markers` | `sqlite` CLI | read-only queries against the Plex DB |
-| `rclone obscure` setup step (docs/quick-start) | `rclone` host binary | generating the obscured WebDAV password for `config/nzbdav-rclone/rclone.conf`; also handy to probe the WebDAV remote independently of the container |
+| `rclone obscure` setup step (docs/stack/quick-start) | `rclone` host binary | generating the obscured WebDAV password for `config/nzbdav-rclone/rclone.conf`; also handy to probe the WebDAV remote independently of the container |
 | `scripts/backup_dropbox.py` (docs/operations/dropbox-backup.md) | `python-requests` | streaming single-tar Dropbox snapshot (tar → chunked upload-session API) |
 | `stack-disk-health` | `smartmontools` | SMART queries (`smartctl`, needs root) |
 | `stack-pkg-clean-cache`, `stack-pkg-orphans` | `pacman-contrib` | `paccache -rk` cache vacuuming, `pacman -Qtd` orphan plumbing |
@@ -77,7 +77,7 @@ All are in the official repos now:
 | `actionlint` | extra | pre-commit, `validate.yml` (workflow lint) |
 | `gitleaks` | extra | `.pre-commit-config.yaml` (secret scanning) |
 | `pre-commit` | extra | `.pre-commit-config.yaml` (hook runner) |
-| `github-cli` | extra | PR workflow per docs/worktree-lifecycle.md (`gh pr create` / `gh pr merge`) |
+| `github-cli` | extra | PR workflow per docs/stack/worktree-lifecycle.md (`gh pr create` / `gh pr merge`) |
 | `yamllint` | extra | `quality.yml`, `nightly-healthcheck.yml` |
 | `trivy` | extra | `trivy-scan.yml` (CVE/IaC scans) |
 
@@ -104,7 +104,7 @@ packages that make **management, security, and maintenance** more efficient
 official `extra` repo (verified 2026-09-04) except the AUR helpers. The
 additions are deliberately CLI-first — consistent with the post-slim-down
 posture, which retired containerized observability in favor of the host-side
-`stack-*` surface (see [docs/services/lifecycle.md](docs/services/lifecycle.md)).
+`stack-*` surface (see [docs/stack/services/lifecycle.md](docs/stack/services/lifecycle.md)).
 
 ### 4.1 Desired — management, security, maintenance
 
@@ -197,7 +197,7 @@ the Python standard library. So:
    unit contents are documented in the script docstrings
    (`scripts/maintenance_digest.py`, `scripts/arrival_notifier.py`,
    `scripts/activity_feed.py`) and in
-   [docs/services/bash-functions.md](docs/services/bash-functions.md).
+   [docs/stack/services/bash-functions.md](docs/stack/services/bash-functions.md).
 
 ## 7. Diagnosis: which tool for which failure
 

@@ -31,7 +31,7 @@ Surfaces scanned:
                                   Description references a retired service or
                                   dead project path
 
-The registry mirrors docs/services/lifecycle.md: the "Retired services"
+The registry mirrors docs/stack/services/lifecycle.md: the "Retired services"
 table is parsed and every row must exist in RETIRED_SERVICES below, so
 recording a retirement without teaching this checker its name fails CI
 (run the offline test for the exact rule). archive/ holds retired sources by
@@ -63,7 +63,7 @@ FUNCTIONS = ROOT / "services" / "bash-functions"
 DOCS = ROOT / "docs"
 
 # ---------------------------------------------------------------------------
-# Registry — keep in sync with docs/services/lifecycle.md ("Retired services")
+# Registry — keep in sync with docs/stack/services/lifecycle.md ("Retired services")
 # ---------------------------------------------------------------------------
 # value = True when the service has an active re-adoption watcher (its name is
 # expected inside the watcher workflow, which is exempted by WATCHER_FILES).
@@ -142,7 +142,7 @@ def _finding(surface: str, level: str, path: Path, line: int,
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle registry sync (docs/services/lifecycle.md is the record)
+# Lifecycle registry sync (docs/stack/services/lifecycle.md is the record)
 # ---------------------------------------------------------------------------
 
 RETIRED_TABLE_RE = re.compile(r"^\| `([^`]+)`", re.MULTILINE)

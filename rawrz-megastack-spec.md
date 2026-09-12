@@ -1036,8 +1036,8 @@ and *arr config keys. Renaming those would break contract boundaries for no bene
 - **Component sub-specs remain authoritative for their own domains**, relocated:
   - `docs/rpg/` ← `movie-rpg-spec.md` (the canonical 175 KB copy), and the RPG's
     agent-facing lineage (`FIX.md`, `HANDOFF.md`) moves to `docs/agents/`.
-  - `docs/deck/` ← `cave-deck-spec.md`.
-  - `docs/stack/` ← the Bear Cave's `AGENTS.md` content, `docs/API.md`, landmines,
+  - `docs/deck/` ← `cave-deck-spec.md`.   - `docs/stack/` ← the Bear Cave's `AGENTS.md` content, `docs/stack/API.md`, landmines,
+
     lifecycle, service docs.
 - **Companion plans** live under `docs/plans/`: `rawrz-m0-plan.md`,
   `rawrz-postgres-hardening.md`, `rawrz-arr-db-migration-runbook.md`, and

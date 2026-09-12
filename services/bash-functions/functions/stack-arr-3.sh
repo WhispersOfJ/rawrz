@@ -168,7 +168,7 @@ stack-radarr-prune() {
             --dry-run) dry_run=true ;;
             -h|--help)
                 echo "Usage: stack-radarr-prune [-y|--yes] [--dry-run]" >&2
-                echo "Prune radarr.db bloat: backup, prune, vacuum, verify (see docs/services/radarr.md)." >&2
+                echo "Prune radarr.db bloat: backup, prune, vacuum, verify (see docs/stack/services/radarr.md)." >&2
                 return 0
                 ;;
             *)
@@ -256,7 +256,7 @@ stack-sonarr-prune() {
             --dry-run) dry_run=true ;;
             -h|--help)
                 echo "Usage: stack-sonarr-prune [-y|--yes] [--dry-run]" >&2
-                echo "Prune sonarr.db bloat: backup, prune, vacuum, verify (see docs/services/sonarr.md)." >&2
+                echo "Prune sonarr.db bloat: backup, prune, vacuum, verify (see docs/stack/services/sonarr.md)." >&2
                 return 0
                 ;;
             *)
