@@ -1,0 +1,28 @@
+# M2 overlay: run the patched Seerr beside production `seerr` on port 5056.
+# Build rawrz-seerr:m2 first with services/seerr/build-prototype.sh.
+services:
+  seerr-m2:
+    image: rawrz-seerr:m2
+    container_name: rawrz-seerr-m2
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: "0.5"
+    networks: [bearcave]
+    ports:
+      - "5056:5055"
+    environment:
+      SEERR_CACHE_BACKEND: ${SEERR_CACHE_BACKEND:-redis}
+      REDIS_URL: ${REDIS_URL:-redis://rawrz-redis:6379/0}
+      SEERR_CACHE_REDIS_PREFIX: ${SEERR_CACHE_REDIS_PREFIX:-rawrz:seerr:m2}
+      SEERR_CACHE_REDIS_TIMEOUT_MS: ${SEERR_CACHE_REDIS_TIMEOUT_MS:-2000}
+      TZ: ${TZ}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5055/api/v1/status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./config/seerr-m2:/app/config
