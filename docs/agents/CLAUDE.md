@@ -1,15 +1,21 @@
-# CLAUDE.md — Movie / TV RPG
+# CLAUDE.md — Movie / TV RPG (RAWRZ component)
+
+> **⚠ Superseded items — see `rawrz-megastack-spec.md` §10 and the banner in
+> `docs/rpg/movie-rpg-spec.md`.** This RPG is now a RAWRZ component, not a separate
+> project. It will be a Compose service in the merged stack (master spec D34).
 
 ## What this is
 
-A web-based RPG where watching movies/TV from the Bear Cave stack (Plex +
-Sonarr + Radarr) is the core mechanic. Detective/investigation theme. Linked
-with the stack (reads its APIs) but not a part of it (no new compose
-container, separate lifecycle).
+A web-based RPG where watching movies/TV from the RAWRZ stack (Plex + Sonarr +
+Radarr) is the core mechanic. Detective/investigation theme. Part of RAWRZ —
+reads its APIs and will run as a Compose service.
 
-- Spec: `movie-rpg-spec.md` (source of truth for design decisions).
+- Spec: `docs/rpg/movie-rpg-spec.md` (source of truth for design decisions;
+  supersession banner applies).
 - Status: v0.0.0.1 (initial spec release). V1 single-player, V2 shared quests.
-- Stack reference: ~/Cave (Bear Cave), AGENTS.md links to `movie-rpg-spec.md`.
+- Stack reference: `~/Cave` (Bear Cave), RAWRZ root `AGENTS.md` links to
+  `docs/rpg/movie-rpg-spec.md`.
+- Source location: `backend/rpg/` in the RAWRZ monorepo.
 
 ## How to work
 
@@ -24,11 +30,11 @@ container, separate lifecycle).
 
 - Reads: Plex (X-Plex-Token, :32400), Sonarr (X-Api-Key, :8989),
   Radarr (X-Api-Key, :7878) over LAN.
-- Owns: Postgres (host install, not a compose container), Rust/Axum backend,
-
+- Owns: Postgres (host install, not a compose container — **⚠ superseded:**
+  RAWRZ adds shared Postgres per master spec §7), Rust/Axum backend,
   Svelte frontend, port 46532, PIN gate.
-- Does NOT: add a container to docker-compose.yml, modify *arr/Plex services,
-  expose remotely by default, use webhooks (polling only, 5-min cadence).
+- **Will be:** a Compose service in the RAWRZ stack (master spec D34), on the
+  `bearcave` network, with Redis (master spec D7–D12) available for sessions.
 
 ## Open design calls (finalize during implementation)
 

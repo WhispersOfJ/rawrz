@@ -33,7 +33,7 @@ single implementation and a single offline smoke test
 | `tests/fish/test_fish_functions.sh` | `tests/bash/test_bash_functions.sh` |
 | `fish gen-completions.fish --check` | `bash gen-bash-completions.sh --check` |
 | `services/fish-functions/scripts/install.sh` | `source services/bash-functions/bearcave-bash.sh` from `~/.bashrc` |
-| `docs/services/fish-functions.md` | `docs/services/bash-functions.md` (this file supersedes it) |
+| `docs/stack/services/fish-functions.md` | `docs/stack/services/bash-functions.md` (this file supersedes it) |
 
 See [bash-functions.md](bash-functions.md) for setup, layout, completion
 checks, and the per-call-type API timeout policy.

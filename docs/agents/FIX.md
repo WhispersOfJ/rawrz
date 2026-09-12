@@ -412,6 +412,18 @@ spells/affinity migration originally suggested here as 0013 is now **0014** —
 
 ## 8. Architectural decision — Redis / external caching layer (evaluated 2026-09-10)
 
+> **⚠ SUPERSEDED — see `rawrz-megastack-spec.md` §4 (D7–D12) and §7.** The "no Redis"
+> verdict below was made under the RPG's then-independent-repo, no-new-compose-container
+> constraint, which RAWRZ reverses. The revisit trigger in the last paragraph has been
+> invoked by M0.
+>
+> **What changes:** RAWRZ adds Redis as a shared service (master spec D7–D12). F-11
+> (session sweep) and F-39 (session renewal) are resolved by Redis sessions in master
+> spec §7. The in-process fixes (F-16 hydration, F-11 sweep) remain valid as a fallback.
+>
+> **What survives:** the catalog-reality note (§1) still applies to *cloud* Redis —
+> RAWRZ self-hosts Redis, so no WAN dependency or cloud-vendor privacy issue.
+
 **Verdict: no Redis (or any external cache daemon) for V1.** Decision recorded
 here so it isn't re-litigated silently.
 

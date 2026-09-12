@@ -4,6 +4,22 @@
 **Date:** 2026-09-06
 **Supersedes:** the interactive operational surface of `cave-scripts-spec.md` (Cave-Scripts submodule), the `stack-*`/`cave-*` bash functions, the fish host tools, the waybar integration, and `stack-tui`.
 
+> **⚠ SUPERSEDED ITEMS — see `rawrz-megastack-spec.md` §3, §4, §13.** The following statements
+> in this spec reflect the Deck's then-independent-repo model, which RAWRZ reverses:
+>
+> - **§3.1 — "Separate repo" + "Hybrid" (submodule) model.** Reversed by master spec D1/D4
+>   (one repo, one release stream). Cave Deck is now `backend/deck/` in the RAWRZ monorepo,
+>   not a submodule. Its own CI is merged into the unified `validate.yml`.
+> - **§3.4 — LAN-only, no login.** Master spec D13 (reverse proxy) and the RAWRZ security
+>   model may change the exposure posture; the no-login owner-trust model is retained unless
+>   the reverse proxy tier adds auth.
+> - **Catalog `redis` entry (opt-in).** Reversed by master spec §4 (D7–D12): Redis is a core
+>   RAWRZ service, not an optional catalog entry. The catalog's paperless-redis sidecar
+>   pattern still applies for app-specific Redis needs.
+>
+> Cross-references: master spec §1.2 (single repo), §3 (Deck as a RAWRZ component), §4
+> (Redis), §13 (unified CI), §19 (supersession policy).
+
 ---
 
 ## 1. Goal

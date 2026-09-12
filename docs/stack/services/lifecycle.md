@@ -72,7 +72,7 @@ baselines. Historical documents (`CHANGELOG.md`, `HISTORY.md`, `TODO.md`, the
 what happened, not the current state.
 
 If subtitles are ever wanted again, the 2026-09-03 record below and the API
-notes in git history (`docs/API.md` @ pre-2026-09-06) document the working
+notes in git history (`docs/stack/API.md` @ pre-2026-09-06) document the working
 configuration (form-encoded `settings-<section>-<field>` mutation contract,
 `ip=sonarr`/`radarr` container-DNS addressing, empty `base_url`,
 `mustNotContain` required in language-profile payloads).
@@ -176,5 +176,5 @@ When retiring a service that could return if an external condition clears:
 3. **Escalate through the stack's alert channel** — Discord via the existing
    `secrets.DISCORD_WEBHOOK_URL` pattern (skip gracefully when unset).
 4. **Mirror the removal in the adoption checklist** so the fix is mechanical.
-5. Wire the workflow into `docs/ci-cd.md` and run `actionlint` — every workflow is
+5. Wire the workflow into `docs/stack/ci-cd.md` and run `actionlint` — every workflow is
    actionlint-gated in CI.

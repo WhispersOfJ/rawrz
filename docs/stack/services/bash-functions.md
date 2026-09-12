@@ -66,7 +66,7 @@ bash -n services/bash-functions/functions/*.sh                   # syntax gate
 The bash functions are a **parallel port** of `services/fish-functions/`.
 The fish functions remain the canonical, installed operational surface today;
 the bash port is additive. The planned retirement of the fish functions into a
-`docs/services/FISH.md` retirement record is tracked separately and will land
+`docs/stack/services/FISH.md` retirement record is tracked separately and will land
 in a follow-up PR after this port is validated in daily use.
 
 ## API call timeouts
@@ -207,7 +207,7 @@ Retired-residue audit
 AUDIT FAIL: 2 residue finding(s); see lines above
 ```
 
-The registry mirrors `docs/services/lifecycle.md`: its "Retired services"
+The registry mirrors `docs/stack/services/lifecycle.md`: its "Retired services"
 table is parsed and every recorded service must exist in the checker's
 `RETIRED_SERVICES` (the offline test enforces both directions), so recording
 a retirement without teaching the checker its name fails CI. Deliberate

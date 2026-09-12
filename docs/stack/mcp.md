@@ -121,7 +121,7 @@ Both paths land on the same file; the consent dialog is the safety gate before
 | **GitHub MCP** | ❌ Skip | Covered by the authenticated `gh` CLI (see `~/ECC` policy audit). |
 | **Playwright / chrome-devtools MCP** | ✅ **Added** | Browser automation beyond Freebuff's native preview tools (form filling, network/console inspection, Lighthouse audits). Previously skipped as redundant with the native preview; added 2026-08-29 when full browser control in sessions became desirable. |
 | **Postgres / Supabase MCP** | ❌ Skip | This stack is SQLite-only — nothing to connect to. |
-| **Stackarr** (media-stack control plane + MCP) | ⚠️ Watch | Purpose-built for Radarr/Sonarr/Plex orchestration — typed, approval-gated Docker actions. See [docs/stackarr.md](stackarr.md) for the full evaluation and adoption path. |
+| **Stackarr** (media-stack control plane + MCP) | ⚠️ Watch | Purpose-built for Radarr/Sonarr/Plex orchestration — typed, approval-gated Docker actions. See [docs/stack/stackarr.md](stackarr.md) for the full evaluation and adoption path. |
 
 ---
 

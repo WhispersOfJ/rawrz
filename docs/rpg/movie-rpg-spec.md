@@ -1,7 +1,26 @@
 # Movie / TV RPG — Specification
 
+> **⚠ SUPERSEDED ITEMS — see `rawrz-megastack-spec.md` §19.** The following statements in this
+> spec are reversed by the RAWRZ master spec and must not be treated as current policy:
+>
+> - **§1 / §10.1 / §10.4 — "not a part of the stack / no new container."** Reversed by master
+>   spec D1/D4 (one repo, one release stream) and D34 (everything containerized). The RPG is
+>   now part of RAWRZ and will be a Compose service.
+> - **§11 — reverse proxy + webhooks out of scope.** Reversed by master spec D13 (nginx reverse
+>   proxy tier) and the webhook wiring milestone.
+> - **§7.2 — `~/Cave/backend/` placement.** Reversed by the RAWRZ layout: the RPG crate lives at
+>   `backend/rpg/` in the monorepo.
+> - **§10.3 — `RPG_*` naming.** Reversed by master spec §12.3 rename table; stack keys win on
+>   collision.
+> - **§2.1 — Lantern Academy as settled presentation.** Confirmed by master spec; kept as the
+>   presentation frame.
+>
+> Cross-references: master spec §1.2 (single repo), §4 (D7–D12 Redis), §6 (D13 reverse proxy),
+> §7 (shared Postgres), §9 (Deck integration), §10 (RPG containerization), §12 (env renames).
+
 > **Status:** Draft v1.2 — gathered from user interview; reviewed 2026-09-10. The progression engine is implemented; the original wizard-academy rebrand is now a finalized presentation and rules contract, with the backend-first vertical release defined and implementation intentionally deferred to a later migration/API task. Open questions in §12 are either resolved or explicitly deferred.
 > **Related:** The Bear Cave stack at `~/Cave` (8-service Usenet media stack: Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr). This RPG is *linked with* the stack but *not a part of it*.
+> **⚠ See banner above — the "not a part of" relationship is superseded by RAWRZ.**
 
 ---
 

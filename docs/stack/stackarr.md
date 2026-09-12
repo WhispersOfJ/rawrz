@@ -77,8 +77,8 @@ cadence), adoption is a standard expansion per [HISTORY.md](../HISTORY.md#the-20
 5. **MCP wiring** — generate the client entry
    (`docker exec app /app/bin/stackarr mcp config claude --profile manage`)
    and add the resulting `mcpServers` block to `~/.agents/mcp.json` per
-   `docs/mcp.md`.
-6. **Docs** — `docs/services/stackarr.md` + a row in the README docs index.
+   `docs/stack/mcp.md`.
+6. **Docs** — `docs/stack/services/stackarr.md` + a row in the README docs index.
 7. **Rollback plan** — because it touches the Docker socket, the removal
    checklist must be exhaustive (compose, config, env, registry, traefik
    labels), per AGENTS.md landmine 8.

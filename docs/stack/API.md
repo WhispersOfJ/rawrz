@@ -3,7 +3,7 @@
 Every HTTP/service surface on the stack, with its base URL, authentication, the
 endpoints this repository actually exercises, and the canonical upstream
 documentation for each. Service-specific operational facts (paths, caps, mount
-contracts) live in `docs/services/<service>.md`; this file is the map that ties
+contracts) live in `docs/stack/services/<service>.md`; this file is the map that ties
 those docs to the APIs behind them.
 
 ## Reading the map
@@ -44,7 +44,7 @@ HTTP.
 
 ## Prowlarr — `:9696`
 
-- Image: `ghcr.io/hotio/prowlarr:release-2.5.2.5491` (see `docs/services/prowlarr.md`).
+- Image: `ghcr.io/hotio/prowlarr:release-2.5.2.5491` (see `docs/stack/services/prowlarr.md`).
 - Healthcheck: `GET /ping`.
 - API base `/api/v1`, auth `X-Api-Key`.
 - Used in this repo:
@@ -55,11 +55,10 @@ HTTP.
     indexer source of truth for grabs.
 - Canonical docs: <https://prowlarr.com/docs/api/> · <https://wiki.servarr.com/prowlarr>
 
-## Radarr — `:7878` (`/api/v3`)
-
-- Image: `ghcr.io/hotio/radarr:release-6.3.0.10514` (see `docs/services/radarr.md`).
+## Radarr — `:7878` (`/api/v3`)- Image: `ghcr.io/hotio/radarr:release-6.3.0.10514` (see `docs/stack/services/radarr.md`).
 - Healthcheck: `GET /ping`.
-- Auth: `X-Api-Key` header from `RADARR_API_KEY`; base from `RADARR_URL`
+- Auth: `X-Api-Key` header from `RADARR_API_KEY`; base from
+  `RADARR_URL`
   (default `http://radarr:7878`).
 - Endpoints exercised by this repo:
   - `scripts/drain_sonarr_queue.py --app radarr` (queue drain): `GET /queue`
@@ -82,7 +81,7 @@ HTTP.
 
 ## Sonarr — `:8989` (`/api/v3`)
 
-- Image: `ghcr.io/hotio/sonarr:release-4.0.19.2979` (see `docs/services/sonarr.md`).
+- Image: `ghcr.io/hotio/sonarr:release-4.0.19.2979` (see `docs/stack/services/sonarr.md`).
   The v3 API documentation applies to the v4 application.
 - Healthcheck: `GET /ping`.
 - Auth: `X-Api-Key` header from `SONARR_API_KEY`; base from `SONARR_URL`
@@ -117,7 +116,7 @@ HTTP.
 
 ## InfiniDysk / NzbDAV (nzbdav) — `:3000`
 
-- See `docs/services/nzbdav.md`; upstream: <https://www.infinidysk.com/> and the
+- See `docs/stack/services/nzbdav.md`; upstream: <https://www.infinidysk.com/> and the
   original NzbDAV project (<https://github.com/nzbdav-dev/nzbdav>).
 - Healthcheck: `GET /healthz`.
 - Two surfaces share the port:
@@ -146,7 +145,7 @@ HTTP.
   `/nzbs`, and `/` `.ids` (the content-addressed object store; see below).
 - rclone (remote `nzbdav:`) builds the FUSE mount from the **internal backend**
   WebDAV at `http://nzbdav:8080/` (bearcave-only, not a published port) so streamed
-  bytes bypass the Node frontend proxy; see `docs/services/nzbdav-rclone.md`. The
+  bytes bypass the Node frontend proxy; see `docs/stack/services/nzbdav-rclone.md`. The
   frontend still proxies the same tree on the published `:3000` for host-side probes.
 
 **Storage model (verified 2026-09-03).** InfiniDysk stores every processed file
@@ -169,7 +168,7 @@ library.
 
 ## nzbdav_rclone (FUSE sidecar) — internal `:5572`
 
-- See `docs/services/nzbdav-rclone.md`; image `rclone/rclone:1.75.0`.
+- See `docs/stack/services/nzbdav-rclone.md`; image `rclone/rclone:1.75.0`.
 - No published host port. Runs `rclone rcd` with `--rc-addr=:5572`,
   `--rc-user=rclone`, `--rc-pass=<NZBDAV_RCLONE_RC_PASS>`.
 - Consumed by InfiniDysk (`NZBDAV_CONFIG__RCLONE__HOST: http://nzbdav_rclone:5572`)
@@ -180,7 +179,7 @@ library.
 
 ## Plex — `:32400` (host network)
 
-- See `docs/services/plex.md`; image `plexinc/pms-docker:latest` (mutable tag).
+- See `docs/stack/services/plex.md`; image `plexinc/pms-docker:plexpass` (mutable, update-on-startup image; pulls Plex Pass/beta builds for a claimed Plex Pass server).
 - Auth: `X-Plex-Token` header (or query param) from `PLEX_TOKEN`; base from
   `PLEX_URL` (default `http://localhost:32400`). No API key secret in `.env`
   beyond the token.
@@ -208,7 +207,7 @@ library.
 
 ## Seerr — `:5055` (`/api/v1`)
 
-- See `docs/services/seerr.md`; image `ghcr.io/seerr-team/seerr:v3.4.1`.
+- See `docs/stack/services/seerr.md`; image `ghcr.io/seerr-team/seerr:v3.4.1`.
 - Healthcheck: `GET /api/v1/status` (unauthenticated).
 - Auth for the rest of `/api/v1`: session cookie established through the web
   UI, or an API key (`X-Api-Key`) from Settings → API keys
@@ -227,7 +226,7 @@ library.
 
 ## Unpackerr
 
-- See `docs/services/unpackerr.md`; image `golift/unpackerr:0.15.2`.
+- See `docs/stack/services/unpackerr.md`; image `golift/unpackerr:0.15.2`.
 - **No API surface of its own is used**: no published port, no UI. It is
   configured entirely through environment (`UN_RADARR_0_URL`/`UN_RADARR_0_API_KEY`,
   `UN_SONARR_0_URL`/`UN_SONARR_0_API_KEY`) and *calls out* to Radarr/Sonarr to
@@ -236,7 +235,7 @@ library.
 
 ## Recyclarr (config sync client, manual profile)
 
-- See `docs/services/recyclarr.md`; image `ghcr.io/recyclarr/recyclarr:8`
+- See `docs/stack/services/recyclarr.md`; image `ghcr.io/recyclarr/recyclarr:8`
   (digest-pinned).
 - No published port: an outbound-only client that syncs TRaSH-Guides quality
   profiles, custom formats, and quality definitions into Radarr/Sonarr, driven
@@ -251,7 +250,7 @@ library.
 
 ## ImageMaid (manual maintenance profile)
 
-- See `docs/services/imagemaid.md`; image `kometateam/imagemaid` (digest-pinned).
+- See `docs/stack/services/imagemaid.md`; image `kometateam/imagemaid` (digest-pinned).
 - Not part of the always-on nine-container stack. The configured run has no
   network API connection: it removes Plex `Cache/PhotoTranscoder` files by
   direct file access to `config/plex/Plex Media Server` (mount target `/plex`),
@@ -266,7 +265,7 @@ library.
 | Sonarr SQLite | `config/sonarr/sonarr.db` (+ `logs.db`) | `check_radarr_db_size.py` (shared gate), `prune_sonarr_db.py`, `maintenance_digest.py`, `db_growth_trend.py` |
 | Radarr SQLite | `config/radarr/radarr.db` (+ `logs.db`) | `check_radarr_db_size.py`, `prune_radarr_db.py`, `check_radarr_profiles.py`, `check_sonarr_refs.py`, `db_growth_trend.py` |
 | Prowlarr SQLite | `config/prowlarr/prowlarr.db` | `check_prowlarr_refs.py` |
-| InfiniDysk SQLite | `config/nzbdav/db.sqlite` (`infinidysk-db-v1`) | nzbdav itself; see `docs/services/nzbdav.md` |
+| InfiniDysk SQLite | `config/nzbdav/db.sqlite` (`infinidysk-db-v1`) | nzbdav itself; see `docs/stack/services/nzbdav.md` |
 | FUSE mount | `nzbdav_rclone` at `/mnt/remote/nzbdav` | Radarr/Sonarr/Plex/Unpackerr consumers |
 | Docker | socket/CLI | `check_config_drift.py`, `reclaim_docker_disk.py`, `preflight.sh` |
 | Host scheduling | user systemd units/timers, crontab | `audit_residue.py`, `maintenance_digest.py` |
@@ -274,7 +273,7 @@ library.
 ## Keeping this map honest
 
 - Prefer the canonical upstream links for endpoint semantics; the repo docs
-  (`docs/services/*.md`) pin the image versions and container-side paths.
+  (`docs/stack/services/*.md`) pin the image versions and container-side paths.
 - When adding a script that calls a new endpoint, extend the matching section
   above (endpoint, method, auth, and which script/functions call it) — this map
   is only as accurate as the code that exercises it.

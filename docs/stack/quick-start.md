@@ -108,5 +108,5 @@ If Plex shows red trash cans or missing seasons/files:
 - `nzbdav` queue state is not persistent across container recreation. Do not recreate
   it until the queue is empty, or explicitly use the dangerous `--force` path.
 - `nzbdav_rclone` is the mount owner. Its restart cascades to the four FUSE consumers.
-- See [AGENTS.md](../AGENTS.md), [docs/landmines.md](landmines.md), and the per-service
+- See [AGENTS.md](../AGENTS.md), [docs/stack/landmines.md](landmines.md), and the per-service
   pages for recovery procedures.
