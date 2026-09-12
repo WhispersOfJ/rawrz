@@ -50,7 +50,7 @@ def main() -> int:
             failures += 1
 
     # --- Registry ↔ lifecycle.md sync --------------------------------
-    doc = (ROOT / "docs" / "services" / "lifecycle.md").read_text()
+    doc = (ROOT / "docs" / "stack" / "services" / "lifecycle.md").read_text()
     recorded = mod.lifecycle_names(doc)
     expect("every lifecycle retirement is in RETIRED_SERVICES",
            recorded - set(mod.RETIRED_SERVICES), set())

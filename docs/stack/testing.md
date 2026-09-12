@@ -9,15 +9,43 @@ nzbdav_rclone, Seerr, Plex, and Unpackerr.
 docker compose config --quiet
 bash -n scripts/*.sh tests/*/*.sh
 ./tests/bash/test_bash_functions.sh --offline
-./scripts/preflight.sh
+python3 scripts/test_check_redis.py
+python3 scripts/test_activity_feed.py
+./scripts/preflight.sh    # requires the pinned local actionlint build
 ```
 
 The preflight gate checks compose syntax, mount declarations, mount and
 config drift (running-container images vs compose pins; mount drift vs
 compose definitions), MCP configuration, NzbDAV queue safety, bind-mount
-staleness, Python compilation, Radarr + Sonarr DB size gates (AGENTS.md
-landmine #9 — `MovieFiles` and `EpisodeFiles` MediaInfo bloat), retired
+staleness, Python compilation, Radarr + Sonarr DB size gates, retired
 residue, and available lint tools.
+
+## M1 Redis acceptance
+
+Redis is internal-only and is consumed by the host-run activity feed when
+`REDIS_URL` is set. The cache is namespaced, uses a 60-second history-page TTL,
+and fails open: a Redis outage causes a live API fetch rather than a feed outage.
+
+For a live acceptance run, use a temporary Redis endpoint or the Compose Redis
+service. The script needs only Python's standard library:
+
+```bash
+export REDIS_URL=redis://127.0.0.1:6380/0
+KEY="m1-acceptance-$(date +%s)"
+VALUE="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+python3 scripts/test_redis_runtime.py --phase write --key "$KEY" --value "$VALUE"
+# Restart Redis, wait for its healthcheck, then:
+python3 scripts/test_redis_runtime.py --phase verify --key "$KEY" --value "$VALUE"
+# Stop Redis and verify fail-open behavior:
+python3 scripts/test_redis_runtime.py --phase outage --key "$KEY" --value "$VALUE"
+```
+
+The runtime gate proves `PING`, JSON `SET`/`GET`, TTL, AOF persistence across a
+restart, and an outage recorded as a cache miss/error. The activity-feed
+regression test additionally proves a cached history page avoids the upstream
+HTTP request and that changing the feed cursor changes the cache key, preventing
+stale history from hiding new events. Do not run the outage phase against a
+production endpoint.
 
 ## Health checks
 
@@ -81,8 +109,9 @@ Only empty trash once the expected files and seasons are visible again.
 
 | Moment | Checks |
 |---|---|
-| After compose changes | compose config, bash syntax, health checks |
+| After compose changes | compose config, Redis contract, bash syntax, health checks |
+| After activity-feed or Redis changes | activity-feed regression test and M1 runtime acceptance |
 | After NzbDAV/rclone changes | queue check, mount-drift check, pipeline test |
 | After Plex mount recovery | mount check, Plex identity, rescan verification |
-| Before merging | preflight and offline fish tests |
+| Before merging | preflight and offline smoke tests |
 | After restoring backup | full health and pipeline checks |

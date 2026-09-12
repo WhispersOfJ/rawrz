@@ -123,6 +123,7 @@ required_runtime_directories() {
         "config/nzbdav-rclone" \
         "config/nzbdav-rclone/cache" \
         "config/seerr" \
+        "config/redis" \
         "config/imagemaid" \
         "config/plex" \
         "config/plex/Plex Media Server" \

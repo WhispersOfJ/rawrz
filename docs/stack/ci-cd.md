@@ -26,6 +26,7 @@ the services they supported. Historical release notes may still mention them.
 Every active Compose variable must have a name in `.env.template`. CI also runs:
 
 - `docker compose config --quiet`
+- M1 Redis contract, activity-feed cache, and runtime acceptance tests (`scripts/check_redis.py`, `scripts/test_activity_feed.py`, and `scripts/test_redis_runtime.py`)
 - merged-mount regression tests
 - NzbDAV queue and bind-mount guard tests
 - Bash syntax checks and ShellCheck
@@ -41,6 +42,8 @@ docker compose config --quiet
 python3 scripts/test_check_compose_mounts.py
 bash -n scripts/*.sh tests/*/*.sh
 ./tests/bash/test_bash_functions.sh --offline
+python3 scripts/test_check_redis.py
+python3 scripts/test_activity_feed.py
 ./scripts/preflight.sh    # fails if the local actionlint is not exactly v1.7.12
 ```
 

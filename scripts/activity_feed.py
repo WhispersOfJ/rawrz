@@ -69,6 +69,11 @@ from email.utils import format_datetime
 from html import escape
 from pathlib import Path
 
+try:
+    from redis_cache import cache_from_env, cache_key
+except ImportError:  # direct import for the standalone regression test
+    from scripts.redis_cache import cache_from_env, cache_key
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATE = ROOT / ".cache" / "activity" / "state.json"
 DEFAULT_FEED = ROOT / ".cache" / "activity" / "feed.jsonl"
@@ -317,7 +322,7 @@ def fetch_json(base, path, headers, timeout=API_TIMEOUT):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def history_pages(base, key, app):
+def history_pages(base, key, app, cache=None, cursor=None):
     """Yield normalized history records, newest first, up to MAX_PAGES."""
     extra = ""
     if app == "radarr":
@@ -325,12 +330,13 @@ def history_pages(base, key, app):
     else:
         extra = "&includeSeries=true&includeEpisode=true"
     for page in range(1, MAX_PAGES + 1):
-        data = fetch_json(
-            base,
-            "api/v3/history?page=%d&pageSize=100&sortKey=date&sortDirection=desc%s"
-            % (page, extra),
-            {"X-Api-Key": key},
-        )
+        path = "api/v3/history?page=%d&pageSize=100&sortKey=date&sortDirection=desc%s" % (page, extra)
+        page_key = cache_key(app, page, cursor)
+        data = cache.get_json(page_key) if cache else None
+        if data is None:
+            data = fetch_json(base, path, {"X-Api-Key": key})
+            if cache:
+                cache.set_json(page_key, data, 60)
         records = (data or {}).get("records") or []
         for rec in records:
             norm = normalize_record(app, rec)
@@ -351,6 +357,7 @@ def run(args):
     entries = []
     reachable = 0
     write_error = None
+    cache = cache_from_env()
 
     for app in APPS:
         key_var = "%s_API_KEY" % app.upper()
@@ -361,7 +368,7 @@ def run(args):
             print("Skipping %s: %s not set" % (app, key_var), file=sys.stderr)
             continue
         try:
-            records = list(history_pages(base, key, app))
+            records = list(history_pages(base, key, app, cache, (state.get(app) or {}).get("last_id")))
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             print("Cannot reach %s (%s) — next run catches up" % (app, exc), file=sys.stderr)
             continue
@@ -419,9 +426,17 @@ def run(args):
         print(render_json(entries, RENDER_LIMIT))
     else:
         apps_seen = sorted({e["app"] for e in entries})
+        cache_info = cache.info()
         print(
-            "%d new event(s) recorded (%s); feed: %s"
-            % (len(entries), "+".join(apps_seen) if apps_seen else "none", feed_path)
+            "%d new event(s) recorded (%s); cache hits=%d misses=%d errors=%d; feed: %s"
+            % (
+                len(entries),
+                "+".join(apps_seen) if apps_seen else "none",
+                cache_info["hits"],
+                cache_info["misses"],
+                cache_info["errors"],
+                feed_path,
+            )
         )
 
     if write_error:

@@ -43,6 +43,39 @@ networks:
 
 services:
   # ==========================================================================
+  # Shared cache — Redis (M1)
+  # ==========================================================================
+  # Redis is internal-only: no host port is published. Cache namespaces are
+  # ephemeral, while queue/lock users intentionally keep non-TTL keys so the
+  # volatile eviction policy cannot evict durable work.
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    container_name: rawrz-redis
+    mem_limit: 512m
+    networks: [bearcave]
+    volumes:
+      - ./config/redis:/data
+    environment:
+      TZ: ${TZ}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - volatile-lru
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ==========================================================================
   # Indexing — Prowlarr
   # ==========================================================================
   prowlarr:

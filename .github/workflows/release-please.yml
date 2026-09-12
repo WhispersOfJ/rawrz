@@ -17,6 +17,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: read
 
 jobs:
   release-please:
@@ -28,6 +29,6 @@ jobs:
           # not fire pull_request workflows for a PR opened with GITHUB_TOKEN
           # (recursion guard). A PAT-opened PR triggers validate.yml normally.
           # Falls back to GITHUB_TOKEN when the PAT secret isn't configured.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
