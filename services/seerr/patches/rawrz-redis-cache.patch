@@ -1,0 +1,514 @@
+diff --git a/server/api/externalapi.ts b/server/api/externalapi.ts
+index 9b71b7a..a9c8610 100644
+--- a/server/api/externalapi.ts
++++ b/server/api/externalapi.ts
+@@ -2,7 +2,7 @@ import { proxyRequestInterceptor } from '@server/utils/customProxyAgent';
+ import type { AxiosInstance, AxiosRequestConfig } from 'axios';
+ import axios from 'axios';
+ import rateLimit from 'axios-rate-limit';
+-import type NodeCache from 'node-cache';
++import type { CacheBackend } from '@server/lib/cache/backend';
+
+ // 5 minute default TTL (in seconds)
+ const DEFAULT_TTL = 300;
+@@ -11,7 +11,7 @@ const DEFAULT_TTL = 300;
+ const DEFAULT_ROLLING_BUFFER = 10000;
+
+ export interface ExternalAPIOptions {
+-  nodeCache?: NodeCache;
++  cache?: CacheBackend;
+   headers?: Record<string, unknown>;
+   timeout?: number;
+   rateLimit?: {
+@@ -23,7 +23,7 @@ export interface ExternalAPIOptions {
+ class ExternalAPI {
+   protected axios: AxiosInstance;
+   private baseUrl: string;
+-  private cache?: NodeCache;
++  private cache?: CacheBackend;
+
+   constructor(
+     baseUrl: string,
+@@ -50,7 +50,7 @@ class ExternalAPI {
+     }
+
+     this.baseUrl = baseUrl;
+-    this.cache = options.nodeCache;
++    this.cache = options.cache;
+   }
+
+   protected async get<T>(
+@@ -62,7 +62,7 @@ class ExternalAPI {
+       ...config?.params,
+       headers: config?.headers,
+     });
+-    const cachedItem = this.cache?.get<T>(cacheKey);
++    const cachedItem = await this.cache?.get<T>(cacheKey);
+     if (cachedItem) {
+       return cachedItem;
+     }
+@@ -70,7 +70,7 @@ class ExternalAPI {
+     const response = await this.axios.get<T>(endpoint, config);
+
+     if (this.cache && ttl !== 0) {
+-      this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
++      await this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
+     }
+
+     return response.data;
+@@ -87,7 +87,7 @@ class ExternalAPI {
+       ...(data ? { data } : {}),
+     });
+
+-    const cachedItem = this.cache?.get<T>(cacheKey);
++    const cachedItem = await this.cache?.get<T>(cacheKey);
+     if (cachedItem) {
+       return cachedItem;
+     }
+@@ -95,7 +95,7 @@ class ExternalAPI {
+     const response = await this.axios.post<T>(endpoint, data, config);
+
+     if (this.cache && ttl !== 0) {
+-      this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
++      await this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
+     }
+
+     return response.data;
+@@ -110,19 +110,17 @@ class ExternalAPI {
+       ...config?.params,
+       headers: config?.headers,
+     });
+-    const cachedItem = this.cache?.get<T>(cacheKey);
++    const cachedItem = await this.cache?.get<T>(cacheKey);
+
+     if (cachedItem) {
+-      const keyTtl = this.cache?.getTtl(cacheKey) ?? 0;
++      const keyTtl = (await this.cache?.getTtlMs(cacheKey)) ?? 0;
+
+       // If the item has passed our rolling check, fetch again in background
+       if (
+         keyTtl - (ttl ?? DEFAULT_TTL) * 1000 <
+         Date.now() - DEFAULT_ROLLING_BUFFER
+       ) {
+-        this.axios.get<T>(endpoint, config).then((response) => {
+-          this.cache?.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
+-        });
++        void this.axios.get<T>(endpoint, config).then((response) => this.cache?.set(cacheKey, response.data, ttl ?? DEFAULT_TTL)).catch(() => undefined);
+       }
+       return cachedItem;
+     }
+@@ -130,17 +128,17 @@ class ExternalAPI {
+     const response = await this.axios.get<T>(endpoint, config);
+
+     if (this.cache && ttl !== 0) {
+-      this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
++      await this.cache.set(cacheKey, response.data, ttl ?? DEFAULT_TTL);
+     }
+
+     return response.data;
+   }
+
+-  protected removeCache(endpoint: string, options?: Record<string, unknown>) {
++  protected async removeCache(endpoint: string, options?: Record<string, unknown>) {
+     const cacheKey = this.serializeCacheKey(endpoint, {
+       ...options,
+     });
+-    this.cache?.del(cacheKey);
++    await this.cache?.del(cacheKey);
+   }
+
+   private serializeCacheKey(
+diff --git a/server/api/github.ts b/server/api/github.ts
+index 5053fd8..f836f35 100644
+--- a/server/api/github.ts
++++ b/server/api/github.ts
+@@ -71,7 +71,7 @@ class GithubAPI extends ExternalAPI {
+           'Content-Type': 'application/json',
+           Accept: 'application/json',
+         },
+-        nodeCache: cacheManager.getCache('github').data,
++        cache: cacheManager.getCache('github').backend,
+       }
+     );
+   }
+diff --git a/server/api/plextv.ts b/server/api/plextv.ts
+index b8f3c9a..2fa23cd 100644
+--- a/server/api/plextv.ts
++++ b/server/api/plextv.ts
+@@ -148,7 +148,7 @@ class PlexTvAPI extends ExternalAPI {
+           'Content-Type': 'application/json',
+           Accept: 'application/json',
+         },
+-        nodeCache: cacheManager.getCache('plextv').data,
++        cache: cacheManager.getCache('plextv').backend,
+       }
+     );
+
+@@ -279,7 +279,7 @@ class PlexTvAPI extends ExternalAPI {
+   }> {
+     try {
+       const watchlistCache = cacheManager.getCache('plexwatchlist');
+-      let cachedWatchlist = watchlistCache.data.get<PlexWatchlistCache>(
++      let cachedWatchlist = await watchlistCache.backend.get<PlexWatchlistCache>(
+         this.authToken
+       );
+
+@@ -305,10 +305,7 @@ class PlexTvAPI extends ExternalAPI {
+           response: response.data,
+         };
+
+-        watchlistCache.data.set<PlexWatchlistCache>(
+-          this.authToken,
+-          cachedWatchlist
+-        );
++        await watchlistCache.backend.set<PlexWatchlistCache>(this.authToken, cachedWatchlist, 300);
+       }
+
+       const watchlistDetails = await Promise.all(
+diff --git a/server/api/rating/imdbRadarrProxy.ts b/server/api/rating/imdbRadarrProxy.ts
+index beafeac..dfefc0d 100644
+--- a/server/api/rating/imdbRadarrProxy.ts
++++ b/server/api/rating/imdbRadarrProxy.ts
+@@ -164,7 +164,7 @@ class IMDBRadarrProxy extends ExternalAPI {
+           'Content-Type': 'application/json',
+           Accept: 'application/json',
+         },
+-        nodeCache: cacheManager.getCache('imdb').data,
++        cache: cacheManager.getCache('imdb').backend,
+       }
+     );
+   }
+diff --git a/server/api/rating/rottentomatoes.ts b/server/api/rating/rottentomatoes.ts
+index c21739d..032ba2e 100644
+--- a/server/api/rating/rottentomatoes.ts
++++ b/server/api/rating/rottentomatoes.ts
+@@ -116,7 +116,7 @@ class RottenTomatoes extends ExternalAPI {
+           Accept: 'application/json',
+           'x-algolia-usertoken': settings.clientId,
+         },
+-        nodeCache: cacheManager.getCache('rt').data,
++        cache: cacheManager.getCache('rt').backend,
+       }
+     );
+   }
+diff --git a/server/api/servarr/base.ts b/server/api/servarr/base.ts
+index 70b1e8c..b97e0ba 100644
+--- a/server/api/servarr/base.ts
++++ b/server/api/servarr/base.ts
+@@ -106,7 +106,7 @@ class ServarrBase<QueueItemAppendT> extends ExternalAPI {
+         apikey: apiKey,
+       },
+       {
+-        nodeCache: cacheManager.getCache(cacheName).data,
++        cache: cacheManager.getCache(cacheName).backend,
+         timeout,
+       }
+     );
+diff --git a/server/api/themoviedb/index.ts b/server/api/themoviedb/index.ts
+index 305d604..f454bc4 100644
+--- a/server/api/themoviedb/index.ts
++++ b/server/api/themoviedb/index.ts
+@@ -138,7 +138,7 @@ class TheMovieDb extends ExternalAPI implements TvShowProvider {
+         api_key: '431a8708161bcd1f1fbe7536137e61ed',
+       },
+       {
+-        nodeCache: cacheManager.getCache('tmdb').data,
++        cache: cacheManager.getCache('tmdb').backend,
+         rateLimit: {
+           maxRequests: 20,
+           maxRPS: 50,
+diff --git a/server/api/tvdb/index.ts b/server/api/tvdb/index.ts
+index 62d7a4d..05cd952 100644
+--- a/server/api/tvdb/index.ts
++++ b/server/api/tvdb/index.ts
+@@ -53,7 +53,7 @@ class Tvdb extends ExternalAPI implements TvShowProvider {
+       finalConfig.baseUrl,
+       {},
+       {
+-        nodeCache: cacheManager.getCache(finalConfig.cachePrefix).data,
++        cache: cacheManager.getCache(finalConfig.cachePrefix).backend,
+         rateLimit: {
+           maxRequests: finalConfig.maxRequests,
+           maxRPS: finalConfig.maxRequestsPerSecond,
+diff --git a/server/lib/cache.ts b/server/lib/cache.ts
+index 64b5c79..8f25a35 100644
+--- a/server/lib/cache.ts
++++ b/server/lib/cache.ts
+@@ -1,4 +1,5 @@
+-import NodeCache from 'node-cache';
++import type { CacheBackend, CacheStats } from '@server/lib/cache/backend';
++import { createCacheBackend } from '@server/lib/cache/backend';
+
+ export type AvailableCacheIds =
+   | 'tmdb'
+@@ -17,7 +18,7 @@ const DEFAULT_CHECK_PERIOD = 120;
+
+ class Cache {
+   public id: AvailableCacheIds;
+-  public data: NodeCache;
++  public readonly backend: CacheBackend;
+   public name: string;
+
+   constructor(
+@@ -27,18 +28,15 @@ class Cache {
+   ) {
+     this.id = id;
+     this.name = name;
+-    this.data = new NodeCache({
+-      stdTTL: options.stdTtl ?? DEFAULT_TTL,
+-      checkperiod: options.checkPeriod ?? DEFAULT_CHECK_PERIOD,
+-    });
++    this.backend = createCacheBackend(id, options.stdTtl ?? DEFAULT_TTL);
+   }
+
+-  public getStats() {
+-    return this.data.getStats();
++  public getStats(): CacheStats {
++    return this.backend.stats();
+   }
+
+-  public flush(): void {
+-    this.data.flushAll();
++  public async flush(): Promise<void> {
++    await this.backend.flush();
+   }
+ }
+
+diff --git a/server/lib/cache/backend.ts b/server/lib/cache/backend.ts
+new file mode 100644
+index 0000000..103fb33
+--- /dev/null
++++ b/server/lib/cache/backend.ts
+@@ -0,0 +1,193 @@
++import crypto from 'crypto';
++import net from 'net';
++
++export type CacheKind = 'memory' | 'redis';
++
++export interface CacheStats {
++  hits: number;
++  misses: number;
++  keys: number;
++  ksize: number;
++  vsize: number;
++  errors: number;
++  backend: CacheKind;
++  degraded: boolean;
++}
++
++export interface CacheBackend {
++  readonly kind: CacheKind;
++  get<T>(key: string): Promise<T | undefined>;
++  set<T>(key: string, value: T, ttlSeconds: number): Promise<void>;
++  del(key: string): Promise<void>;
++  getTtlMs(key: string): Promise<number | undefined>;
++  flush(): Promise<void>;
++  stats(): CacheStats;
++}
++
++const DEFAULT_TTL = 300;
++const PREFIX = process.env.SEERR_CACHE_REDIS_PREFIX || 'rawrz:seerr:cache';
++const REDIS_URL = process.env.REDIS_URL;
++
++function now(): number { return Date.now(); }
++
++class MemoryCacheBackend implements CacheBackend {
++  public readonly kind = 'memory' as const;
++  private values = new Map<string, { value: unknown; expires: number }>();
++  private hits = 0;
++  private misses = 0;
++
++  public async get<T>(key: string): Promise<T | undefined> {
++    const entry = this.values.get(key);
++    if (!entry || (entry.expires > 0 && entry.expires <= now())) {
++      if (entry) this.values.delete(key);
++      this.misses++;
++      return undefined;
++    }
++    this.hits++;
++    return structuredClone(entry.value) as T;
++  }
++
++  public async set<T>(key: string, value: T, ttlSeconds = DEFAULT_TTL): Promise<void> {
++    this.values.set(key, {
++      value: structuredClone(value),
++      expires: ttlSeconds > 0 ? now() + ttlSeconds * 1000 : 0,
++    });
++  }
++
++  public async del(key: string): Promise<void> { this.values.delete(key); }
++  public async getTtlMs(key: string): Promise<number | undefined> {
++    const entry = this.values.get(key);
++    if (!entry || (entry.expires > 0 && entry.expires <= now())) return undefined;
++    return entry.expires === 0 ? 0 : entry.expires;
++  }
++  public async flush(): Promise<void> { this.values.clear(); this.hits = 0; this.misses = 0; }
++  public stats(): CacheStats {
++    return { hits: this.hits, misses: this.misses, keys: this.values.size, ksize: 0, vsize: 0, errors: 0, backend: 'memory', degraded: false };
++  }
++}
++
++function encode(command: string, args: string[]): Buffer {
++  const parts = [command, ...args];
++  return Buffer.from(`*${parts.length}\r\n${parts.map((part) => `$${Buffer.byteLength(part)}\r\n${part}\r\n`).join('')}`);
++}
++
++function parseResp(buffer: Buffer): unknown {
++  const text = buffer.toString();
++  if (text.startsWith('+')) return text.slice(1).split('\r\n', 1)[0];
++  if (text.startsWith('-')) throw new Error(text.slice(1).split('\r\n', 1)[0]);
++  if (text.startsWith(':')) return Number(text.slice(1).split('\r\n', 1)[0]);
++  if (text.startsWith('$')) {
++    const end = text.indexOf('\r\n');
++    const length = Number(text.slice(1, end));
++    if (length < 0) return undefined;
++    return text.slice(end + 2, end + 2 + length);
++  }
++  throw new Error('Unexpected Redis response');
++}
++
++async function redisCommand(url: URL, command: string, args: string[]): Promise<unknown> {
++  return new Promise((resolve, reject) => {
++    const socket = net.createConnection({ host: url.hostname, port: Number(url.port || 6379) });
++    const chunks: Buffer[] = [];
++    const timeout = setTimeout(() => { socket.destroy(); reject(new Error('Redis command timeout')); }, Number(process.env.SEERR_CACHE_REDIS_TIMEOUT_MS || 2000));
++    socket.on('connect', () => socket.write(encode(command, args)));
++    socket.on('data', (chunk: Buffer) => {
++      chunks.push(chunk);
++      const data = Buffer.concat(chunks);
++      if (data.includes(Buffer.from('\r\n'))) {
++        clearTimeout(timeout); socket.end();
++        try { resolve(parseResp(data)); } catch (error) { reject(error); }
++      }
++    });
++    socket.on('error', (error) => { clearTimeout(timeout); reject(error); });
++  });
++}
++
++function safeKey(cacheId: string, key: string): string {
++  const hash = crypto.createHash('sha256').update(key).digest('hex');
++  return `${PREFIX}:${cacheId}:${hash}`;
++}
++
++class RedisCacheBackend implements CacheBackend {
++  public readonly kind = 'redis' as const;
++  private readonly fallback = new MemoryCacheBackend();
++  private hits = 0;
++  private misses = 0;
++  private errors = 0;
++  private degraded = false;
++  private readonly url: URL;
++
++  constructor(private readonly cacheId: string) {
++    this.url = new URL(REDIS_URL || 'redis://127.0.0.1:6379/0');
++  }
++
++  private async command(command: string, args: string[]): Promise<unknown> {
++    try {
++      const result = await redisCommand(this.url, command, args);
++      this.degraded = false;
++      return result;
++    } catch {
++      this.errors++;
++      this.degraded = true;
++      return undefined;
++    }
++  }
++
++  public async get<T>(key: string): Promise<T | undefined> {
++    const remote = await this.command('GET', [safeKey(this.cacheId, key)]);
++    if (remote === undefined && this.degraded) return this.fallback.get<T>(key);
++    if (typeof remote !== 'string') { this.misses++; return undefined; }
++    try {
++      const envelope = JSON.parse(remote) as { v: number; c: string; d: T };
++      if (envelope.v !== 1 || envelope.c !== this.cacheId || !envelope.d) { this.misses++; return undefined; }
++      this.hits++;
++      return structuredClone(envelope.d);
++    } catch { this.misses++; return undefined; }
++  }
++
++  public async set<T>(key: string, value: T, ttlSeconds = DEFAULT_TTL): Promise<void> {
++    if (ttlSeconds === 0) return;
++    const envelope = JSON.stringify({ v: 1, c: this.cacheId, d: value });
++    const args = [safeKey(this.cacheId, key), envelope];
++    if (ttlSeconds > 0) args.push('EX', String(ttlSeconds));
++    const result = await this.command('SET', args);
++    if (result === undefined && this.degraded) await this.fallback.set(key, value, ttlSeconds);
++  }
++
++  public async del(key: string): Promise<void> {
++    const result = await this.command('DEL', [safeKey(this.cacheId, key)]);
++    if (result === undefined && this.degraded) await this.fallback.del(key);
++  }
++
++  public async getTtlMs(key: string): Promise<number | undefined> {
++    const result = await this.command('PTTL', [safeKey(this.cacheId, key)]);
++    if (result === undefined && this.degraded) return this.fallback.getTtlMs(key);
++    if (typeof result !== 'number' || result < 0) return undefined;
++    return now() + result;
++  }
++
++  public async flush(): Promise<void> {
++    let cursor = '0';
++    do {
++      const result = await this.command('SCAN', [cursor, 'MATCH', `${PREFIX}:${this.cacheId}:*`, 'COUNT', '500']);
++      if (!Array.isArray(result) || result.length !== 2) {
++        if (this.degraded) await this.fallback.flush();
++        return;
++      }
++      cursor = String(result[0]);
++      const keys = result[1] as string[];
++      if (keys.length) await this.command('UNLINK', keys);
++    } while (cursor !== '0');
++  }
++
++  public stats(): CacheStats {
++    const fallback = this.fallback.stats();
++    return { hits: this.hits + fallback.hits, misses: this.misses + fallback.misses, keys: fallback.keys, ksize: 0, vsize: 0, errors: this.errors, backend: this.degraded ? 'memory' : 'redis', degraded: this.degraded };
++  }
++}
++
++export function createCacheBackend(cacheId: string, _ttlSeconds: number): CacheBackend {
++  return process.env.SEERR_CACHE_BACKEND === 'redis' && REDIS_URL
++    ? new RedisCacheBackend(cacheId)
++    : new MemoryCacheBackend();
++}
+diff --git a/server/lib/scanners/plex/index.ts b/server/lib/scanners/plex/index.ts
+index ce746e7..85e2a25 100644
+--- a/server/lib/scanners/plex/index.ts
++++ b/server/lib/scanners/plex/index.ts
+@@ -385,7 +385,7 @@ class PlexScanner
+     if (plexitem.guid.match(plexRegex)) {
+       const guidCache = cacheManager.getCache('plexguid');
+
+-      const cachedGuids = guidCache.data.get<MediaIds>(plexitem.ratingKey);
++      const cachedGuids = await guidCache.backend.get<MediaIds>(plexitem.ratingKey);
+
+       if (cachedGuids) {
+         this.log('GUIDs are cached. Skipping metadata request.', 'debug', {
+@@ -436,7 +436,7 @@ class PlexScanner
+       }
+
+       // Cache GUIDs
+-      guidCache.data.set(plexitem.ratingKey, mediaIds);
++      await guidCache.backend.set(plexitem.ratingKey, mediaIds, 604800);
+
+       // Check if the agent is IMDb
+     } else if (plexitem.guid.match(imdbRegex)) {
+diff --git a/server/routes/settings/index.ts b/server/routes/settings/index.ts
+index 12b5746..5c70250 100644
+--- a/server/routes/settings/index.ts
++++ b/server/routes/settings/index.ts
+@@ -780,11 +780,11 @@ settingsRoutes.get('/cache', async (_req, res) => {
+
+ settingsRoutes.post<{ cacheId: AvailableCacheIds }>(
+   '/cache/:cacheId/flush',
+-  (req, res, next) => {
++  async (req, res, next) => {
+     const cache = cacheManager.getCache(req.params.cacheId);
+
+     if (cache) {
+-      cache.flush();
++      await cache.flush();
+       return res.status(204).send();
+     }

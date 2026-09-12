@@ -71,6 +71,8 @@ jobs:
           python3 scripts/test_arrival_notifier.py
           python3 scripts/test_activity_feed.py
           python3 scripts/test_redis_runtime.py --phase outage --key ci-m1 --value ci-m1
+          python3 scripts/test_seerr_m2_patch.py
+          python3 scripts/check_seerr_m2_compose.py
           python3 scripts/test_backup_dropbox.py
           bash scripts/test_setup.sh
           python3 scripts/test_check_compose_commands.py
