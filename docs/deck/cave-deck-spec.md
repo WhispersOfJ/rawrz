@@ -397,7 +397,7 @@ A fragment (generated or shipped) is valid only if it:
 2. includes `<<: *common` as its first key;
 3. sets `container_name: <id>`, `mem_limit`, `networks: [bearcave]` (unless `host_network: true`, then `network_mode: host` and **no** `ports:`);
 4. declares no `depends_on` on services outside the stack + catalog `dependencies`;
-5. binds no host port already published in `thebearcave`'s compose (renderer checks live + file); 
+5. binds no host port already published in `thebearcave`'s compose (renderer checks live + file);
 6. mounts nothing outside `./config/<id>`, `./media/*`, and declared `volumes`.
 
 ## A.6 CI pipeline (catalog)

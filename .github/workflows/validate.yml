@@ -70,9 +70,15 @@ jobs:
           python3 scripts/test_search_missing_scoped.py
           python3 scripts/test_arrival_notifier.py
           python3 scripts/test_activity_feed.py
+          python3 scripts/test_redis_runtime.py --phase outage --key ci-m1 --value ci-m1
           python3 scripts/test_backup_dropbox.py
           bash scripts/test_setup.sh
           python3 scripts/test_check_compose_commands.py
+
+      - name: Check Redis M1 contract
+        run: |
+          python3 scripts/check_redis.py
+          python3 scripts/test_check_redis.py
 
       - name: Check Compose environment coverage
         run: |

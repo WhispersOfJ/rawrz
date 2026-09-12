@@ -22,11 +22,17 @@ import http.server
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+try:
+    from redis_cache import RedisCache, MemoryCache, cache_key
+except ImportError:
+    from scripts.redis_cache import RedisCache, MemoryCache, cache_key
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = ROOT / "scripts" / "activity_feed.py"
@@ -51,6 +57,16 @@ def iso_now_ago(seconds):
 def main() -> int:
     failures = 0
     now = int(time.time())
+
+    # --- Redis cache contract -------------------------------------------------
+    memory = MemoryCache()
+    failures += not expect("memory cache miss", memory.get_json("x"), None)
+    failures += not expect("memory cache write", memory.set_json("x", {"v": 1}, 60), True)
+    failures += not expect("memory cache hit", memory.get_json("x"), {"v": 1})
+    failures += not expect("memory cache counters", memory.info(), {"hits": 1, "misses": 1, "errors": 0})
+    outage = RedisCache("redis://127.0.0.1:1/0", timeout=0.1)
+    failures += not expect("Redis outage fails open", outage.get_json("missing"), None)
+    failures += not expect("Redis outage is observable", outage.info(), {"hits": 0, "misses": 1, "errors": 1})
 
     # --- normalize_record -----------------------------------------------------
     radarr_rec = {
@@ -328,6 +344,31 @@ def main() -> int:
             failures += not expect("second run only new", len(last_kinds), 6)
             failures += not expect("second run processes imports chronologically",
                                    last_kinds[-3:], ["import", "delete", "upgrade"])
+
+            # A cached history page must avoid the upstream request entirely.
+            redis_port = 6381
+            container = "rawrz-m1-activity-cache"
+            subprocess.run(["docker", "rm", "-f", container], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            result = subprocess.run(
+                ["docker", "run", "-d", "--name", container,
+                 "-p", "127.0.0.1:%d:6379" % redis_port, "redis:7-alpine"],
+                capture_output=True, text=True)
+            if result.returncode == 0:
+                try:
+                    time.sleep(1)
+                    redis_url = "redis://127.0.0.1:%d/0" % redis_port
+                    cache = RedisCache(redis_url, namespace="rawrz:activity:cache")
+                    cache.set_json(cache_key("radarr", 1, None), {"records": Handler.records}, 60)
+                    Handler.calls = 0
+                    cached_records = list(mod.history_pages(
+                        "http://127.0.0.1:%d" % port, "kr", "radarr", cache
+                    ))
+                    failures += not expect("Redis cache returns history", len(cached_records), 8)
+                    failures += not expect("Redis cache hit avoids HTTP", Handler.calls, 0)
+                finally:
+                    subprocess.run(["docker", "rm", "-f", container], check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     finally:
         server.shutdown()
 

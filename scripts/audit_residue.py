@@ -55,7 +55,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIFECYCLE_DOC = ROOT / "docs" / "services" / "lifecycle.md"
+LIFECYCLE_DOC = ROOT / "docs" / "stack" / "services" / "lifecycle.md"
 COMPOSE = ROOT / "docker-compose.yml"
 ENV_TEMPLATE = ROOT / ".env.template"
 WORKFLOWS = ROOT / ".github" / "workflows"

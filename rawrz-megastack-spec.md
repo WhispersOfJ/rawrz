@@ -1082,6 +1082,21 @@ break the running stack; the live media pipeline stays up until M7.
 | **M8** | Ownership + events + cross-app | Connect/Seerr/Plex webhooks live; streams + realtime; cross-app features; observability tier complete; compose-is-truth for everything | medium |
 | **M9** | Cut-over + archival | RAWRZ runs the host; direct published ports retired; three source repos archived with redirect READMEs; rollback drill rehearsed and documented | medium |
 
+### 15.1 M1 delivery contract
+
+M1 adds Redis without changing any existing media-service dependency graph. The
+service runs on `bearcave` with no published host port, persists its AOF under
+`./config/redis`, uses `volatile-lru`, and is capped at 512 MiB. The host-run
+activity feed is the first non-Seerr consumer: it caches each Radarr/Sonarr
+history page for 60 seconds under its own namespace, reports hit/miss/error
+counters, and falls back to the live API when Redis is unavailable. The
+committed contract is checked offline by `scripts/check_redis.py`, while
+`scripts/test_activity_feed.py` and `scripts/test_redis_runtime.py` exercise
+cache hits, TTL, AOF restart persistence, and fail-open outage behavior. Rollback
+is removing the activity-feed cache seam and Redis service; the media pipeline
+has no Redis dependency.
+
+
 Batching rule: M7 (the \*arr DB migration) requires **Postgres hardening and a rehearsed
 restore in place first** (§8.5). The R-1 resolution dropped the media-availability rule,
 so Postgres reliability is now what protects the pipeline — not architectural separation.
