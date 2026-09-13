@@ -1,0 +1,22 @@
+# Deterministic upstream fixture for the M3 acceptance job. It is not part of
+# production Compose and only supplies the service names nginx resolves.
+services:
+  fixture:
+    image: nginx:1.27-alpine
+    restart: "no"
+    networks:
+      bearcave:
+        aliases:
+          - seerr
+          - radarr
+          - sonarr
+          - prowlarr
+          - nzbdav
+          - plex
+    volumes:
+      - ./services/nginx/fixture.conf:/etc/nginx/nginx.conf:ro
+
+networks:
+  bearcave:
+    name: bearcave
+    external: true
