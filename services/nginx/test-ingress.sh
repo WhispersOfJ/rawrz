@@ -32,7 +32,7 @@ expect() {
 
 ./services/nginx/generate-cert.sh >/dev/null
 if [ "${M3_UPSTREAM:-}" = fixture ]; then
-    "${FIXTURE_COMPOSE[@]}" up -d fixture >/dev/null
+    "${FIXTURE_COMPOSE[@]}" up -d fixture plex-fixture >/dev/null
 fi
 "${COMPOSE[@]}" up -d --no-deps "$NGINX_SERVICE" >/dev/null
 "${COMPOSE[@]}" exec -T "$NGINX_SERVICE" nginx -t >/dev/null
