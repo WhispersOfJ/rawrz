@@ -1,0 +1,107 @@
+name: Seerr M2 candidate
+
+on:
+  pull_request:
+    paths:
+      - "services/seerr/**"
+      - "scripts/test_seerr_m2_patch.py"
+      - "scripts/check_seerr_m2_compose.py"
+      - "docker-compose.m2.yml"
+      - ".github/workflows/seerr-m2.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/seerr/**"
+      - "scripts/test_seerr_m2_patch.py"
+      - "scripts/check_seerr_m2_compose.py"
+      - "docker-compose.m2.yml"
+      - ".github/workflows/seerr-m2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_IMAGE: ghcr.io/whispersofj/rawrz-seerr
+      SOURCE_TAG: v3.4.1
+      SOURCE_COMMIT: 69f73a6f1486fdb51b8ddae9a94a8dfb629f461c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg jq
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Fetch pinned Seerr source
+        run: |
+          git clone --branch "$SOURCE_TAG" --depth 1 https://github.com/seerr-team/seerr.git .cache/seerr-upstream
+          test "$(git -C .cache/seerr-upstream rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: Validate patch and Compose contracts
+        run: |
+          python3 scripts/test_seerr_m2_patch.py
+          python3 scripts/check_seerr_m2_compose.py
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.m2.yml config --quiet
+          bash -n services/seerr/build-prototype.sh services/seerr/test-prototype.sh
+          python3 -m py_compile services/seerr/generate-patch.py scripts/test_seerr_m2_patch.py scripts/check_seerr_m2_compose.py
+          git diff --check
+
+      - name: Build candidate image
+        env:
+          SEERR_SOURCE_DIR: ${{ github.workspace }}/.cache/seerr-upstream
+          SEERR_IMAGE: rawrz-seerr:m2
+        run: ./services/seerr/build-prototype.sh
+
+      - name: Scan candidate image against Seerr baseline
+        run: |
+          set -euo pipefail
+          result=$(trivy image --ignore-unfixed --scanners vuln --format json --severity CRITICAL rawrz-seerr:m2)
+          critical=$(jq -r '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' <<<"$result")
+          baseline=$(jq -r '.images["ghcr.io/seerr-team/seerr:v3.4.1"] // 0' .github/trivy-baseline.json)
+          echo "rawrz-seerr:m2: CRITICAL=$critical baseline=$baseline"
+          test "$critical" -le "$baseline"
+
+      - name: Run candidate acceptance
+        run: ./services/seerr/test-prototype.sh
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$CR_PAT" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Publish immutable candidate tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          TAG: m2-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker tag rawrz-seerr:m2 "$REGISTRY_IMAGE:$TAG"
+          docker push "$REGISTRY_IMAGE:$TAG"
+
+      - name: Resolve published digest and test immutable image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          TAG: m2-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "$REGISTRY_IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "Published image returned an invalid digest: $digest" >&2; exit 1 ;;
+          esac
+          echo "Published candidate: $REGISTRY_IMAGE@$digest"
+          docker pull "$REGISTRY_IMAGE@$digest"
+          SEERR_IMAGE="$REGISTRY_IMAGE@$digest" ./services/seerr/test-prototype.sh

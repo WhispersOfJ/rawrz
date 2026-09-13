@@ -1,5 +1,281 @@
+diff --git a/package.json b/package.json
+index 4b55e09..9d5991d 100644
+--- a/package.json
++++ b/package.json
+@@ -66,12 +66,13 @@
+     "http-proxy-agent": "^7.0.2",
+     "https-proxy-agent": "^7.0.6",
+     "humanize-duration": "^3.33.2",
++    "ioredis": "5.8.2",
++    "ip-address": "^10.2.0",
+     "js-yaml": "^4.1.1",
+     "lodash": "4.18.1",
+     "mime": "^4.1.0",
+     "nanoid": "^5.1.7",
+     "next": "16.2.6",
+-    "ip-address": "^10.2.0",
+     "node-cache": "5.1.2",
+     "node-gyp": "12.2.0",
+     "node-schedule": "2.1.1",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 0f33b8a..58958ec 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -64,7 +64,7 @@ importers:
+         version: 2.14.1
+       connect-typeorm:
+         specifier: 2.0.0
+-        version: 2.0.0(typeorm@0.3.29(babel-plugin-macros@3.1.0)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5)))
++        version: 2.0.0(typeorm@0.3.29(babel-plugin-macros@3.1.0)(ioredis@5.8.2)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5)))
+       cookie-parser:
+         specifier: 1.4.7
+         version: 1.4.7
+@@ -110,6 +110,9 @@ importers:
+       humanize-duration:
+         specifier: ^3.33.2
+         version: 3.33.2
++      ioredis:
++        specifier: 5.8.2
++        version: 5.8.2
+       ip-address:
+         specifier: ^10.2.0
+         version: 10.2.0
+@@ -214,7 +217,7 @@ importers:
+         version: 2.6.1
+       typeorm:
+         specifier: 0.3.29
+-        version: 0.3.29(babel-plugin-macros@3.1.0)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))
++        version: 0.3.29(babel-plugin-macros@3.1.0)(ioredis@5.8.2)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))
+       ua-parser-js:
+         specifier: ^2.0.9
+         version: 2.0.9
+@@ -1529,6 +1532,9 @@ packages:
+   '@internationalized/string@3.2.8':
+     resolution: {integrity: sha512-NdbMQUSfXLYIQol5VyMtinm9pZDciiMfN7RtmSuSB78io1hqwJ0naYfxyW6vgxWBkzWymQa/3uLDlbfmshtCaA==}
+
++  '@ioredis/commands@1.4.0':
++    resolution: {integrity: sha512-aFT2yemJJo+TZCmieA7qnYGQooOS7QfNmYrzGtsYd3g9j5iDP8AimYYAesf79ohjbLG12XxC4nG5DyEnC88AsQ==}
++
+   '@isaacs/cliui@8.0.2':
+     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
+     engines: {node: '>=12'}
+@@ -3433,6 +3439,10 @@ packages:
+     resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
+     engines: {node: '>=6'}
+
++  cluster-key-slot@1.1.2:
++    resolution: {integrity: sha512-RMr0FhtfXemyinomL4hrWcYJxmX6deFdCxpJzhDttxgO1+bcCnkk+9drydLVDmAMG7NE6aN/fl4F7ucU/90gAA==}
++    engines: {node: '>=0.10.0'}
++
+   co@4.6.0:
+     resolution: {integrity: sha512-QVb0dM5HvG+uaxitm8wONl7jltx8dqhfU33DcqtOZcLSVIKSDDLDi7+0LbAKiyI8hD9u42m2YxXSkMGWThaecQ==}
+     engines: {iojs: '>= 1.0.0', node: '>= 0.12.0'}
+@@ -3660,6 +3670,7 @@ packages:
+   cron-parser@4.9.0:
+     resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
+     engines: {node: '>=12.0.0'}
++    deprecated: v4 is no longer maintained, upgrade to v5
+
+   cronstrue@3.14.0:
+     resolution: {integrity: sha512-XnW4vuK/jPJjmTyDWiej1Zq36Od7ITwxaV2O1pzHZuyMVvdy7NAvyvIBzybt+idqSpfqYuoDG7uf/ocGtJVWxA==}
+@@ -3816,6 +3827,10 @@ packages:
+   delegates@1.0.0:
+     resolution: {integrity: sha512-bd2L678uiWATM6m5Z1VzNCErI3jiGzt6HGY8OVICs40JQq/HALfbyNJmp0UDakEY4pMMaN0Ly5om/B1VI/+xfQ==}
+
++  denque@2.1.0:
++    resolution: {integrity: sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw==}
++    engines: {node: '>=0.10'}
++
+   depd@2.0.0:
+     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
+     engines: {node: '>= 0.8'}
+@@ -4186,6 +4201,7 @@ packages:
+   eslint@9.39.3:
+     resolution: {integrity: sha512-VmQ+sifHUbI/IcSopBCF/HO3YiHQx/AVd3UVyYL6weuwW+HvON9VYn5l6Zl1WZzPWXPNZrSQpxwkkZ/VuvJZzg==}
+     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
++    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
+     hasBin: true
+     peerDependencies:
+       jiti: '*'
+@@ -4561,6 +4577,7 @@ packages:
+   git-raw-commits@5.0.1:
+     resolution: {integrity: sha512-Y+csSm2GD/PCSh6Isd/WiMjNAydu0VBiG9J7EdQsNA5P9uXvLayqjmTsNlK5Gs9IhblFZqOU0yid5Il5JPoLiQ==}
+     engines: {node: '>=18'}
++    deprecated: Deprecated and no longer maintained. Use @conventional-changelog/git-client instead.
+     hasBin: true
+
+   github-from-package@0.0.0:
+@@ -4867,6 +4884,10 @@ packages:
+   intl-messageformat@11.2.2:
+     resolution: {integrity: sha512-yUfyIkPGqMvvk2onw2xBJeLsjXdiYUYebR8mmZVQYBuZUJsFGVht48Ftm1khgu8EZ0n+izX4rAEj3fLAilkh9g==}
+
++  ioredis@5.8.2:
++    resolution: {integrity: sha512-C6uC+kleiIMmjViJINWk80sOQw5lEzse1ZmvD+S/s8p8CWapftSaC+kocGTx6xrbrJ4WmYQGC08ffHLr6ToR6Q==}
++    engines: {node: '>=12.22.0'}
++
+   ip-address@10.1.0:
+     resolution: {integrity: sha512-XXADHxXmvT9+CRxhXg56LJovE+bmWnEWB78LB83VZTprKTmaC5QfruXocxzTZ2Kl0DNwKuBdlIhjL8LeY8Sf8Q==}
+     engines: {node: '>= 12'}
+@@ -5442,10 +5463,16 @@ packages:
+   lodash.debounce@4.0.8:
+     resolution: {integrity: sha512-FT1yDzDYEoYWhnSGnpE/4Kj1fLZkDFyqRb7fNt6FdYOSxlUWAtp42Eh6Wb0rGIv/m9Bgo7x4GhQbm5Ys4SG5ow==}
+
++  lodash.defaults@4.2.0:
++    resolution: {integrity: sha512-qjxPLHd3r5DnsdGacqOMU6pb/avJzdh9tFX2ymgoZE27BmjXrNy/y4LoaiTeAb+O3gL8AfpJGtqfX/ae2leYYQ==}
++
+   lodash.get@4.4.2:
+     resolution: {integrity: sha512-z+Uw/vLuy6gQe8cfaFWD7p0wVv8fJl3mbzXh33RS+0oW2wvUqiRXiQ69gLWSLpgB5/6sU+r6BlQR0MBILadqTQ==}
+     deprecated: This package is deprecated. Use the optional chaining (?.) operator instead.
+
++  lodash.isarguments@3.1.0:
++    resolution: {integrity: sha512-chi4NHZlZqZD18a0imDHnZPrDeBbTtVN7GXMwuGdRH9qotxAjYs3aVLKc7zNOG9eddR5Ksd8rvFEBc9SsggPpg==}
++
+   lodash.isequal@4.5.0:
+     resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
+     deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+@@ -6746,6 +6773,14 @@ packages:
+     resolution: {integrity: sha512-hOS089on8RduqdbhvQ5Z37A0ESjsqz6qnRcffsMU3495FuTdqSm+7bhJ29JvIOsBDEEnan5DPu9t3To9VRlMzA==}
+     engines: {node: '>=8.10.0'}
+
++  redis-errors@1.2.0:
++    resolution: {integrity: sha512-1qny3OExCf0UvUV/5wpYKf2YwPcOqXzkwKKSmKHiE6ZMQs5heeE/c8eXK+PNllPvmjgAbfnsbpkGZWy8cBpn9w==}
++    engines: {node: '>=4'}
++
++  redis-parser@3.0.0:
++    resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
++    engines: {node: '>=4'}
++
+   reflect-metadata@0.2.2:
+     resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
+
+@@ -7110,6 +7145,9 @@ packages:
+     resolution: {integrity: sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ==}
+     engines: {node: '>=10'}
+
++  standard-as-callback@2.1.0:
++    resolution: {integrity: sha512-qoRRSyROncaz1z0mvYqIE4lCd9p2R90i6GxW3uZv5ucSu8tU7B5HXUP1gG8pVZsYNVaXjk8ClXHPttLyxAL48A==}
++
+   statuses@2.0.2:
+     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
+     engines: {node: '>= 0.8'}
+@@ -9370,6 +9408,8 @@ snapshots:
+     dependencies:
+       '@swc/helpers': 0.5.15
+
++  '@ioredis/commands@1.4.0': {}
++
+   '@isaacs/cliui@8.0.2':
+     dependencies:
+       string-width: 5.1.2
+@@ -11433,6 +11473,8 @@ snapshots:
+
+   clsx@2.1.1: {}
+
++  cluster-key-slot@1.1.2: {}
++
+   co@4.6.0:
+     optional: true
+
+@@ -11532,13 +11574,13 @@ snapshots:
+       readable-stream: 3.6.2
+       typedarray: 0.0.6
+
+-  connect-typeorm@2.0.0(typeorm@0.3.29(babel-plugin-macros@3.1.0)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))):
++  connect-typeorm@2.0.0(typeorm@0.3.29(babel-plugin-macros@3.1.0)(ioredis@5.8.2)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))):
+     dependencies:
+       '@types/debug': 0.0.31
+       '@types/express-session': 1.18.2
+       debug: 4.4.3(supports-color@5.5.0)
+       express-session: 1.19.0
+-      typeorm: 0.3.29(babel-plugin-macros@3.1.0)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))
++      typeorm: 0.3.29(babel-plugin-macros@3.1.0)(ioredis@5.8.2)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5))
+     transitivePeerDependencies:
+       - supports-color
+
+@@ -11863,6 +11905,8 @@ snapshots:
+   delegates@1.0.0:
+     optional: true
+
++  denque@2.1.0: {}
++
+   depd@2.0.0: {}
+
+   dequal@2.0.3: {}
+@@ -13288,6 +13332,20 @@ snapshots:
+       '@formatjs/fast-memoize': 3.1.2
+       '@formatjs/icu-messageformat-parser': 3.5.5
+
++  ioredis@5.8.2:
++    dependencies:
++      '@ioredis/commands': 1.4.0
++      cluster-key-slot: 1.1.2
++      debug: 4.4.3(supports-color@5.5.0)
++      denque: 2.1.0
++      lodash.defaults: 4.2.0
++      lodash.isarguments: 3.1.0
++      redis-errors: 1.2.0
++      redis-parser: 3.0.0
++      standard-as-callback: 2.1.0
++    transitivePeerDependencies:
++      - supports-color
++
+   ip-address@10.1.0: {}
+
+   ip-address@10.2.0: {}
+@@ -14083,8 +14141,12 @@ snapshots:
+
+   lodash.debounce@4.0.8: {}
+
++  lodash.defaults@4.2.0: {}
++
+   lodash.get@4.4.2: {}
+
++  lodash.isarguments@3.1.0: {}
++
+   lodash.isequal@4.5.0: {}
+
+   lodash.kebabcase@4.1.1: {}
+@@ -15620,6 +15682,12 @@ snapshots:
+     dependencies:
+       picomatch: 2.3.1
+
++  redis-errors@1.2.0: {}
++
++  redis-parser@3.0.0:
++    dependencies:
++      redis-errors: 1.2.0
++
+   reflect-metadata@0.2.2: {}
+
+   reflect.getprototypeof@1.0.10:
+@@ -16088,6 +16156,8 @@ snapshots:
+       escape-string-regexp: 2.0.0
+     optional: true
+
++  standard-as-callback@2.1.0: {}
++
+   statuses@2.0.2: {}
+
+   stop-iteration-iterator@1.1.0:
+@@ -16610,7 +16680,7 @@ snapshots:
+
+   typedarray@0.0.6: {}
+
+-  typeorm@0.3.29(babel-plugin-macros@3.1.0)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5)):
++  typeorm@0.3.29(babel-plugin-macros@3.1.0)(ioredis@5.8.2)(pg@8.20.0)(sqlite3@5.1.7)(ts-node@10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5)):
+     dependencies:
+       '@sqltools/formatter': 1.2.5
+       ansis: 4.2.0
+@@ -16628,6 +16698,7 @@ snapshots:
+       uuid: 11.1.1
+       yargs: 17.7.2
+     optionalDependencies:
++      ioredis: 5.8.2
+       pg: 8.20.0
+       sqlite3: 5.1.7
+       ts-node: 10.9.2(@swc/core@1.6.5(@swc/helpers@0.5.15))(@types/node@22.19.0)(typescript@5.4.5)
 diff --git a/server/api/externalapi.ts b/server/api/externalapi.ts
-index 9b71b7a..a9c8610 100644
+index 9b71b7a..eeb08e5 100644
 --- a/server/api/externalapi.ts
 +++ b/server/api/externalapi.ts
 @@ -2,7 +2,7 @@ import { proxyRequestInterceptor } from '@server/utils/customProxyAgent';
@@ -38,16 +314,17 @@ index 9b71b7a..a9c8610 100644
    }
 
    protected async get<T>(
-@@ -62,7 +62,7 @@ class ExternalAPI {
+@@ -62,15 +62,15 @@ class ExternalAPI {
        ...config?.params,
        headers: config?.headers,
      });
 -    const cachedItem = this.cache?.get<T>(cacheKey);
+-    if (cachedItem) {
 +    const cachedItem = await this.cache?.get<T>(cacheKey);
-     if (cachedItem) {
++    if (cachedItem !== undefined) {
        return cachedItem;
      }
-@@ -70,7 +70,7 @@ class ExternalAPI {
+
      const response = await this.axios.get<T>(endpoint, config);
 
      if (this.cache && ttl !== 0) {
@@ -56,16 +333,17 @@ index 9b71b7a..a9c8610 100644
      }
 
      return response.data;
-@@ -87,7 +87,7 @@ class ExternalAPI {
+@@ -87,15 +87,15 @@ class ExternalAPI {
        ...(data ? { data } : {}),
      });
 
 -    const cachedItem = this.cache?.get<T>(cacheKey);
+-    if (cachedItem) {
 +    const cachedItem = await this.cache?.get<T>(cacheKey);
-     if (cachedItem) {
++    if (cachedItem !== undefined) {
        return cachedItem;
      }
-@@ -95,7 +95,7 @@ class ExternalAPI {
+
      const response = await this.axios.post<T>(endpoint, data, config);
 
      if (this.cache && ttl !== 0) {
@@ -81,9 +359,10 @@ index 9b71b7a..a9c8610 100644
 -    const cachedItem = this.cache?.get<T>(cacheKey);
 +    const cachedItem = await this.cache?.get<T>(cacheKey);
 
-     if (cachedItem) {
+-    if (cachedItem) {
 -      const keyTtl = this.cache?.getTtl(cacheKey) ?? 0;
-+      const keyTtl = (await this.cache?.getTtlMs(cacheKey)) ?? 0;
++    if (cachedItem !== undefined) {
++      const keyTtl = await this.cache?.getTtlMs(cacheKey) ?? 0;
 
        // If the item has passed our rolling check, fetch again in background
        if (
@@ -231,7 +510,7 @@ index 62d7a4d..05cd952 100644
            maxRequests: finalConfig.maxRequests,
            maxRPS: finalConfig.maxRequestsPerSecond,
 diff --git a/server/lib/cache.ts b/server/lib/cache.ts
-index 64b5c79..8f25a35 100644
+index 64b5c79..292bd1d 100644
 --- a/server/lib/cache.ts
 +++ b/server/lib/cache.ts
 @@ -1,4 +1,5 @@
@@ -258,7 +537,7 @@ index 64b5c79..8f25a35 100644
 -      stdTTL: options.stdTtl ?? DEFAULT_TTL,
 -      checkperiod: options.checkPeriod ?? DEFAULT_CHECK_PERIOD,
 -    });
-+    this.backend = createCacheBackend(id, options.stdTtl ?? DEFAULT_TTL);
++    this.backend = createCacheBackend(id, options.stdTtl ?? DEFAULT_TTL, options.checkPeriod ?? DEFAULT_CHECK_PERIOD);
    }
 
 -  public getStats() {
@@ -276,14 +555,13 @@ index 64b5c79..8f25a35 100644
 
 diff --git a/server/lib/cache/backend.ts b/server/lib/cache/backend.ts
 new file mode 100644
-index 0000000..103fb33
+index 0000000..e48c680
 --- /dev/null
 +++ b/server/lib/cache/backend.ts
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,224 @@
 +import crypto from 'crypto';
-+import net from 'net';
-+
-+export type CacheKind = 'memory' | 'redis';
++import Redis from 'ioredis';
++import NodeCache from 'node-cache';
 +
 +export interface CacheStats {
 +  hits: number;
@@ -292,12 +570,11 @@ index 0000000..103fb33
 +  ksize: number;
 +  vsize: number;
 +  errors: number;
-+  backend: CacheKind;
++  backend: 'memory' | 'redis';
 +  degraded: boolean;
 +}
 +
 +export interface CacheBackend {
-+  readonly kind: CacheKind;
 +  get<T>(key: string): Promise<T | undefined>;
 +  set<T>(key: string, value: T, ttlSeconds: number): Promise<void>;
 +  del(key: string): Promise<void>;
@@ -306,172 +583,205 @@ index 0000000..103fb33
 +  stats(): CacheStats;
 +}
 +
-+const DEFAULT_TTL = 300;
 +const PREFIX = process.env.SEERR_CACHE_REDIS_PREFIX || 'rawrz:seerr:cache';
-+const REDIS_URL = process.env.REDIS_URL;
-+
-+function now(): number { return Date.now(); }
++const redisKey = (cacheId: string, key: string) =>
++  `${PREFIX}:${cacheId}:${crypto.createHash('sha256').update(key).digest('hex')}`;
 +
 +class MemoryCacheBackend implements CacheBackend {
-+  public readonly kind = 'memory' as const;
-+  private values = new Map<string, { value: unknown; expires: number }>();
-+  private hits = 0;
-+  private misses = 0;
++  private readonly cache: NodeCache;
 +
-+  public async get<T>(key: string): Promise<T | undefined> {
-+    const entry = this.values.get(key);
-+    if (!entry || (entry.expires > 0 && entry.expires <= now())) {
-+      if (entry) this.values.delete(key);
-+      this.misses++;
-+      return undefined;
-+    }
-+    this.hits++;
-+    return structuredClone(entry.value) as T;
-+  }
-+
-+  public async set<T>(key: string, value: T, ttlSeconds = DEFAULT_TTL): Promise<void> {
-+    this.values.set(key, {
-+      value: structuredClone(value),
-+      expires: ttlSeconds > 0 ? now() + ttlSeconds * 1000 : 0,
-+    });
-+  }
-+
-+  public async del(key: string): Promise<void> { this.values.delete(key); }
-+  public async getTtlMs(key: string): Promise<number | undefined> {
-+    const entry = this.values.get(key);
-+    if (!entry || (entry.expires > 0 && entry.expires <= now())) return undefined;
-+    return entry.expires === 0 ? 0 : entry.expires;
-+  }
-+  public async flush(): Promise<void> { this.values.clear(); this.hits = 0; this.misses = 0; }
-+  public stats(): CacheStats {
-+    return { hits: this.hits, misses: this.misses, keys: this.values.size, ksize: 0, vsize: 0, errors: 0, backend: 'memory', degraded: false };
-+  }
-+}
-+
-+function encode(command: string, args: string[]): Buffer {
-+  const parts = [command, ...args];
-+  return Buffer.from(`*${parts.length}\r\n${parts.map((part) => `$${Buffer.byteLength(part)}\r\n${part}\r\n`).join('')}`);
-+}
-+
-+function parseResp(buffer: Buffer): unknown {
-+  const text = buffer.toString();
-+  if (text.startsWith('+')) return text.slice(1).split('\r\n', 1)[0];
-+  if (text.startsWith('-')) throw new Error(text.slice(1).split('\r\n', 1)[0]);
-+  if (text.startsWith(':')) return Number(text.slice(1).split('\r\n', 1)[0]);
-+  if (text.startsWith('$')) {
-+    const end = text.indexOf('\r\n');
-+    const length = Number(text.slice(1, end));
-+    if (length < 0) return undefined;
-+    return text.slice(end + 2, end + 2 + length);
-+  }
-+  throw new Error('Unexpected Redis response');
-+}
-+
-+async function redisCommand(url: URL, command: string, args: string[]): Promise<unknown> {
-+  return new Promise((resolve, reject) => {
-+    const socket = net.createConnection({ host: url.hostname, port: Number(url.port || 6379) });
-+    const chunks: Buffer[] = [];
-+    const timeout = setTimeout(() => { socket.destroy(); reject(new Error('Redis command timeout')); }, Number(process.env.SEERR_CACHE_REDIS_TIMEOUT_MS || 2000));
-+    socket.on('connect', () => socket.write(encode(command, args)));
-+    socket.on('data', (chunk: Buffer) => {
-+      chunks.push(chunk);
-+      const data = Buffer.concat(chunks);
-+      if (data.includes(Buffer.from('\r\n'))) {
-+        clearTimeout(timeout); socket.end();
-+        try { resolve(parseResp(data)); } catch (error) { reject(error); }
-+      }
-+    });
-+    socket.on('error', (error) => { clearTimeout(timeout); reject(error); });
-+  });
-+}
-+
-+function safeKey(cacheId: string, key: string): string {
-+  const hash = crypto.createHash('sha256').update(key).digest('hex');
-+  return `${PREFIX}:${cacheId}:${hash}`;
-+}
-+
-+class RedisCacheBackend implements CacheBackend {
-+  public readonly kind = 'redis' as const;
-+  private readonly fallback = new MemoryCacheBackend();
-+  private hits = 0;
-+  private misses = 0;
-+  private errors = 0;
-+  private degraded = false;
-+  private readonly url: URL;
-+
-+  constructor(private readonly cacheId: string) {
-+    this.url = new URL(REDIS_URL || 'redis://127.0.0.1:6379/0');
-+  }
-+
-+  private async command(command: string, args: string[]): Promise<unknown> {
-+    try {
-+      const result = await redisCommand(this.url, command, args);
-+      this.degraded = false;
-+      return result;
-+    } catch {
-+      this.errors++;
-+      this.degraded = true;
-+      return undefined;
-+    }
++  constructor(stdTtl: number, checkPeriod: number) {
++    this.cache = new NodeCache({ stdTTL: stdTtl, checkperiod: checkPeriod });
 +  }
 +
 +  public async get<T>(key: string): Promise<T | undefined> {
-+    const remote = await this.command('GET', [safeKey(this.cacheId, key)]);
-+    if (remote === undefined && this.degraded) return this.fallback.get<T>(key);
-+    if (typeof remote !== 'string') { this.misses++; return undefined; }
-+    try {
-+      const envelope = JSON.parse(remote) as { v: number; c: string; d: T };
-+      if (envelope.v !== 1 || envelope.c !== this.cacheId || !envelope.d) { this.misses++; return undefined; }
-+      this.hits++;
-+      return structuredClone(envelope.d);
-+    } catch { this.misses++; return undefined; }
++    return this.cache.get<T>(key);
 +  }
 +
-+  public async set<T>(key: string, value: T, ttlSeconds = DEFAULT_TTL): Promise<void> {
-+    if (ttlSeconds === 0) return;
-+    const envelope = JSON.stringify({ v: 1, c: this.cacheId, d: value });
-+    const args = [safeKey(this.cacheId, key), envelope];
-+    if (ttlSeconds > 0) args.push('EX', String(ttlSeconds));
-+    const result = await this.command('SET', args);
-+    if (result === undefined && this.degraded) await this.fallback.set(key, value, ttlSeconds);
++  public async set<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
++    this.cache.set(key, value, ttlSeconds);
 +  }
 +
 +  public async del(key: string): Promise<void> {
-+    const result = await this.command('DEL', [safeKey(this.cacheId, key)]);
-+    if (result === undefined && this.degraded) await this.fallback.del(key);
++    this.cache.del(key);
 +  }
 +
 +  public async getTtlMs(key: string): Promise<number | undefined> {
-+    const result = await this.command('PTTL', [safeKey(this.cacheId, key)]);
-+    if (result === undefined && this.degraded) return this.fallback.getTtlMs(key);
-+    if (typeof result !== 'number' || result < 0) return undefined;
-+    return now() + result;
++    return this.cache.getTtl(key);
 +  }
 +
 +  public async flush(): Promise<void> {
-+    let cursor = '0';
-+    do {
-+      const result = await this.command('SCAN', [cursor, 'MATCH', `${PREFIX}:${this.cacheId}:*`, 'COUNT', '500']);
-+      if (!Array.isArray(result) || result.length !== 2) {
-+        if (this.degraded) await this.fallback.flush();
-+        return;
-+      }
-+      cursor = String(result[0]);
-+      const keys = result[1] as string[];
-+      if (keys.length) await this.command('UNLINK', keys);
-+    } while (cursor !== '0');
++    this.cache.flushAll();
 +  }
 +
 +  public stats(): CacheStats {
-+    const fallback = this.fallback.stats();
-+    return { hits: this.hits + fallback.hits, misses: this.misses + fallback.misses, keys: fallback.keys, ksize: 0, vsize: 0, errors: this.errors, backend: this.degraded ? 'memory' : 'redis', degraded: this.degraded };
++    return { ...this.cache.getStats(), errors: 0, backend: 'memory', degraded: false };
 +  }
 +}
 +
-+export function createCacheBackend(cacheId: string, _ttlSeconds: number): CacheBackend {
-+  return process.env.SEERR_CACHE_BACKEND === 'redis' && REDIS_URL
-+    ? new RedisCacheBackend(cacheId)
-+    : new MemoryCacheBackend();
++class RedisRuntime {
++  public readonly client: Redis;
++  public degraded = false;
++  public errors = 0;
++  private probe?: NodeJS.Timeout;
++
++  constructor(url: string) {
++    this.client = new Redis(url, {
++      lazyConnect: true,
++      enableOfflineQueue: false,
++      maxRetriesPerRequest: 1,
++      connectTimeout: Number(process.env.SEERR_CACHE_REDIS_TIMEOUT_MS || 2000),
++      retryStrategy: (attempt) => Math.min(attempt * 250, 5000),
++    });
++    this.client.on('error', () => this.fail());
++    this.scheduleProbe();
++  }
++
++  private fail(): void {
++    this.degraded = true;
++    this.errors++;
++  }
++
++  private scheduleProbe(): void {
++    this.probe = setTimeout(() => void this.probeRedis(), Number(process.env.SEERR_CACHE_REDIS_PROBE_MS || 30000));
++    this.probe.unref();
++  }
++
++  private async probeRedis(): Promise<void> {
++    try {
++      await this.client.connect().catch(() => undefined);
++      await this.client.ping();
++      this.degraded = false;
++    } catch {
++      this.fail();
++    } finally {
++      this.scheduleProbe();
++    }
++  }
++
++  public async command<T>(operation: () => Promise<T>): Promise<T | undefined> {
++    try {
++      const result = await operation();
++      this.degraded = false;
++      return result;
++    } catch {
++      this.fail();
++      return undefined;
++    }
++  }
++}
++
++const runtime = process.env.SEERR_CACHE_BACKEND === 'redis' && process.env.REDIS_URL
++  ? new RedisRuntime(process.env.REDIS_URL)
++  : undefined;
++
++class RedisCacheBackend implements CacheBackend {
++  private readonly fallback: MemoryCacheBackend;
++  private readonly entries = new Map<string, { ksize: number; vsize: number; expiresAt?: number }>();
++  private hits = 0;
++  private misses = 0;
++
++  constructor(private readonly cacheId: string, stdTtl: number, checkPeriod: number) {
++    this.fallback = new MemoryCacheBackend(stdTtl, checkPeriod);
++  }
++
++  private get redis(): RedisRuntime {
++    if (!runtime) throw new Error('Redis cache runtime is not configured');
++    return runtime;
++  }
++
++  public async get<T>(key: string): Promise<T | undefined> {
++    const raw = await this.redis.command(() => this.redis.client.get(redisKey(this.cacheId, key)));
++    if (raw === undefined && this.redis.degraded) return this.fallback.get<T>(key);
++    if (raw === null || raw === undefined) {
++      this.misses++;
++      return undefined;
++    }
++    try {
++      const envelope = JSON.parse(raw) as { v: number; c: string; d: T };
++      if (envelope.v !== 1 || envelope.c !== this.cacheId || !Object.prototype.hasOwnProperty.call(envelope, 'd')) {
++        this.misses++;
++        return undefined;
++      }
++      this.hits++;
++      return structuredClone(envelope.d);
++    } catch {
++      this.misses++;
++      return undefined;
++    }
++  }
++
++  public async set<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
++    const payload = JSON.stringify({ v: 1, c: this.cacheId, d: value });
++    const encodedKey = redisKey(this.cacheId, key);
++    const result = await this.redis.command(() => ttlSeconds > 0
++      ? this.redis.client.set(encodedKey, payload, 'EX', ttlSeconds)
++      : this.redis.client.set(encodedKey, payload));
++    if (result === undefined && this.redis.degraded) {
++      await this.fallback.set(key, value, ttlSeconds);
++      return;
++    }
++    this.entries.set(encodedKey, {
++      ksize: Buffer.byteLength(encodedKey),
++      vsize: Buffer.byteLength(payload),
++      ...(ttlSeconds > 0 ? { expiresAt: Date.now() + ttlSeconds * 1000 } : {}),
++    });
++  }
++
++  public async del(key: string): Promise<void> {
++    const encodedKey = redisKey(this.cacheId, key);
++    const result = await this.redis.command(() => this.redis.client.unlink(encodedKey));
++    if (result === undefined && this.redis.degraded) await this.fallback.del(key);
++    this.entries.delete(encodedKey);
++  }
++
++  public async getTtlMs(key: string): Promise<number | undefined> {
++    const ttl = await this.redis.command(() => this.redis.client.pttl(redisKey(this.cacheId, key)));
++    if (ttl === undefined && this.redis.degraded) return this.fallback.getTtlMs(key);
++    if (ttl === -1) return 0;
++    return typeof ttl === 'number' && ttl >= 0 ? Date.now() + ttl : undefined;
++  }
++
++  public async flush(): Promise<void> {
++    try {
++      let cursor = '0';
++      do {
++        const [next, keys] = await this.redis.client.scan(cursor, 'MATCH', `${PREFIX}:${this.cacheId}:*`, 'COUNT', '500');
++        cursor = next;
++        if (keys.length) await this.redis.client.unlink(...keys);
++      } while (cursor !== '0');
++    } catch {
++      this.redis.degraded = true;
++      this.redis.errors++;
++      await this.fallback.flush();
++    } finally {
++      this.entries.clear();
++    }
++  }
++
++  public stats(): CacheStats {
++    const now = Date.now();
++    for (const [key, entry] of this.entries) {
++      if (entry.expiresAt && entry.expiresAt <= now) this.entries.delete(key);
++    }
++    const fallback = this.fallback.stats();
++    return {
++      hits: this.hits + fallback.hits,
++      misses: this.misses + fallback.misses,
++      keys: this.entries.size + fallback.keys,
++      ksize: [...this.entries.values()].reduce((total, entry) => total + entry.ksize, 0),
++      vsize: [...this.entries.values()].reduce((total, entry) => total + entry.vsize, 0),
++      errors: this.redis.errors,
++      backend: this.redis.degraded ? 'memory' : 'redis',
++      degraded: this.redis.degraded,
++    };
++  }
++}
++
++export function createCacheBackend(cacheId: string, stdTtl: number, checkPeriod: number): CacheBackend {
++  return runtime
++    ? new RedisCacheBackend(cacheId, stdTtl, checkPeriod)
++    : new MemoryCacheBackend(stdTtl, checkPeriod);
 +}
 diff --git a/server/lib/scanners/plex/index.ts b/server/lib/scanners/plex/index.ts
 index ce746e7..85e2a25 100644
