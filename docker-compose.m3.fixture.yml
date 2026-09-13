@@ -1,11 +1,10 @@
-# Deterministic upstream fixture for the M3 acceptance job. It is not part of
-# production Compose and only supplies the service names nginx resolves.
+# Deterministic upstream fixtures for the M3 acceptance job. They are not part
+# of production Compose and only supply the service names and Plex host target
+# nginx resolves.
 services:
   fixture:
     image: nginx:1.27-alpine
     restart: "no"
-    ports:
-      - "32400:80"
     networks:
       bearcave:
         aliases:
@@ -15,6 +14,13 @@ services:
           - prowlarr
           - nzbdav
           - plex
+    volumes:
+      - ./services/nginx/fixture.conf:/etc/nginx/nginx.conf:ro
+
+  plex-fixture:
+    image: nginx:1.27-alpine
+    restart: "no"
+    network_mode: host
     volumes:
       - ./services/nginx/fixture.conf:/etc/nginx/nginx.conf:ro
 
