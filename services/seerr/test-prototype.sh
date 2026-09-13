@@ -10,7 +10,7 @@ APP=${SEERR_TEST_APP_CONTAINER:-rawrz-seerr-m2-app}
 NETWORK=${SEERR_TEST_NETWORK:-rawrz-seerr-m2}
 PREFIX=${SEERR_CACHE_REDIS_PREFIX:-rawrz:seerr:m2}
 API_KEY=${SEERR_TEST_API_KEY:-m2-acceptance-key}
-STATE="${ROOT}/.cache/seerr-m2-acceptance"
+STATE="${ROOT}/.cache/seerr-m2-acceptance-${BASHPID}-${RANDOM}"
 
 cleanup() {
   docker rm -f "$APP" "$RUNNER" "$REDIS" "$FIXTURE" >/dev/null 2>&1 || true
