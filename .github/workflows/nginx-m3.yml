@@ -1,0 +1,51 @@
+name: M3 nginx ingress
+# The overlay is side-by-side only: direct service ports remain the rollback path.
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "docker-compose.m3.yml"
+      - "docker-compose.m3.fixture.yml"
+      - "services/nginx/**"
+      - ".github/workflows/nginx-m3.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "docker-compose.m3.yml"
+      - "docker-compose.m3.fixture.yml"
+      - "services/nginx/**"
+      - ".github/workflows/nginx-m3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ingress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create CI environment
+        run: cp .env.template .env
+
+      - name: Validate Compose overlay
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.m3.yml config --quiet
+          docker compose -f docker-compose.m3.fixture.yml config --quiet
+
+      - name: Validate scripts
+        run: |
+          bash -n services/nginx/*.sh
+          shellcheck services/nginx/*.sh
+
+      - name: Validate YAML
+        run: |
+          python3 -m pip install yamllint==1.37.1
+          yamllint -d '{extends: relaxed, rules: {line-length: disable}}' docker-compose.m3.yml docker-compose.m3.fixture.yml .github/workflows/nginx-m3.yml
+
+      - name: Run deterministic ingress acceptance
+        env:
+          M3_UPSTREAM: fixture
+        run: ./services/nginx/test-ingress.sh
