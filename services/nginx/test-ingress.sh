@@ -32,7 +32,6 @@ expect() {
 
 ./services/nginx/generate-cert.sh >/dev/null
 if [ "${M3_UPSTREAM:-}" = fixture ]; then
-    docker network inspect bearcave >/dev/null 2>&1 || docker network create bearcave >/dev/null
     "${FIXTURE_COMPOSE[@]}" up -d fixture >/dev/null
 fi
 "${COMPOSE[@]}" up -d --no-deps "$NGINX_SERVICE" >/dev/null
