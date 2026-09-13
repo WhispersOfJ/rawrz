@@ -252,7 +252,7 @@ services:
 
   nzbdav_rclone:
     <<: *common
-    image: rclone/rclone:1.75.0
+    image: rclone/rclone:1.75.1
     container_name: nzbdav_rclone
     # 4096m: the vfs metadata cache holds millions of entries (980k dirs + 1.1M
     # files for the ~132k-item library) during analysis; 3072m peaked at ~79%
