@@ -4,6 +4,8 @@ services:
   fixture:
     image: nginx:1.27-alpine
     restart: "no"
+    ports:
+      - "32400:80"
     networks:
       bearcave:
         aliases:
