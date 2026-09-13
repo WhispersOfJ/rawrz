@@ -1,18 +1,19 @@
 name: M3 nginx ingress
-# The overlay is side-by-side only: direct service ports remain the rollback path.
+# The ingress is in the primary Compose graph. CI overrides host ports so it
+# remains side-by-side with any runner services.
 
 on:
   pull_request:
     branches: ["main"]
     paths:
-      - "docker-compose.m3.yml"
+      - "docker-compose.yml"
       - "docker-compose.m3.fixture.yml"
       - "services/nginx/**"
       - ".github/workflows/nginx-m3.yml"
   push:
     branches: ["main"]
     paths:
-      - "docker-compose.m3.yml"
+      - "docker-compose.yml"
       - "docker-compose.m3.fixture.yml"
       - "services/nginx/**"
       - ".github/workflows/nginx-m3.yml"
@@ -32,7 +33,7 @@ jobs:
 
       - name: Validate Compose overlay
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.m3.yml config --quiet
+          NGINX_HTTP_PORT=8081 NGINX_HTTPS_PORT=8443 docker compose config --quiet
           docker compose -f docker-compose.m3.fixture.yml config --quiet
 
       - name: Validate scripts
@@ -43,9 +44,11 @@ jobs:
       - name: Validate YAML
         run: |
           python3 -m pip install yamllint==1.37.1
-          yamllint -d '{extends: relaxed, rules: {line-length: disable}}' docker-compose.m3.yml docker-compose.m3.fixture.yml .github/workflows/nginx-m3.yml
+          yamllint -d '{extends: relaxed, rules: {line-length: disable}}' docker-compose.yml docker-compose.m3.fixture.yml .github/workflows/nginx-m3.yml
 
       - name: Run deterministic ingress acceptance
         env:
           M3_UPSTREAM: fixture
+          M3_HTTP_PORT: 8081
+          M3_HTTPS_PORT: 8443
         run: ./services/nginx/test-ingress.sh

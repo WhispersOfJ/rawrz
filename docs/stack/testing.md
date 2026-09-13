@@ -1,6 +1,6 @@
 # Testing
 
-Validation for the lean eight-service stack: Prowlarr, Radarr, Sonarr, NzbDAV,
+Validation for the nine-service stack, including nginx: Prowlarr, Radarr, Sonarr, NzbDAV,
 nzbdav_rclone, Seerr, Plex, and Unpackerr.
 
 ## Repository checks
@@ -55,7 +55,7 @@ production endpoint.
 ./tests/health/run-all.sh --verbose
 ```
 
-The health runner checks all eight configured containers. A service with no Docker
+The health runner checks all configured containers. A service with no Docker
 healthcheck, such as Unpackerr, is considered passing when its container is running.
 
 ## Pipeline integration test

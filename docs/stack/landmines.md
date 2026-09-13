@@ -63,7 +63,7 @@ docker stop -t 90 plex
 
 ### 6. Direct ports are LAN surfaces
 
-There is no reverse proxy or central authentication tier. Keep ports 3000, 5055,
+nginx is the ingress but there is no central authentication tier yet. Keep direct ports 3000, 5055,
 7878, 8989, 9696, and 32400 behind the host firewall/VPN and retain native app
 authentication. The rclone RC port is not published to the host.
 

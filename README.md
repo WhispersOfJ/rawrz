@@ -6,27 +6,25 @@ RAWRZ merges three codebases into a single repository:
 
 | Component | What it is | Location |
 |-----------|-----------|----------|
-| **Stack** (The Bear Cave) | 8 always-on Docker Compose media services — Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr — plus ImageMaid and Recyclarr on the manual `maintenance` profile. Usenet-only, direct host ports, no reverse proxy. | `docker-compose.yml`, `docs/stack/`, `services/` |
+| **Stack** (The Bear Cave) | 8 media services plus the nginx internal TLS ingress — Prowlarr, Radarr, Sonarr, NzbDAV, nzbdav_rclone, Seerr, Plex, Unpackerr — plus ImageMaid and Recyclarr on the manual `maintenance` profile. Direct application ports remain rollback paths. | `docker-compose.yml`, `docs/stack/`, `services/` |
 | **Deck** (Cave Deck) | A web GUI replacement for the stack's interactive surface — Rust/axum backend + React/TS/Vite frontend, a 100-container catalog, port 7780, LAN-only, no login. Not yet in Compose; see the spec. | `backend/deck/`, `docs/deck/`, `catalog/` |
 | **RPG** (Movie/TV RPG) | A web-based RPG where watching movies and TV is the core mechanic — Rust/Axum backend + Svelte frontend, PostgreSQL, port 46532, PIN gate. Not yet in Compose; will be a future stack service. | `backend/rpg/`, `docs/rpg/` |
 
-> **M0 status:** skeleton + import + unified CI + doc consolidation complete.
-> Redis, Postgres, nginx, and the RPG/Deck Compose services are later milestones
-> (M1–M7 in the master spec). Nothing runtime has changed — the live host keeps
-> running the 8-service stack exactly as before.
+> **M3 status:** Redis, the Seerr fork, and nginx internal ingress are shipped.
+> Postgres and the RPG/Deck Compose services remain later milestones.
 
 ## At a glance
 
 | Metric | Value |
 |--------|-------|
-| Always-on containers | **8** (`docker compose ps`) |
-| Future services | Redis (M1), Postgres (M2+), nginx reverse proxy (M3+), Cave Deck (M4+), RPG (M5+) |
+| Always-on containers | **9** including nginx (`docker compose ps`) |
+| Future services | Postgres, Cave Deck, and RPG |
 | Acquisition apps | 2 — Radarr (movies), Sonarr (TV) |
 | Download client | NzbDAV (InfiniDysk) — SABnzbd-compatible |
 | Media libraries | Movies, Shows |
 | Requests | Seerr → Radarr/Sonarr/Plex watchlists |
 | Manual maintenance | ImageMaid PhotoTranscoder cache cleanup, Recyclarr TRaSH profile sync (both profile-gated) |
-| Memory caps | ≈12.1 GiB total (8-service stack) |
+| Memory caps | ≈12.2 GiB total including nginx |
 
 ## Quick start
 

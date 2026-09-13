@@ -10,7 +10,7 @@ work style and non-negotiable rules — this file covers the system itself.
 A slim, robust media-acquisition-and-serving stack. **8 always-on Compose services**
 (Prowlarr, Radarr, Sonarr, nzbdav, nzbdav_rclone, Seerr, Plex, Unpackerr), plus
 manual ImageMaid and Recyclarr maintenance profiles, published directly on host ports
-— no reverse proxy — with CI/CD via GitHub Actions. Hosted on Linux.
+— nginx internal ingress with direct-port rollback, with CI/CD via GitHub Actions. Hosted on Linux.
 
 > **2026-08-30 slim-down:** after a stability incident (Bazarr OOM crash-loop, Radarr
 > API 500s from an orphaned quality-profile reference, ~19Gi of mem caps against 22Gi
@@ -100,7 +100,7 @@ Prowlarr indexes → Radarr/Sonarr queue → nzbdav downloads → rclone FUSE mo
 - **host** — Plex uses host networking: GDM, DLNA, and remote-access
   NAT-PMP/UPnP negotiation are unreliable on bridge networking.
 
-There is no reverse proxy tier. Every other service is reached directly at
+nginx is the ingress tier; direct service ports remain available as rollback paths. Every other service is reached through its
 `http://HOST_IP:<port>`.
 
 ### Retired services (2026-08-30 slim-down)
@@ -211,7 +211,7 @@ create the private rclone config, and generate secrets.
 
 - **Linux only** — the stack assumes a Linux host (FUSE, VAAPI, host networking)
 - **FUSE mounts** — nzbdav_rclone requires `/dev/fuse` and `SYS_ADMIN` capability
-- **Direct ports** — no reverse proxy; ensure the six ports above are free on the host
+- **Direct ports** — rollback paths; ensure the six service ports plus nginx 80/443 are free on the host
 
 ---
 

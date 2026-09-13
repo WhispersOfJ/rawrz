@@ -46,7 +46,8 @@ sed -i \
 
 for dir in \
     config/ca config/prowlarr config/radarr config/sonarr \
-    config/nzbdav config/nzbdav-rclone/cache config/seerr config/imagemaid \
+    config/nzbdav config/nzbdav-rclone/cache config/seerr config/redis \
+    config/nginx/certs config/imagemaid \
     config/plex/'Plex Media Server' config/plex-transcode media/movies media/shows usenet; do
     test -d "$TMP/$dir" || { echo "FAIL: missing directory $dir" >&2; exit 1; }
 done
@@ -54,6 +55,9 @@ done
 test -d "$TMP/mnt/remote/nzbdav"
 test -s "$TMP/config/ca/ca-bundle.pem"
 test -s "$TMP/config/ca/rootCA.pem"
+test -s "$TMP/config/nginx/certs/rawrz-ca.crt"
+test -s "$TMP/config/nginx/certs/rawrz.lan.crt"
+test -s "$TMP/config/nginx/certs/rawrz.lan.key"
 test "$(stat -c '%a' "$TMP/config/nzbdav-rclone/rclone.conf")" = 600
 grep -q '^user = usenet$' "$TMP/config/nzbdav-rclone/rclone.conf"
 grep -q '^pass = obscured-test-password$' "$TMP/config/nzbdav-rclone/rclone.conf"

@@ -28,7 +28,7 @@ The existing Plex database contains the `Movies` and `Shows` sections. Preserve
 - `PLEX_UID=955` and `PLEX_GID=955` preserve the migrated library ownership.
 - `PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR=/config` selects the active database tree.
 - `stop_grace_period: 90s` is required; Plex can take roughly 40 seconds to stop under load.
-- Plex uses direct HTTP at `http://HOST_IP:32400`; there is no reverse proxy or TLS layer.
+- Plex is available through `https://plex.rawrz.lan`; direct HTTP at `http://HOST_IP:32400` remains the rollback path.
 
 ## Stale-mount recovery
 

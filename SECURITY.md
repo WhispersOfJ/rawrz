@@ -1,7 +1,7 @@
 # Security Policy
 
-The Bear Cave stack is LAN-oriented and intentionally slim: no reverse proxy,
-no central authentication tier, and no monitoring sidecar. Host firewalling and
+The Bear Cave stack is LAN-oriented and intentionally slim: nginx provides internal
+TLS ingress, while there is not yet a central authentication tier or monitoring sidecar. Host firewalling and
 each application's native authentication are part of the security boundary.
 The full security model — secrets handling, exposed surfaces, TLS posture, CI
 controls, and incident response — is documented in [docs/stack/security.md](docs/stack/security.md).
