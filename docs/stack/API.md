@@ -9,7 +9,7 @@ those docs to the APIs behind them.
 ## Reading the map
 
 - **Base** — where the API listens. Host-reachable services are reached
-  directly at `http://HOST_IP:<port>` (there is no reverse proxy); container
+  through the nginx `https://<service>.rawrz.lan` hostname or directly at `http://HOST_IP:<port>`; container
   names (`http://sonarr:8989`) are used for service-to-service traffic.
 - **Auth conventions** are per family:
   - \*arr apps (Sonarr/Radarr/Prowlarr): `X-Api-Key: <key>` header. Keys live

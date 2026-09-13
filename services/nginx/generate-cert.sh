@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-CERT_DIR="$ROOT_DIR/config/nginx/certs"
+CERT_DIR="${NGINX_CERT_DIR:-$ROOT_DIR/config/nginx/certs}"
 mkdir -p "$CERT_DIR"
 
 if [ -s "$CERT_DIR/rawrz-ca.crt" ] && [ -s "$CERT_DIR/rawrz.lan.crt" ] && [ -s "$CERT_DIR/rawrz.lan.key" ]; then

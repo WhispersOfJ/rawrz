@@ -12,7 +12,7 @@
 ## What This Repo Is
 
 A slim, robust media-acquisition-and-serving stack merged with a web GUI (Cave Deck)
-and a movie/TV RPG, published directly on host ports — no reverse proxy — with CI/CD
+and a movie/TV RPG, published on host ports with nginx internal TLS ingress and CI/CD
 via GitHub Actions. Hosted on Linux.
 
 | Component | Location | What it is |
@@ -269,7 +269,7 @@ See [`docs/stack/landmines.md`](docs/stack/landmines.md) for the full list and
 
 - **Linux only** — FUSE, VAAPI, host networking
 - **FUSE mounts** — nzbdav_rclone requires `/dev/fuse` and `SYS_ADMIN`
-- **Direct ports** — no reverse proxy; ensure the six ports are free on the host
+- **Direct ports** — retained as rollback paths; ensure the six ports and nginx 80/443 are free on the host
 
 ---
 

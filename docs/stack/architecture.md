@@ -1,59 +1,47 @@
-# Architecture
+# Stack architecture
 
-The Bear Cave is a single-host, eight-service media acquisition and serving stack.
-It uses direct host ports, one private Docker bridge network, and Plex on host
-networking. There is no reverse proxy, dashboard portal, or observability tier in
-the active deployment.
+The Bear Cave is a single-host, LAN-oriented media stack on the private
+`bearcave` network. nginx is the internal TLS ingress and routes subdomains to
+current services, while direct host ports remain published as the rollback path.
+Plex remains on host networking for GDM/DLNA/remote access.
 
 ## System overview
 
 ```mermaid
 flowchart LR
-    User[Browser / Plex app]
-    Prow[Prowlarr :9696]
-    Rad[Radarr :7878]
-    Son[Sonarr :8989]
-    NZB[NzbDAV / InfiniDysk :3000]
-    RCL[nzbdav_rclone<br/>rclone FUSE mount]
-    Seerr[Seerr :5055]
-    Unp[Unpackerr]
-    Plex[Plex :32400<br/>host network]
-    Indexers[Indexers]
-    Usenet[Usenet providers]
-
-    User --> Seerr
-    User --> Plex
-    Seerr --> Rad & Son
-    Prow --> Indexers
-    Prow --> Rad & Son
+    User[Browser / Plex app] --> Nginx[nginx :80/:443]
+    Nginx --> Prow[Prowlarr :9696]
+    Nginx --> Rad[Radarr :7878]
+    Nginx --> Son[Sonarr :8989]
+    Nginx --> NZB[NzbDAV :3000]
+    Nginx --> Seerr[Seerr :5055]
+    Nginx --> Plex[Plex :32400]
+    Prow --> Indexers[Indexers]
     Rad & Son --> NZB
-    NZB --> Usenet
-    NZB --> RCL
-    RCL --> Rad & Son & Unp & Plex
+    NZB --> RCL[rclone FUSE mount]
+    RCL --> Plex
+    Seerr --> Rad & Son
 ```
 
 ### Content flow
 
-1. Prowlarr supplies indexers to Radarr and Sonarr.
+1. nginx terminates internal TLS and selects a service by `*.rawrz.lan` host.
 2. Seerr creates movie and TV requests in Radarr or Sonarr.
-3. The *arr applications submit NZBs to NzbDAV through its SABnzbd-compatible API.
-4. NzbDAV downloads and exposes the completed tree through WebDAV.
-5. `nzbdav_rclone` mounts that WebDAV tree at `/mnt/remote/nzbdav` using FUSE.
-6. Radarr, Sonarr, Unpackerr, and Plex consume the shared mount.
-7. Plex scans `/data/movies` and `/data/shows`, which contain links into the mount.
-
-No real media bytes are intended to live in the local media directories; the
-remote WebDAV/FUSE tree is the source of truth.
+3. Prowlarr supplies indexers to Radarr and Sonarr.
+4. Radarr/Sonarr submit NZBs to NzbDAV through its SABnzbd-compatible API.
+5. NzbDAV exposes completed content through WebDAV.
+6. `nzbdav_rclone` mounts that tree through FUSE; Plex consumes the media links.
 
 ## Network topology
 
 | Network | Services | Purpose |
 |---------|----------|---------|
-| `bearcave` bridge | Prowlarr, Radarr, Sonarr, NzbDAV, `nzbdav_rclone`, Seerr, Unpackerr | Internal DNS and service-to-service traffic |
+| `bearcave` bridge | nginx and bridge services | Internal DNS, routing, and service-to-service traffic |
 | `host` | Plex | GDM, DLNA, remote-access negotiation, and direct `:32400` access |
 
-Published service ports are deliberately direct and LAN-scoped by host firewall
-policy:
+nginx publishes `80` and `443` by default. Set `NGINX_HTTP_PORT` and
+`NGINX_HTTPS_PORT` for side-by-side validation. Application ports remain published
+during migration and are the documented bypass/rollback path:
 
 | Port | Service |
 |------|---------|
@@ -64,69 +52,22 @@ policy:
 | 9696 | Prowlarr |
 | 32400 | Plex |
 
-There is no HTTPS termination layer in Compose. If remote access is required,
-provide it with a separately managed VPN or reverse proxy rather than adding an
-unreviewed container to this stack.
+## TLS and hostnames
 
-## FUSE lifecycle and dependency cascade
+`services/nginx/generate-cert.sh` creates an uncommitted LAN CA and SAN certificate
+under `config/nginx/certs`. Trust `rawrz-ca.crt` on client devices, resolve the
+`*.rawrz.lan` names to the stack host, and use the ingress acceptance script before
+cutting over any client bookmarks.
 
-```mermaid
-flowchart TD
-    A[Prowlarr healthy] --> B[NzbDAV healthy]
-    B --> C[nzbdav_rclone mounts WebDAV]
-    C --> D{mountpoint healthy?}
-    D -->|yes| E[Radarr / Sonarr / Plex / Unpackerr]
-    D -->|no| C
-```
+## FUSE lifecycle
 
-`nzbdav_rclone` is the mount owner. Radarr, Sonarr, Plex, and Unpackerr have a
-health-gated dependency on it and use `restart: true`, so an NzbDAV or rclone
-restart intentionally restarts every FUSE consumer.
-
-Rules:
-
-- Confirm the NzbDAV queue is empty before recreating NzbDAV.
-- Confirm `docker exec nzbdav_rclone mountpoint -q /mnt/remote/nzbdav` before a Plex scan.
-- Never force-unmount the FUSE tree while consumers are running.
-- The rclone entrypoint clears stale mount state before mounting.
-- After a mount-owner restart, wait for the dependents to become healthy before
-  checking library state.
-
-## Application paths
-
-The same paths must be used in the databases and containers:
-
-| Application | Path |
-|-------------|------|
-| Radarr | `/data/movies` |
-| Sonarr | `/data/shows` |
-| Plex | `/data/movies`, `/data/shows` |
-| Shared remote mount | `/mnt/remote/nzbdav` |
-
-Changing these paths in Compose without recreating the affected consumers causes
-healthy-looking containers with inaccessible root folders or apparent Plex deletions.
-
-## Storage layout
-
-```text
-cave/
-├── config/plex/                 # Plex database and metadata; highest-value state
-├── config/{prowlarr,radarr,sonarr}/
-├── config/nzbdav/                # NzbDAV database and settings
-├── config/nzbdav-rclone/        # rclone.conf and local VFS cache
-├── config/seerr/
-├── media/{movies,shows}/         # local link trees into the FUSE mount
-├── usenet/                       # Unpackerr staging
-├── config/ca/                    # optional local CA bundle for outbound TLS
-├── secrets/                      # generated secret source files
-└── archive/                      # historical retired material; inactive
-```
+`nzbdav_rclone` is the mount owner. Radarr, Sonarr, Plex, and Unpackerr use the
+shared mount and are health-gated. Confirm the mount before rescans and never
+force-unmount it while consumers are running.
 
 ## Operational surface
 
-The supported operator surface is Docker Compose, the scripts under `scripts/`,
-the health checks under `tests/health/`, and the bash functions under
-`services/bash-functions/`. Retired services and their removal rationale are
-tracked in [services/lifecycle.md](services/lifecycle.md); the retired fish
-functions are recorded in [services/FISH.md](services/FISH.md). They are not
-part of this architecture.
+The supported operator surface is Docker Compose, `services/nginx/test-ingress.sh`,
+the scripts under `scripts/`, the health checks under `tests/health/`, and the bash
+functions under `services/bash-functions/`. Direct application ports remain an
+intentional rollback path until the later migration milestone.

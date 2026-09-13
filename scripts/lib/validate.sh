@@ -124,6 +124,7 @@ required_runtime_directories() {
         "config/nzbdav-rclone/cache" \
         "config/seerr" \
         "config/redis" \
+        "config/nginx/certs" \
         "config/imagemaid" \
         "config/plex" \
         "config/plex/Plex Media Server" \
@@ -241,7 +242,9 @@ prepare_rclone_config() {
 }
 
 prepare_runtime_files() {
-    prepare_ca_bundle && prepare_rclone_config
+    prepare_ca_bundle && prepare_rclone_config && \
+        NGINX_CERT_DIR="$PWD/config/nginx/certs" \
+        "$SCRIPT_DIR/../services/nginx/generate-cert.sh"
 }
 
 validate_directories() {
@@ -265,7 +268,7 @@ validate_directories() {
         return 1
     fi
 
-    for file in config/ca/ca-bundle.pem config/ca/rootCA.pem config/nzbdav-rclone/rclone.conf; do
+    for file in config/ca/ca-bundle.pem config/ca/rootCA.pem config/nzbdav-rclone/rclone.conf config/nginx/certs/rawrz.lan.crt config/nginx/certs/rawrz.lan.key; do
         if [ ! -f "$file" ]; then
             log_error "Missing required bind-mount file: $file"
             return 1

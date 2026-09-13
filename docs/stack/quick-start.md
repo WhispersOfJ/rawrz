@@ -1,6 +1,6 @@
 # Quick Start
 
-Get The Bear Cave running from zero to streaming with the eight-service stack.
+Get The Bear Cave running from zero to streaming with the nine-service stack and internal TLS ingress.
 
 ## 1. Prerequisites
 
@@ -75,7 +75,7 @@ Open `http://HOST_IP:7878` and `http://HOST_IP:8989`.
 
 ### Seerr
 
-Open `http://HOST_IP:5055`, complete setup, then connect Plex, Radarr, and Sonarr.
+Open `https://seerr.rawrz.lan` after trusting the generated LAN CA, or use the direct fallback `http://HOST_IP:5055`, then connect Plex, Radarr, and Sonarr.
 
 ## 5. Verify
 
@@ -104,7 +104,7 @@ If Plex shows red trash cans or missing seasons/files:
 
 ## Operational notes
 
-- All services use direct host ports; there is no reverse proxy or HTTPS layer.
+- nginx provides the internal TLS/subdomain path; direct host ports remain available as the documented rollback path.
 - `nzbdav` queue state is not persistent across container recreation. Do not recreate
   it until the queue is empty, or explicitly use the dangerous `--force` path.
 - `nzbdav_rclone` is the mount owner. Its restart cascades to the four FUSE consumers.

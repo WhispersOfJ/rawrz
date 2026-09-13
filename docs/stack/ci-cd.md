@@ -1,6 +1,6 @@
 # CI/CD
 
-The repository validates the active eight-service Compose stack and the scripts
+The repository validates the active nine-service Compose stack, its nginx ingress, and the scripts
 that protect its two fragile resources: the NzbDAV queue and the rclone FUSE mount.
 
 ## Active workflows
@@ -18,8 +18,7 @@ that protect its two fragile resources: the NzbDAV queue and the rclone FUSE mou
 | `scorecard.yml` | push and weekly | OpenSSF supply-chain checks |
 | `cleanuparr-sabnzbd-watch.yml` | daily or manual | Historical watcher for a possible future Usenet-compatible adoption |
 
-Retired build, publish, certificate, and observability workflows were removed with
-the services they supported. Historical release notes may still mention them.
+The M3 nginx workflow validates primary Compose integration, generated certificates, TLS routing, cache guardrails, and deterministic fixture acceptance. Historical release notes may still mention retired workflows.
 
 ## Validation contract
 
