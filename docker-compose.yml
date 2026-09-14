@@ -50,7 +50,7 @@ services:
   # volatile eviction policy cannot evict durable work.
   redis:
     <<: *common
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: rawrz-redis
     mem_limit: 512m
     networks: [bearcave]
