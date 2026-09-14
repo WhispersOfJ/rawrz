@@ -355,7 +355,7 @@ services:
   # as the rollback path until the later cutover milestone.
   nginx:
     <<: *common
-    image: nginx:1.27-alpine
+    image: nginx:1.31-alpine
     container_name: rawrz-nginx
     mem_limit: 128m
     cpus: "0.25"
